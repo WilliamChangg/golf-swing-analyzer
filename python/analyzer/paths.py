@@ -8,6 +8,7 @@ variables below) instead of monkeypatching call sites.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 # Marker files that identify the repository root when walking upwards.
@@ -15,6 +16,9 @@ _ROOT_MARKERS = ("models/manifest.json", ".git")
 
 ENV_REPO_ROOT = "GSA_REPO_ROOT"
 ENV_MODELS_DIR = "GSA_MODELS_DIR"
+ENV_CACHE_DIR = "GSA_CACHE_DIR"
+
+_APP_DIR_NAME = "golf-swing-analyzer"
 
 
 def repo_root() -> Path:
@@ -46,3 +50,23 @@ def models_dir() -> Path:
 
 def model_manifest_path() -> Path:
     return models_dir() / "manifest.json"
+
+
+def cache_dir() -> Path:
+    """Directory for derived artifacts that can be recomputed from source video.
+
+    Deliberately not inside ``data/``: that holds the user's own footage, and
+    filling it with derived files makes it harder to see what is irreplaceable.
+    The platform cache location is also the one backup tools already know to
+    skip, which is the correct treatment for something regenerable.
+    """
+    override = os.environ.get(ENV_CACHE_DIR)
+    if override:
+        return Path(override).expanduser().resolve()
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / _APP_DIR_NAME
+
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
+    return base / _APP_DIR_NAME

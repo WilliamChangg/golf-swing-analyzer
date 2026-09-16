@@ -8,12 +8,14 @@ keeps the engine independently testable and scriptable without involving Rust.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.environment.doctor import run_doctor
+from analyzer.ingestion import ProbeError, probe_video
 
 # A method takes validated params and returns a Pydantic contract model.
 Method = Callable[[dict[str, Any]], BaseModel]
@@ -29,8 +31,36 @@ def _doctor(params: dict[str, Any]) -> BaseModel:
     return run_doctor()
 
 
+class ProbeVideoParams(BaseModel, extra="forbid"):
+    """Parameters for `probe_video`.
+
+    `extra="forbid"` so a typo'd or stale parameter name is an error the caller
+    sees, rather than silently taking the default.
+    """
+
+    path: str = Field(description="Absolute path to the video file.")
+    refresh: bool = Field(default=False, description="Re-probe even if a cached result exists.")
+
+
+def _probe_video(params: dict[str, Any]) -> BaseModel:
+    """Read a video's container metadata without decoding it."""
+    parsed = ProbeVideoParams.model_validate(params)
+    try:
+        return probe_video(Path(parsed.path), refresh=parsed.refresh)
+    except ProbeError as exc:
+        # The user chose a file this system cannot analyse. That is an input
+        # problem with a known remedy, not an engine fault, and the two need
+        # different treatment in the UI.
+        raise EngineError(
+            str(exc),
+            code=ErrorCode.UNSUPPORTED_INPUT,
+            data={"remediation": exc.remediation} if exc.remediation else None,
+        ) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
+    "probe_video": _probe_video,
 }
 
 

@@ -6,10 +6,11 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phase 0 of 21 complete.** The foundation, typed engine boundary, and
-> environment health check are built and verified. No analysis pipeline exists
-> yet. Sections below marked _Not yet implemented_ say so rather than describing
-> features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phases 0-1 of 21 complete.** The foundation, typed engine boundary,
+> environment health check, and video ingestion are built and verified. No pose,
+> metrics, or coaching exist yet. Sections below marked _Not yet implemented_ say
+> so rather than describing features that do not exist. See
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -91,14 +92,43 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Not yet implemented — Phases 1-13._ The only engine method today is `doctor`.
+_Not yet implemented — Phases 2-13._ No pose extraction, metrics, or coaching
+exist. What does work today is importing a clip and reading what its container
+says about it, from the app's **Video** screen or from a terminal:
+
+```bash
+uv run --project python analyzer probe path/to/swing.mov
+uv run --project python analyzer probe path/to/swing.mov --json
+```
+
+The engine methods are `doctor` and `probe_video`.
 
 ## 6. Supported video formats
 
-_Not yet implemented — Phase 1._ Planned: MP4 and MOV containers with H.264 or
-HEVC, including variable-frame-rate and rotated smartphone recordings. FFmpeg
-9.0.1 with VideoToolbox hardware decode is detected and reported today, but
-nothing consumes it yet.
+Whatever FFmpeg can demux; tested against MP4/MOV with H.264. Two properties of
+consumer recordings are handled explicitly, because both fail silently rather
+than loudly if they are got wrong.
+
+**Rotation.** Phones store upright frames sideways with a display matrix saying
+how to present them, and decoders disagree about whether they apply it — OpenCV
+does by default. Frames are always delivered in display orientation, rotated in
+exactly one place, and the metadata reports coded and display dimensions
+separately so the difference is visible rather than implied.
+
+**Variable frame rate.** Frame times come from the container's presentation
+timestamps, never from `frame_index / fps`. A clip whose intervals are not
+uniform is flagged, with the measurement behind the flag shown next to it. When
+a container carries no timestamps at all, the verdict is reported as _unknown_
+rather than as _constant_.
+
+Rejected with a specific reason and a suggested fix: files that do not exist,
+directories, zero-byte files (an interrupted copy), corrupt containers, and
+media with no video stream. A truncated recording is accepted and reported with
+the frame count it actually has, alongside the larger count its header claims.
+
+Decoding runs on the CPU by default. VideoToolbox is available but measured
+slower for this pipeline — see
+[ADR-0007](docs/decisions/ADR-0007-decode-backend.md).
 
 ## 7. Hardware requirements
 
@@ -121,8 +151,14 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Not yet implemented — Phases 1-11._ Planned stages and their ordering are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+_Partially implemented — Phases 2-11 outstanding._ The ingestion stage is built:
+container inspection and frame decoding behind a `FrameSource` interface that
+yields display-oriented frames carrying real presentation timestamps. Two
+implementations exist (in-process OpenCV, and an ffmpeg subprocess that can use
+VideoToolbox) and are cross-checked against each other.
+
+Pose, filtering, phase detection, club and ball tracking are not built. Planned
+stages and their ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## 9. 3D reconstruction methodology
 
@@ -152,19 +188,36 @@ by sha256 in `models/manifest.json`. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                    |
-| ---------- | ----- | ------------------------------------------------------------------------ |
-| pytest     | 48    | contracts, environment probes, model verification, dispatch, RPC framing |
-| cargo test | 9     | protocol framing, id correlation, `uv`/project resolution                |
-| Vitest     | 15    | IPC error normalisation, health screen rendering                         |
-| Playwright | 4     | UI layout and engine-data rendering                                      |
+| Suite      | Count | Scope                                                                                           |
+| ---------- | ----- | ----------------------------------------------------------------------------------------------- |
+| pytest     | 170   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion (see below) |
+| cargo test | 9     | protocol framing, id correlation, `uv`/project resolution                                       |
+| Vitest     | 34    | IPC error normalisation, health screen, video metadata rendering                                |
+| Playwright | 10    | UI layout, engine-data rendering, import flow, failure panels                                   |
 
-All 76 pass as of Phase 0. Numerical algorithm tests against analytical
-solutions arrive with Phase 3, which is where the first real numerics land.
+All 223 pass as of Phase 1.
+
+The ingestion tests are deliberately split. Parsing logic is tested against
+literal ffprobe output and needs no FFmpeg installed, so the rotation and
+variable-rate rules are pinned independently of any particular FFmpeg build.
+Integration tests then run the real thing against five committed fixture clips —
+constant rate, variable rate, two rotations, audio-only — plus corrupt,
+truncated, and zero-byte files built at test time.
+
+The rotation convention gets its own guard: a rotated fixture is decoded twice,
+once letting FFmpeg auto-rotate and once rotating it in our own code, and the
+pixels must be identical. A future FFmpeg that changed the sign fails the suite
+instead of quietly transposing every measurement thereafter.
+
+Numerical algorithm tests against analytical solutions arrive with Phase 3,
+which is where the first real numerics land.
 
 ## 13. Performance benchmarks
 
-Measured on the reference machine, 2026-09-15:
+Measured on the reference machine. Every figure here came out of a script in
+`scripts/`; none is estimated.
+
+**Engine boundary** (2026-09-15):
 
 | Measurement                             | Value   |
 | --------------------------------------- | ------- |
@@ -176,8 +229,23 @@ Measured on the reference machine, 2026-09-15:
 That ~11x cold/warm gap is why the engine is a long-lived process rather than
 one invocation per call.
 
-No pipeline throughput figures exist yet, because no pipeline exists yet. A
-benchmark harness arrives in Phase 17.
+**Ingestion** (2026-09-16, `scripts/benchmark_decode.py`, 600 frames of
+1920x1080 H.264, median of 5):
+
+| Operation                      | Median  | Frames/s |
+| ------------------------------ | ------- | -------- |
+| probe (2 ffprobe passes)       | 72.6 ms | —        |
+| probe (metadata cache hit)     | 1.6 ms  | —        |
+| decode: OpenCV, in-process     | 564 ms  | **1065** |
+| decode: ffmpeg subprocess, CPU | 1349 ms | 445      |
+| decode: ffmpeg + VideoToolbox  | 2332 ms | 257      |
+
+Hardware decode is the slowest of the three: this pipeline needs BGR frames in
+system memory, so a hardware-decoded frame has to be read back off the GPU, and
+that transfer costs more than the decode it saved.
+
+No figures exist yet for pose, filtering, or metrics, because none of those
+exist yet. A general benchmark harness arrives in Phase 17.
 
 ## 14. Limitations
 
@@ -194,6 +262,15 @@ benchmark harness arrives in Phase 17.
 - **No packaging story yet.** `npm run dev` runs from the repository and
   resolves the Python project by walking up from the working directory. A
   bundled app needs the engine shipped as a sidecar; that is not built.
+- **Ingestion is verified on H.264 in MP4/MOV only.** Other codecs and
+  containers are likely to work, since FFmpeg does the demuxing, but nothing
+  else has been tested and no claim is made for it.
+- **A half-turn rotation is taken on trust.** A 90 or 270 degree rotation is
+  verified against the decoded frame's dimensions; 180 degrees changes no
+  dimension, so there the decoder's own property read-back is the only evidence
+  available.
+- **`FFmpegPipeFrameSource` restarts to seek backwards.** It is built for a
+  sequential pass. Random access uses the OpenCV source, which is the default.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
 ## 15. Future work

@@ -28,6 +28,12 @@ jobs:
           enable-cache: true
           cache-dependency-glob: python/uv.lock
 
+      # The ingestion tests probe and decode the committed video fixtures, which
+      # needs FFmpeg. Installed only if the runner image does not already have
+      # it, since `brew install ffmpeg` is several minutes of build time.
+      - name: Install FFmpeg
+        run: ffprobe -version > /dev/null 2>&1 || brew install ffmpeg
+
       - name: Sync environment
         run: uv sync --project python --locked
 
@@ -40,7 +46,17 @@ jobs:
       - name: mypy
         run: uv run --project python mypy python/analyzer
 
+      # Confirms the committed fixtures still carry the properties the ingestion
+      # tests rely on -- in particular the display matrix. An FFmpeg that stopped
+      # writing one would otherwise turn the rotation tests into tests of nothing.
+      - name: Verify video fixtures
+        run: uv run --project python python scripts/make_video_fixtures.py --verify
+
       - name: pytest
+        # Without this a missing FFmpeg skips the ingestion suite, and a skipped
+        # job is indistinguishable from a passing one in the summary.
+        env:
+          GSA_REQUIRE_FFMPEG: "1"
         run: uv run --project python pytest python/tests
 
   typescript:

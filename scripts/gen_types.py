@@ -32,7 +32,10 @@ SCHEMA_DIR = OUT_DIR / "schema"
 
 # Models exported to TypeScript. Each becomes one .ts file plus one .json schema.
 # Only root models are listed; nested models are inlined by the generator.
-EXPORTS: tuple[tuple[str, str], ...] = (("analyzer.contracts.health", "EnvironmentReport"),)
+EXPORTS: tuple[tuple[str, str], ...] = (
+    ("analyzer.contracts.health", "EnvironmentReport"),
+    ("analyzer.contracts.video", "VideoMetadata"),
+)
 
 BANNER = """\
 /**

@@ -19,3 +19,17 @@ use crate::engine::{Engine, EngineError};
 pub async fn doctor(engine: State<'_, Engine>) -> Result<Value, EngineError> {
     engine.request("doctor", json!({}))
 }
+
+/// Read a video file's container metadata without decoding it.
+///
+/// The path is passed through untouched. Validating it here would duplicate the
+/// checks the engine already makes, and the engine's version is the one that
+/// can tell a missing file from an audio-only one from a truncated download.
+#[tauri::command]
+pub async fn probe_video(
+    engine: State<'_, Engine>,
+    path: String,
+    refresh: bool,
+) -> Result<Value, EngineError> {
+    engine.request("probe_video", json!({ "path": path, "refresh": refresh }))
+}

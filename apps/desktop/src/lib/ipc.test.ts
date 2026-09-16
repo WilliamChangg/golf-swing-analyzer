@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
-const { doctor, normalizeError } = await import("./ipc");
+const { doctor, normalizeError, probeVideo, remediationOf } =
+  await import("./ipc");
 
 describe("normalizeError", () => {
   it("treats a plain string rejection as a transport failure", () => {
@@ -77,5 +78,76 @@ describe("doctor", () => {
   it("does not leak a rejection when the engine dies mid-call", async () => {
     invokeMock.mockRejectedValue(new Error("worker exited"));
     await expect(doctor()).resolves.toMatchObject({ ok: false });
+  });
+});
+
+describe("probeVideo", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("passes the path and an explicit refresh flag", async () => {
+    invokeMock.mockResolvedValue({ path: "/tmp/a.mov" });
+
+    await probeVideo("/tmp/a.mov");
+
+    expect(invokeMock).toHaveBeenCalledWith("probe_video", {
+      path: "/tmp/a.mov",
+      refresh: false,
+    });
+  });
+
+  it("forwards refresh when asked to re-read", async () => {
+    invokeMock.mockResolvedValue({});
+
+    await probeVideo("/tmp/a.mov", { refresh: true });
+
+    expect(invokeMock).toHaveBeenCalledWith("probe_video", {
+      path: "/tmp/a.mov",
+      refresh: true,
+    });
+  });
+
+  it("returns an unusable file as a handled error, not a rejection", async () => {
+    invokeMock.mockRejectedValue({
+      kind: "method",
+      message: "clip.m4a contains no video stream.",
+      code: -31001,
+      data: { remediation: "Select a video recording." },
+    });
+
+    const result = await probeVideo("/tmp/clip.m4a");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(-31001);
+      expect(remediationOf(result.error)).toBe("Select a video recording.");
+    }
+  });
+});
+
+describe("remediationOf", () => {
+  it("returns null when the engine attached no remedy", () => {
+    expect(remediationOf({ kind: "transport", message: "gone" })).toBeNull();
+  });
+
+  it("returns null rather than a non-string, so it cannot be rendered raw", () => {
+    expect(
+      remediationOf({
+        kind: "method",
+        message: "x",
+        data: { remediation: 42 },
+      }),
+    ).toBeNull();
+  });
+
+  it("ignores an empty remedy", () => {
+    expect(
+      remediationOf({
+        kind: "method",
+        message: "x",
+        data: { remediation: "" },
+      }),
+    ).toBeNull();
   });
 });

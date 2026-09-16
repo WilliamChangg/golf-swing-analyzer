@@ -69,24 +69,104 @@ export const HEALTHY_REPORT = {
 };
 
 /**
+ * A realistic `probe_video` result: a rotated, variable-rate phone clip.
+ *
+ * Deliberately the awkward case rather than the clean one, because the two
+ * things the screen exists to communicate — rotation and non-uniform frame
+ * timing — are only visible on a clip that has them.
+ */
+export const VFR_ROTATED_METADATA = {
+  schema_version: 1,
+  path: "/Users/example/data/raw/2026-09-15/faceon.mov",
+  file_size_bytes: 41175,
+  content_key: {
+    algorithm: "sha256-sampled-v1",
+    digest: "93c22821d3c1b694a0f1c2d3e4f5a6b7",
+    size_bytes: 41175,
+  },
+  probed_at: "2026-09-16T06:39:00Z",
+  container_format: "mov,mp4,m4a,3gp,3g2,mj2",
+  stream: {
+    codec_name: "h264",
+    codec_long_name: "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+    profile: "High",
+    pix_fmt: "yuv420p",
+    coded_width: 1920,
+    coded_height: 1080,
+    display_width: 1080,
+    display_height: 1920,
+    rotation_ccw_degrees: 90,
+    rotation_source: "display_matrix",
+    sample_aspect_ratio: "1:1",
+    bit_rate: 189696,
+    time_base: "1/15360",
+  },
+  timing: {
+    source: "packet_pts",
+    frame_count: 45,
+    first_timestamp_s: 0,
+    last_timestamp_s: 1.933333,
+    timestamp_span_s: 1.933333,
+    duration_s: 2,
+    container_duration_s: 1.9,
+    nominal_fps: 23.684211,
+    measured_fps: 22.758621,
+    intervals: {
+      median_s: 0.033333,
+      min_s: 0.033333,
+      max_s: 0.066667,
+      quantum_s: 0.0000651,
+      irregular_count: 14,
+      irregular_fraction: 0.318182,
+    },
+    is_vfr: true,
+  },
+  warnings: [
+    "Variable frame rate: 14 of 44 intervals differ from the median by more than one time-base tick (from 33.33 ms to 66.67 ms). Frame times must come from presentation timestamps; frame_index / fps is not valid for this clip.",
+    "The container requests a 90 degree counter-clockwise display rotation (stored 1920x1080, presented 1080x1920). Frames are returned already rotated.",
+  ],
+};
+
+/** What one stubbed command does when the app calls it. */
+export interface CommandStub {
+  result?: unknown;
+  error?: unknown;
+}
+
+/**
  * Stub Tauri's IPC bridge before the app's scripts run.
  *
  * `invoke` from @tauri-apps/api calls through `window.__TAURI_INTERNALS__`,
  * which only exists inside the real WebView. Installing it here lets the app
  * run unmodified in a browser.
+ *
+ * Commands are stubbed by name. The file picker goes through the same bridge as
+ * the engine — the dialog plugin's `open` is `invoke("plugin:dialog|open")` —
+ * so an import flow can be driven end to end without a native dialog.
  */
 export async function stubEngine(
   page: Page,
-  handler: { result?: unknown; error?: unknown } = { result: HEALTHY_REPORT },
+  handlers: Record<string, CommandStub> = {},
 ): Promise<void> {
-  await page.addInitScript((payload) => {
+  const commands: Record<string, CommandStub> = {
+    doctor: { result: HEALTHY_REPORT },
+    ...handlers,
+  };
+
+  await page.addInitScript((stubs) => {
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
-      invoke: (_cmd: string) =>
-        "error" in payload && payload.error !== undefined
+      invoke: (cmd: string) => {
+        const stub = stubs[cmd];
+        if (stub === undefined) {
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri rejects an unknown command with a plain string, not an Error.
+          return Promise.reject(`command ${cmd} not found`);
+        }
+        return "error" in stub && stub.error !== undefined
           ? // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri rejects with the plain object Rust serialised, not an Error. Rejecting with an Error here would test a shape the app never actually receives.
-            Promise.reject(payload.error)
-          : Promise.resolve(payload.result),
+            Promise.reject(stub.error)
+          : Promise.resolve(stub.result);
+      },
       transformCallback: (cb: unknown) => cb,
     };
-  }, handler);
+  }, commands);
 }

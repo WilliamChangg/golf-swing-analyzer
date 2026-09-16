@@ -4,13 +4,13 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phase 0 complete (1 / 21).**
+**Progress: Phases 0-1 complete (2 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
 | 0   | Foundation            | ✅ **Done** | App launches; doctor reports the real measured environment |
-| 1   | Video ingestion       | ⬜ Next     | Correct metadata on VFR and rotated fixtures               |
-| 2   | Single-camera pose    | ⬜          | Landmarks persisted and reloadable; estimator swappable    |
+| 1   | Video ingestion       | ✅ **Done** | Correct metadata on VFR and rotated fixtures               |
+| 2   | Single-camera pose    | ⬜ Next     | Landmarks persisted and reloadable; estimator swappable    |
 | 3   | Temporal filtering    | ⬜          | Error bounds met against analytical trajectories           |
 | 4   | Swing phase detection | ⬜          | Phases correct on real swings, inspectable frame-by-frame  |
 | 5   | Biomechanics engine   | ⬜          | Metrics carry units, confidence, methodology               |
@@ -64,7 +64,7 @@ advance past a broken phase.
 
 ---
 
-## Phase 1 — Video ingestion ⬜
+## Phase 1 — Video ingestion ✅
 
 `python/analyzer/ingestion/{probe,reader,cache}.py`
 
@@ -74,14 +74,65 @@ inconsistently, and getting it wrong silently biases every angle downstream) and
 **variable frame rate** (phone slow-mo is frequently VFR, so time must come from
 real presentation timestamps, never `frame / fps`).
 
-- [ ] 1.1 `VideoMetadata` contract incl. rotation, `is_vfr`, real timestamps
-- [ ] 1.2 ffprobe parse (authoritative for container facts)
-- [ ] 1.3 `FrameSource` Protocol + OpenCV impl with bounded LRU cache
-- [ ] 1.4 VideoToolbox decode path + CPU fallback
-- [ ] 1.5 Content-hash cache keys
-- [ ] 1.6 `probe_video` RPC method + metadata panel
-- [ ] 1.7 Tests: known fps/duration/codec, VFR, rotated, corrupt, zero-byte
-- [ ] 1.8 Measure decode throughput, VideoToolbox vs CPU; commit
+- [x] **1.1 Contracts** — `VideoMetadata`, `VideoStreamInfo`, `VideoTiming`,
+      `IntervalStats`, `ContentKey`; rotation in one named direction, `is_vfr`
+      nullable so "unknown" is distinct from "no"
+- [x] **1.2 ffprobe parse** — two passes (headers, then the packet index);
+      timestamps handled in integer time-base ticks
+- [x] **1.3 `FrameSource` Protocol** — OpenCV implementation, byte-bounded LRU
+      frame cache, verified seeking
+- [x] **1.4 VideoToolbox path + CPU** — `FFmpegPipeFrameSource`; CPU is the
+      default, on measurement ([ADR-0007](decisions/ADR-0007-decode-backend.md))
+- [x] **1.5 Content-hash cache keys** — sampled sha256, explicitly not an
+      integrity check; on-disk `VideoMetadataCache`
+- [x] **1.6 `probe_video`** — RPC method, CLI `analyzer probe`, metadata panel,
+      dialog plugin + file picker
+- [x] **1.7 Tests** — 94 added: CFR, VFR, rotated, truncated, corrupt,
+      zero-byte, audio-only, missing, directory
+- [x] **1.8 Measure + commit** — decode throughput per backend recorded below
+
+**Measured** (`scripts/benchmark_decode.py`, 600 frames of 1920x1080 H.264,
+median of 5, Apple M1 Pro / macOS 26.4.1):
+
+| Operation                      | Median  | Frames/s |
+| ------------------------------ | ------- | -------- |
+| probe (2 ffprobe passes)       | 72.6 ms | —        |
+| probe (metadata cache hit)     | 1.6 ms  | —        |
+| decode: OpenCV (in-process)    | 564 ms  | **1065** |
+| decode: ffmpeg subprocess, CPU | 1349 ms | 445      |
+| decode: ffmpeg + VideoToolbox  | 2332 ms | 257      |
+
+**Deliberate deviations from the original plan:**
+
+- **The VideoToolbox/CPU relationship is inverted.** The plan assumed hardware
+  decode would be the fast path with CPU as fallback. Measured, VideoToolbox is
+  1.7x slower than software decode and 4.1x slower than decoding in process:
+  this pipeline needs BGR frames in system memory, so a hardware-decoded frame
+  must be read back off the GPU, and the transfer costs more than the decode it
+  saves. CPU is the default; VideoToolbox is built, tested, and opt-in. Full
+  reasoning in [ADR-0007](decisions/ADR-0007-decode-backend.md).
+- **Two frame sources, not one.** OpenCV cannot reach VideoToolbox at all — its
+  bundled FFmpeg reports `VIDEO_ACCELERATION_NONE` whatever is requested — so
+  1.4 required an out-of-process ffmpeg reader. The second implementation earns
+  its keep independently: it cross-checks the first, and the two are asserted to
+  produce the same pixels and the same timestamps.
+- **`is_vfr` has no tolerance threshold.** Reading integer time-base ticks rather
+  than ffprobe's six-decimal `pts_time` removes the print-rounding that would
+  otherwise need one, so the rule is simply "any interval more than one tick from
+  the median". One tick is the container clock's own resolution; below that a
+  difference is not measurable. This deliberately flags a single dropped frame in
+  a long clip, because `frame / fps` is wrong after it either way.
+- **`tauri-plugin-fs` still not added.** Video import needs a file _picker_, not
+  filesystem access: the dialog returns a path, the WebView hands it to Rust, and
+  the engine does the reading. Only `dialog:allow-open` was granted.
+- **Video fixtures are committed, not generated at test time.** Five clips
+  totalling ~185 KB, built by `scripts/make_video_fixtures.py`. Generating them
+  per-run would make the suite depend on the local ffmpeg choosing to write a
+  display matrix the same way, which is the very thing under test.
+- **No capture-quality warning on low frame rate.** A "30 fps is too coarse for a
+  downswing" caveat would be useful but is golf-specific reasoning, and
+  `architecture.md` confines that to `biomechanics`/`phases`/`coaching`.
+  Ingestion reports the measured rate; Phase 4 is where it gets judged.
 
 ## Phase 2 — Single-camera pose ⬜
 

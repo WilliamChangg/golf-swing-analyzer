@@ -8,3 +8,4 @@
 
 
 export * from "./EnvironmentReport";
+export * from "./VideoMetadata";

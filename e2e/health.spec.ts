@@ -54,7 +54,7 @@ test.describe("health screen", () => {
     page,
   }) => {
     await stubEngine(page, {
-      error: { kind: "spawn", message: "Could not find `uv`." },
+      doctor: { error: { kind: "spawn", message: "Could not find `uv`." } },
     });
     await page.goto("/");
 
