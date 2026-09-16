@@ -37,6 +37,11 @@ jobs:
       - name: Sync environment
         run: uv sync --project python --locked
 
+      # The pose tests run real inference, which needs the weights. ~30 MB, and
+      # cached by content hash, so a repeat run re-verifies rather than re-fetches.
+      - name: Download pose models
+        run: uv run --project python python scripts/download_models.py
+
       - name: Ruff (lint)
         run: uv run --project python ruff check python
 
@@ -57,6 +62,7 @@ jobs:
         # job is indistinguishable from a passing one in the summary.
         env:
           GSA_REQUIRE_FFMPEG: "1"
+          GSA_REQUIRE_MODELS: "1"
         run: uv run --project python pytest python/tests
 
   typescript:

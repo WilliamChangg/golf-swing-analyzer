@@ -1,10 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const invokeMock = vi.hoisted(() => vi.fn());
+const listenMock = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
 
-const { doctor, normalizeError, probeVideo, remediationOf } =
-  await import("./ipc");
+const {
+  doctor,
+  extractPoses,
+  normalizeError,
+  onProgress,
+  probeVideo,
+  progressFraction,
+  remediationOf,
+} = await import("./ipc");
+
+/** A minimal, valid progress payload; tests override what they care about. */
+function update(overrides: Record<string, unknown> = {}) {
+  return {
+    schema_version: 1,
+    request_id: 1,
+    task: "extract_poses",
+    stage: "estimating",
+    current: 25,
+    total: 100,
+    elapsed_s: 1,
+    detail: null,
+    ...overrides,
+  };
+}
 
 describe("normalizeError", () => {
   it("treats a plain string rejection as a transport failure", () => {
@@ -149,5 +173,133 @@ describe("remediationOf", () => {
         data: { remediation: "" },
       }),
     ).toBeNull();
+  });
+});
+
+describe("extractPoses", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+  });
+
+  it("passes the path and an explicit null model", async () => {
+    /* Null rather than omitted: the engine forbids unexpected parameters, so
+       what goes on the wire is worth keeping exact. */
+    invokeMock.mockResolvedValue({});
+
+    await extractPoses("/tmp/a.mov");
+
+    expect(invokeMock).toHaveBeenCalledWith("extract_poses", {
+      path: "/tmp/a.mov",
+      model: null,
+    });
+  });
+
+  it("forwards a chosen model", async () => {
+    invokeMock.mockResolvedValue({});
+
+    await extractPoses("/tmp/a.mov", { model: "pose_landmarker_lite" });
+
+    expect(invokeMock).toHaveBeenCalledWith("extract_poses", {
+      path: "/tmp/a.mov",
+      model: "pose_landmarker_lite",
+    });
+  });
+
+  it("returns a missing model as a handled error with its remedy", async () => {
+    invokeMock.mockRejectedValue({
+      kind: "method",
+      message: "Model 'pose_landmarker_heavy' is not downloaded.",
+      code: -31001,
+      data: { remediation: "Run `python scripts/download_models.py`." },
+    });
+
+    const result = await extractPoses("/tmp/a.mov");
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(remediationOf(result.error)).toBe(
+        "Run `python scripts/download_models.py`.",
+      );
+    }
+  });
+});
+
+describe("onProgress", () => {
+  beforeEach(() => {
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => undefined);
+  });
+
+  /** The callback Tauri's `listen` was registered with, so a test can fire it. */
+  function emitter(): (event: unknown) => void {
+    const call = listenMock.mock.calls[0];
+    if (!call) throw new Error("nothing subscribed to the event channel");
+    return call[1] as (event: unknown) => void;
+  }
+
+  it("listens on the engine progress channel", async () => {
+    await onProgress(() => undefined);
+    expect(listenMock).toHaveBeenCalledWith(
+      "engine://progress",
+      expect.any(Function),
+    );
+  });
+
+  it("delivers updates to the handler", async () => {
+    const seen: number[] = [];
+    await onProgress((u) => seen.push(u.current));
+
+    const emit = emitter();
+    emit({ payload: update({ current: 7 }) });
+
+    expect(seen).toEqual([7]);
+  });
+
+  it("filters out other tasks sharing the channel", async () => {
+    const seen: string[] = [];
+    await onProgress((u) => seen.push(u.task), { task: "extract_poses" });
+
+    const emit = emitter();
+    emit({ payload: update({ task: "something_else" }) });
+    emit({ payload: update({ task: "extract_poses" }) });
+
+    expect(seen).toEqual(["extract_poses"]);
+  });
+
+  it("passes everything through when no task is given", async () => {
+    const seen: string[] = [];
+    await onProgress((u) => seen.push(u.task));
+
+    const emit = emitter();
+    emit({ payload: update({ task: "anything" }) });
+
+    expect(seen).toEqual(["anything"]);
+  });
+
+  it("returns the unsubscribe function", async () => {
+    const unlisten = vi.fn();
+    listenMock.mockResolvedValue(unlisten);
+
+    (await onProgress(() => undefined))();
+
+    expect(unlisten).toHaveBeenCalled();
+  });
+});
+
+describe("progressFraction", () => {
+  it("is the completed proportion", () => {
+    expect(progressFraction(update())).toBeCloseTo(0.25);
+  });
+
+  it("is null without a total", () => {
+    expect(progressFraction(update({ total: null }))).toBeNull();
+  });
+
+  it("is null for a zero total", () => {
+    expect(progressFraction(update({ total: 0 }))).toBeNull();
+  });
+
+  it("is clamped to one", () => {
+    expect(progressFraction(update({ current: 500 }))).toBe(1);
   });
 });

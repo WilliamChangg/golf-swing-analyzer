@@ -25,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PosePanel } from "@/features/video/PosePanel";
 import { probeVideo } from "@/lib/ipc";
 
 type ScreenState =
@@ -101,7 +102,7 @@ function TimingPanel({ metadata }: { metadata: VideoMetadata }) {
           </span>
         </CardTitle>
         <CardDescription>
-          {timing.source === "packet_pts"
+          {timing.source === "decoded_frames"
             ? "Frame times read from the container's presentation timestamps."
             : "No timestamps in the container; frame times were synthesised from the declared rate."}
         </CardDescription>
@@ -328,6 +329,10 @@ export function VideoScreen() {
 
           <TimingPanel metadata={state.metadata} />
           <StreamPanel metadata={state.metadata} />
+          <PosePanel
+            key={state.metadata.path}
+            videoPath={state.metadata.path}
+          />
         </>
       ) : null}
     </div>

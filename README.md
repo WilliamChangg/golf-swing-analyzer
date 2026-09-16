@@ -6,11 +6,11 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-1 of 21 complete.** The foundation, typed engine boundary,
-> environment health check, and video ingestion are built and verified. No pose,
-> metrics, or coaching exist yet. Sections below marked _Not yet implemented_ say
-> so rather than describing features that do not exist. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phases 0-2 of 21 complete.** The foundation, typed engine boundary,
+> environment health check, video ingestion, and single-camera pose extraction
+> are built and verified. No filtering, metrics, or coaching exist yet. Sections
+> below marked _Not yet implemented_ say so rather than describing features that
+> do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -92,16 +92,22 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Not yet implemented — Phases 2-13._ No pose extraction, metrics, or coaching
-exist. What does work today is importing a clip and reading what its container
-says about it, from the app's **Video** screen or from a terminal:
+_Partially implemented — Phases 3-13 outstanding._ A clip can be imported,
+inspected, and run through pose estimation, from the app's **Video** screen or
+from a terminal:
 
 ```bash
-uv run --project python analyzer probe path/to/swing.mov
-uv run --project python analyzer probe path/to/swing.mov --json
+uv run --project python analyzer probe   path/to/swing.mov   # container metadata
+uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
+uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
 ```
 
-The engine methods are `doctor` and `probe_video`.
+Extraction writes landmarks to a Parquet file keyed by the video's content, and
+reports what it measured: frames processed, how many contained a pose, time per
+frame, and the model digest it ran with. No filtering, metrics, or coaching
+consume that yet.
+
+The engine methods are `doctor`, `probe_video` and `extract_poses`.
 
 ## 6. Supported video formats
 
@@ -151,14 +157,23 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 2-11 outstanding._ The ingestion stage is built:
-container inspection and frame decoding behind a `FrameSource` interface that
-yields display-oriented frames carrying real presentation timestamps. Two
-implementations exist (in-process OpenCV, and an ffmpeg subprocess that can use
-VideoToolbox) and are cross-checked against each other.
+_Partially implemented — Phases 3-11 outstanding._ Two stages are built.
 
-Pose, filtering, phase detection, club and ball tracking are not built. Planned
-stages and their ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
+**Ingestion.** Container inspection and frame decoding behind a `FrameSource`
+interface that yields display-oriented frames carrying real presentation
+timestamps. Two implementations (in-process OpenCV, and an ffmpeg subprocess
+that can use VideoToolbox) are cross-checked against each other.
+
+**Pose.** A `PoseEstimator` interface with MediaPipe behind it, producing 33
+landmarks per frame in two coordinate spaces, stored as Parquet and reloadable.
+The spaces are kept apart deliberately: `IMAGE` is normalised to the frame and
+is the only space a landmark can be drawn in, while `HIP_LOCAL` is MediaPipe's
+"world" output — hip-centred, only roughly metric, and carrying no camera
+geometry. It is **not** calibrated world coordinates, and no metric claim rests
+on it. Real world coordinates arrive in Phase 9 from stereo triangulation.
+
+Filtering, phase detection, club and ball tracking are not built. Planned stages
+and their ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## 9. 3D reconstruction methodology
 
@@ -174,13 +189,20 @@ phase, confidence, source frames, and methodology. Angles derived from a single
 
 ## 11. Model architecture
 
-_Not yet implemented — Phase 12._ No model is trained. No accuracy figure will
-be published without a real labelled evaluation set with session- and
-player-grouped splits.
+_No model is trained — Phase 12._ No accuracy figure will be published without a
+real labelled evaluation set with session- and player-grouped splits.
 
 Currently vendored: MediaPipe Pose Landmarker (lite/full/heavy, float16), pinned
 by sha256 in `models/manifest.json`. See
-[ADR-0006](docs/decisions/ADR-0006-model-pinning.md).
+[ADR-0006](docs/decisions/ADR-0006-model-pinning.md). It sits behind a
+`PoseEstimator` interface and its types do not escape the adapter, so replacing
+it — with another variant, or with something learned later — touches nothing
+that consumes poses.
+
+MediaPipe itself is pinned to **1.0.0 exactly**: 1.0.1 aborts the process when
+the pose graph opens on macOS arm64. The health check now runs a real inference
+rather than trusting an import, which is what caught it. See
+[ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
 ## 12. Testing
 
@@ -208,6 +230,18 @@ The rotation convention gets its own guard: a rotated fixture is decoded twice,
 once letting FFmpeg auto-rotate and once rotating it in our own code, and the
 pixels must be identical. A future FFmpeg that changed the sign fails the suite
 instead of quietly transposing every measurement thereafter.
+
+The pose tests follow the same split. Most of them run against a fake estimator
+rather than MediaPipe — which is the evidence that `PoseEstimator` is a real
+seam, since decode, estimate, persist and reload all run with the model replaced
+and nothing else changed. The MediaPipe adapter's own behaviour is tested
+separately: that it converts BGR to RGB before inference, that a frame with no
+pose is recorded rather than dropped, and that two runs over one clip agree
+exactly.
+
+CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
+and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
+skipping — a skipped suite and a passing one look identical in a summary.
 
 Numerical algorithm tests against analytical solutions arrive with Phase 3,
 which is where the first real numerics land.
@@ -244,8 +278,31 @@ Hardware decode is the slowest of the three: this pipeline needs BGR frames in
 system memory, so a hardware-decoded frame has to be read back off the GPU, and
 that transfer costs more than the decode it saved.
 
-No figures exist yet for pose, filtering, or metrics, because none of those
-exist yet. A general benchmark harness arrives in Phase 17.
+**Pose estimation** (2026-09-16, `scripts/benchmark_pose.py`) on two real
+swings — a 68-frame 720x1280 face-on clip and a 239-frame 1920x1080
+down-the-line clip:
+
+| Model | Load    | ms/frame (face-on / DTL) | Frames/s | Poses found |
+| ----- | ------- | ------------------------ | -------- | ----------- |
+| lite  | ~190 ms | 11.6 / 11.0              | 86 / 91  | **100%**    |
+| full  | ~85 ms  | 17.7 / 17.2              | 56 / 58  | **100%**    |
+| heavy | ~120 ms | 67.1 / 66.3              | 15 / 15  | **100%**    |
+
+The default is `full`. All three find a pose in every frame, so detection rate
+does not discriminate; speed does, but a swing clip is seconds long, so the
+spread is under half a second of work. The criterion that would discriminate —
+landmark accuracy — is not measured anywhere yet, and choosing the least
+accurate variant to save that half second would be optimising the wrong
+quantity.
+
+Measuring this on synthetic footage first was instructive about how wrong the
+easy number can be: on a clip with nobody in it, `heavy` measured 27.4 ms/frame
+against 67.1 ms on a real swing, because MediaPipe runs the detector when it
+finds nothing and the landmark model when it does. The benchmark refuses to
+recommend a model below a 50% detection rate for exactly that reason.
+
+No figures exist yet for filtering or metrics, because neither exists yet. A
+general benchmark harness arrives in Phase 17.
 
 ## 14. Limitations
 
@@ -271,6 +328,13 @@ exist yet. A general benchmark harness arrives in Phase 17.
   available.
 - **`FFmpegPipeFrameSource` restarts to seek backwards.** It is built for a
   sequential pass. Random access uses the OpenCV source, which is the default.
+- **Pose landmark accuracy is not measured at all.** Detection _rate_ is
+  reported because it is counted; nothing here says whether the landmarks that
+  were found are in the right place. That needs a labelled set, which is
+  Phase 12.
+- **MediaPipe runs on CPU.** The Tasks Python API has no macOS GPU delegate, and
+  the health check reports the delegate it measured rather than the one it would
+  prefer.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
 ## 15. Future work

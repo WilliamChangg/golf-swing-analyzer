@@ -8,8 +8,21 @@ build and platform. Both of those are exactly the facts that must be right, so
 they are read from the container rather than from a decoder.
 
 Two ffprobe passes are made. The first reads the format and stream headers. The
-second reads the packet index, which is where per-frame presentation timestamps
-live; it demuxes but does not decode, so it costs a fraction of a real read.
+second reads per-frame timestamps.
+
+That second pass reads **frames, not packets**, and the difference is not an
+optimisation detail -- it is correctness. Packets are what the container stores;
+frames are what a decoder emits, and the two do not correspond on real
+recordings. A phone clip in this project's own `data/` carries an MP4 edit list
+(`elst`, media time 249) that trims pre-roll samples: 76 packets, 68 decoded
+frames, and raw packet timestamps starting at -0.333 s where the decoder starts
+at 0. Indexing packets therefore produced three wrong answers at once -- a frame
+count 8 too high, every timestamp offset by the edit, and a false "variable
+frame rate" verdict on a clip whose real frame intervals are exactly uniform.
+
+Reading frames costs a decode: measured 0.70 s against 0.02 s for the packet
+pass on that clip. That is the price of timestamps a decoder will actually
+reproduce, and it is paid once per clip because the result is cached by content.
 
 Timestamps are handled in integer time-base ticks for as long as possible.
 ffprobe's `pts_time` is printed to six decimal places, which introduces rounding
@@ -42,9 +55,9 @@ from analyzer.contracts.video import (
 )
 from analyzer.hashing import content_key
 
-# Generous: the packet pass walks the whole container index, which for a long
-# recording on a slow disk is not instant. It is still bounded, because a hung
-# ffprobe must not become a hung engine.
+# Generous: the frame pass decodes the clip, which on a long recording is not
+# instant. It is still bounded, because a hung ffprobe must not become a hung
+# engine.
 _PROBE_TIMEOUT_S = 120
 
 _INSTALL_HINT = "Install FFmpeg (`brew install ffmpeg` on macOS) and ensure ffprobe is on PATH."
@@ -71,10 +84,10 @@ class ProbeError(RuntimeError):
 class FrameIndex:
     """Per-frame presentation times, in presentation order.
 
-    Packets come out of a container in *decode* order, which for any stream with
-    B-frames is not the order the frames are shown in. They are sorted by
-    presentation timestamp here, once, so every consumer downstream can treat
-    index `i` as the i-th frame a decoder will hand it.
+    These come from ffprobe's frame output, which is already in presentation
+    order and already accounts for container edit lists. Index `i` is therefore
+    the i-th frame a decoder will hand back, with the timestamp the decoder will
+    report for it -- verified against `CAP_PROP_POS_MSEC` in the reader tests.
     """
 
     source: TimestampSource
@@ -253,27 +266,37 @@ def _select_video_stream(streams: list[dict[str, Any]], path: Path) -> dict[str,
     return candidates[0]
 
 
-def parse_packet_index(csv: str) -> tuple[list[int], list[bool]]:
-    """Parse `pts,flags` rows into presentation-ordered ticks and keyframe flags.
+def parse_frame_index(text: str) -> tuple[list[int], list[bool], int]:
+    """Parse ffprobe's per-frame output into ticks, keyframe flags, and a drop count.
 
-    Rows without a timestamp are dropped: a packet whose presentation time is
-    unknown cannot be placed on the timeline, and guessing where it belongs
-    would corrupt every interval around it.
+    Input is ffprobe's `compact` format -- `key=value|key=value` per line --
+    rather than CSV, because CSV emits fields in ffprobe's own order rather than
+    the order they were asked for, which makes column position a guess.
+
+    Frames whose timestamp is `N/A` are dropped and counted. Dropping one shifts
+    every later frame's index relative to what a decoder will produce, so the
+    count is returned rather than swallowed: the caller warns about it instead of
+    letting the misalignment travel silently into the measurements.
     """
-    entries: list[tuple[int, bool]] = []
-    for line in csv.splitlines():
+    ticks: list[int] = []
+    keyframes: list[bool] = []
+    dropped = 0
+
+    for line in text.splitlines():
         row = line.strip()
         if not row:
             continue
-        parts = row.split(",")
-        pts = _int_or_none(parts[0])
-        if pts is None:
-            continue
-        flags = parts[1] if len(parts) > 1 else ""
-        entries.append((pts, "K" in flags))
 
-    entries.sort(key=lambda item: item[0])
-    return [pts for pts, _ in entries], [key for _, key in entries]
+        fields = dict(item.split("=", 1) for item in row.split("|") if "=" in item)
+        timestamp = _int_or_none(fields.get("best_effort_timestamp"))
+        if timestamp is None:
+            dropped += 1
+            continue
+
+        ticks.append(timestamp)
+        keyframes.append(fields.get("key_frame") == "1")
+
+    return ticks, keyframes, dropped
 
 
 def _interval_stats(deltas: list[int], time_base: Fraction) -> IntervalStats:
@@ -308,7 +331,7 @@ def timing_from_ticks(
     duration = span + float(deltas[-1] * time_base) if deltas else (container_duration_s or 0.0)
 
     return VideoTiming(
-        source=TimestampSource.PACKET_PTS,
+        source=TimestampSource.DECODED_FRAMES,
         frame_count=len(ticks),
         first_timestamp_s=first,
         last_timestamp_s=last,
@@ -352,9 +375,19 @@ def _timing_from_container_rate(
 
 
 def _collect_warnings(
-    timing: VideoTiming, stream_info: VideoStreamInfo, declared_frames: int | None
+    timing: VideoTiming,
+    stream_info: VideoStreamInfo,
+    declared_frames: int | None,
+    dropped_frames: int = 0,
 ) -> list[str]:
     warnings: list[str] = []
+
+    if dropped_frames:
+        warnings.append(
+            f"{dropped_frames} frames carry no usable timestamp and were left out of the "
+            "index. Frame numbers after the first of them may not line up with what a "
+            "decoder returns, so timings from this clip should be treated with suspicion."
+        )
 
     if timing.is_vfr and timing.intervals is not None:
         stats = timing.intervals
@@ -389,9 +422,10 @@ def _collect_warnings(
 
     if declared_frames is not None and declared_frames != timing.frame_count:
         warnings.append(
-            f"The container declares {declared_frames} frames but {timing.frame_count} were "
-            "found in the packet index. The index is used, since it is what a decoder will "
-            "produce."
+            f"The container header declares {declared_frames} frames but a decoder produces "
+            f"{timing.frame_count}. The decoder's count is used. A header counts stored "
+            "samples, which includes any the container's edit list trims and any the "
+            "recording was cut off part-way through."
         )
 
     if timing.container_duration_s is not None and timing.intervals is not None:
@@ -467,9 +501,16 @@ def probe(path: Path, *, full_hash: bool = False) -> VideoProbe:
     )
     declared_frames = _int_or_none(stream.get("nb_frames"))
 
-    ticks, keyframes = parse_packet_index(
+    ticks, keyframes, dropped = parse_frame_index(
         _run_ffprobe(
-            ["-select_streams", "v:0", "-show_entries", "packet=pts,flags", "-of", "csv=p=0"],
+            [
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "frame=best_effort_timestamp,key_frame",
+                "-of",
+                "compact=p=0:nk=0",
+            ],
             path,
         )
     )
@@ -482,29 +523,50 @@ def probe(path: Path, *, full_hash: bool = False) -> VideoProbe:
             container_duration_s=container_duration,
         )
         index = FrameIndex(
-            source=TimestampSource.PACKET_PTS,
+            source=TimestampSource.DECODED_FRAMES,
             timestamps_s=tuple(float(t * time_base) for t in ticks),
             keyframes=tuple(keyframes),
         )
-    else:
-        frame_count = declared_frames or (
-            int(container_duration * nominal_fps) if container_duration and nominal_fps else 0
-        )
-        if not nominal_fps or frame_count <= 0:
+    elif dropped:
+        # Frames exist but none of them carry a timestamp. Synthesising a
+        # timeline from the declared rate is the only option left, and it is
+        # flagged, because it makes variable frame rate undetectable.
+        #
+        # The count comes from the frames that were actually seen, not from the
+        # container header: the header counts stored samples, which is the
+        # number the edit-list case above proves untrustworthy.
+        if not nominal_fps:
             raise ProbeError(
-                f"{path.name} has a video stream with neither presentation timestamps nor a "
+                f"{path.name} has a video stream with neither frame timestamps nor a "
                 "usable frame rate, so no timeline can be established.",
-                remediation="Re-encode the clip with FFmpeg (`ffmpeg -i in.mp4 -c:v libx264 out.mp4`) to rebuild its timing.",
+                remediation=(
+                    "Re-encode the clip with FFmpeg "
+                    "(`ffmpeg -i in.mp4 -c:v libx264 out.mp4`) to rebuild its timing."
+                ),
             )
         timing = _timing_from_container_rate(
-            frame_count=frame_count,
+            frame_count=dropped,
             nominal_fps=nominal_fps,
             container_duration_s=container_duration,
         )
         index = FrameIndex(
             source=TimestampSource.CONTAINER_RATE,
-            timestamps_s=tuple(i / nominal_fps for i in range(frame_count)),
-            keyframes=(True,) + (False,) * (frame_count - 1),
+            timestamps_s=tuple(i / nominal_fps for i in range(dropped)),
+            keyframes=(True,) + (False,) * (dropped - 1),
+        )
+    else:
+        # No decodable frames at all. The header may still claim a frame count
+        # and a duration -- a truncated recording usually does -- but reporting
+        # those would describe a clip that cannot be read, which is worse than
+        # refusing it.
+        raise ProbeError(
+            f"{path.name} has a video stream that produces no frames"
+            + (f", although its header declares {declared_frames}" if declared_frames else "")
+            + ".",
+            remediation=(
+                "The recording is empty or was cut off before any complete frame was "
+                "written. Re-copy it from the camera."
+            ),
         )
 
     if timing.frame_count == 0:
@@ -513,7 +575,7 @@ def probe(path: Path, *, full_hash: bool = False) -> VideoProbe:
             remediation="The recording is empty or was truncated before any frame was written.",
         )
 
-    warnings = _collect_warnings(timing, stream_info, declared_frames)
+    warnings = _collect_warnings(timing, stream_info, declared_frames, dropped)
     if rotation_warning:
         warnings.append(rotation_warning)
 

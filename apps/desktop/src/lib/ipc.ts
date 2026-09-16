@@ -11,15 +11,22 @@ import type {
   EngineError,
   EngineResult,
   EnvironmentReport,
+  PoseExtractionResult,
+  ProgressUpdate,
   VideoMetadata,
 } from "@gsa/types";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /** Tauri command names. Must match the `#[tauri::command]` functions in Rust. */
 const COMMANDS = {
   doctor: "doctor",
   probeVideo: "probe_video",
+  extractPoses: "extract_poses",
 } as const;
+
+/** Event Rust re-emits engine progress notifications on. */
+const PROGRESS_EVENT = "engine://progress";
 
 /**
  * Shape the Rust layer serialises its errors into.
@@ -135,4 +142,58 @@ export function probeVideo(
 export function remediationOf(error: EngineError): string | null {
   const value = error.data?.["remediation"];
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Run pose estimation over a clip and store the landmarks.
+ *
+ * Long-running — minutes on a high-frame-rate clip. Subscribe with
+ * `onProgress` before calling this to show real completion; the promise does
+ * not settle until the whole extraction is done.
+ *
+ * The landmarks are not in the result. A 240 fps clip is tens of thousands of
+ * frames of 33 landmarks in two coordinate spaces, so the engine writes them to
+ * a Parquet file and returns its path.
+ */
+export function extractPoses(
+  path: string,
+  options: { model?: string } = {},
+): Promise<EngineResult<PoseExtractionResult>> {
+  return call<PoseExtractionResult>(COMMANDS.extractPoses, {
+    path,
+    model: options.model ?? null,
+  });
+}
+
+/**
+ * Subscribe to engine progress.
+ *
+ * Returns a promise of an unsubscribe function, which is Tauri's shape: the
+ * listener is registered asynchronously, so unsubscribing has to wait for the
+ * registration it is cancelling.
+ *
+ * Updates are filtered by `task` when one is given, because every long method
+ * reports on the same channel and a screen only wants its own.
+ */
+export function onProgress(
+  handler: (update: ProgressUpdate) => void,
+  options: { task?: string } = {},
+): Promise<() => void> {
+  return listen<ProgressUpdate>(PROGRESS_EVENT, (event) => {
+    if (options.task !== undefined && event.payload.task !== options.task)
+      return;
+    handler(event.payload);
+  });
+}
+
+/**
+ * Completed fraction of an update, or null when there is no total to divide by.
+ *
+ * Mirrors the `fraction` property on the Python contract, which is computed
+ * rather than stored: a progress bar that invents a denominator is worse than
+ * one that admits it does not have one.
+ */
+export function progressFraction(update: ProgressUpdate): number | null {
+  if (update.total == null || update.total <= 0) return null;
+  return Math.min(update.current / update.total, 1);
 }

@@ -1,6 +1,7 @@
+import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { stubEngine, VFR_ROTATED_METADATA } from "./fixtures";
+import { POSE_RESULT, stubEngine, VFR_ROTATED_METADATA } from "./fixtures";
 
 /** The file picker and the engine both travel over the Tauri bridge. */
 function importFlow(metadata: unknown) {
@@ -102,5 +103,86 @@ test.describe("video import", () => {
 
     await page.getByRole("button", { name: "Video" }).click();
     await expect(page.getByText(/No clip loaded/)).toBeVisible();
+  });
+});
+
+test.describe("pose extraction", () => {
+  /** Load a clip, then hand back a page sitting on its metadata. */
+  async function loadClip(page: Page, extra = {}) {
+    await stubEngine(page, { ...importFlow(VFR_ROTATED_METADATA), ...extra });
+    await page.goto("/");
+    await page.getByRole("button", { name: "Video" }).click();
+    await page.getByRole("button", { name: /Choose video/ }).click();
+    await expect(page.getByText("Frame timing")).toBeVisible();
+  }
+
+  test("offers extraction only once a clip is loaded", async ({ page }) => {
+    await stubEngine(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Video" }).click();
+
+    await expect(
+      page.getByRole("button", { name: /Extract pose/ }),
+    ).toHaveCount(0);
+  });
+
+  test("starts with nothing extracted", async ({ page }) => {
+    await loadClip(page);
+    await expect(page.getByText(/No landmarks extracted/)).toBeVisible();
+  });
+
+  test("reports what the engine measured", async ({ page }) => {
+    await loadClip(page, { extract_poses: { result: POSE_RESULT } });
+    await page.getByRole("button", { name: /Extract pose/ }).click();
+
+    await expect(page.getByText("44 (97.8%)")).toBeVisible();
+    await expect(page.getByText("15.3 ms")).toBeVisible();
+    await expect(
+      page.getByText("pose_landmarker_full (float16)"),
+    ).toBeVisible();
+  });
+
+  test("renders a failed extraction with the engine's remedy", async ({
+    page,
+  }) => {
+    await loadClip(page, {
+      extract_poses: {
+        error: {
+          kind: "method",
+          message: "Model 'pose_landmarker_heavy' is not downloaded.",
+          code: -31001,
+          data: { remediation: "Run `python scripts/download_models.py`." },
+        },
+      },
+    });
+    await page.getByRole("button", { name: /Extract pose/ }).click();
+
+    await expect(page.getByText(/is not downloaded/)).toBeVisible();
+    await expect(page.getByText(/download_models\.py/)).toBeVisible();
+    // A failure must not leave a previous run's numbers on screen.
+    await expect(page.getByText("Frames processed")).toHaveCount(0);
+  });
+
+  test("surfaces a warning about an unusable extraction", async ({ page }) => {
+    await loadClip(page, {
+      extract_poses: {
+        result: {
+          ...POSE_RESULT,
+          stats: {
+            ...POSE_RESULT.stats,
+            frames_detected: 0,
+            detection_rate: 0,
+            mean_visibility: null,
+          },
+          warnings: [
+            "No pose was detected in any frame. Nothing downstream can be computed from this extraction.",
+          ],
+        },
+      },
+    });
+    await page.getByRole("button", { name: /Extract pose/ }).click();
+
+    await expect(page.getByText(/No pose was detected/)).toBeVisible();
+    await expect(page.getByText("not measured")).toBeVisible();
   });
 });

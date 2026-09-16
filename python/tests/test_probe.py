@@ -20,7 +20,7 @@ from analyzer.contracts.video import TimestampSource
 from analyzer.ingestion.probe import (
     ProbeError,
     check_readable,
-    parse_packet_index,
+    parse_frame_index,
     probe,
     read_rotation,
     timing_from_ticks,
@@ -90,29 +90,51 @@ class TestReadRotation:
         assert read_rotation({"side_data_list": [{"rotation": 270}]})[2] is None
 
 
-class TestParsePacketIndex:
-    def test_packets_are_sorted_into_presentation_order(self) -> None:
-        """Containers emit packets in decode order when B-frames are present."""
-        csv = "0,K__\n1536,___\n512,___\n1024,___\n"
-        ticks, _ = parse_packet_index(csv)
-        assert ticks == [0, 512, 1024, 1536]
+class TestParseFrameIndex:
+    """ffprobe's `compact` format, one frame per line.
+
+    Compact rather than CSV because CSV emits fields in ffprobe's own order
+    rather than the order they were requested in, which makes column position a
+    guess.
+    """
+
+    @staticmethod
+    def _line(timestamp: str, key: str = "0") -> str:
+        return f"key_frame={key}|best_effort_timestamp={timestamp}||||"
+
+    def test_reads_timestamps_in_order(self) -> None:
+        text = "\n".join(self._line(t) for t in ("0", "512", "1024"))
+        ticks, _, _ = parse_frame_index(text)
+        assert ticks == [0, 512, 1024]
 
     def test_keyframe_flags_travel_with_their_timestamps(self) -> None:
-        csv = "1536,K__\n0,___\n512,___\n"
-        ticks, keyframes = parse_packet_index(csv)
-        assert ticks == [0, 512, 1536]
-        assert keyframes == [False, False, True]
+        text = "\n".join([self._line("0", "1"), self._line("512"), self._line("1024", "1")])
+        ticks, keyframes, _ = parse_frame_index(text)
+        assert ticks == [0, 512, 1024]
+        assert keyframes == [True, False, True]
 
-    def test_packets_without_a_timestamp_are_dropped(self) -> None:
-        """A packet that cannot be placed on the timeline must not be guessed at."""
-        ticks, _ = parse_packet_index("0,K__\nN/A,___\n512,___\n")
+    def test_field_order_does_not_matter(self) -> None:
+        """ffprobe chooses the order; the parser reads by name."""
+        text = "best_effort_timestamp=7|key_frame=1"
+        ticks, keyframes, _ = parse_frame_index(text)
+        assert (ticks, keyframes) == ([7], [True])
+
+    def test_frames_without_a_timestamp_are_dropped_and_counted(self) -> None:
+        """Dropping one shifts every later index, so the count must reach the caller."""
+        text = "\n".join([self._line("0"), self._line("N/A"), self._line("512")])
+        ticks, _, dropped = parse_frame_index(text)
         assert ticks == [0, 512]
+        assert dropped == 1
+
+    def test_nothing_dropped_is_reported_as_zero(self) -> None:
+        assert parse_frame_index(self._line("0"))[2] == 0
 
     def test_blank_lines_are_ignored(self) -> None:
-        assert parse_packet_index("\n0,K__\n\n512,___\n\n")[0] == [0, 512]
+        text = f"\n{self._line('0')}\n\n{self._line('512')}\n\n"
+        assert parse_frame_index(text)[0] == [0, 512]
 
     def test_empty_input_yields_nothing(self) -> None:
-        assert parse_packet_index("") == ([], [])
+        assert parse_frame_index("") == ([], [], 0)
 
 
 class TestVariableFrameRateDetection:
@@ -230,7 +252,7 @@ class TestProbeConstantRate:
     def test_is_not_variable_frame_rate(self) -> None:
         timing = probe(CFR_30FPS).metadata.timing
         assert timing.is_vfr is False
-        assert timing.source is TimestampSource.PACKET_PTS
+        assert timing.source is TimestampSource.DECODED_FRAMES
 
     def test_a_clean_clip_produces_no_warnings(self) -> None:
         assert probe(CFR_30FPS).metadata.warnings == []
@@ -350,8 +372,14 @@ class TestProbeTruncated:
 
     def test_reports_the_frames_that_are_actually_there(self, truncated_video: Path) -> None:
         timing = probe(truncated_video).metadata.timing
-        assert timing.frame_count < CFR_FRAME_COUNT
+        assert 0 < timing.frame_count < CFR_FRAME_COUNT
 
-    def test_says_the_container_disagrees_with_the_index(self, truncated_video: Path) -> None:
+    def test_says_the_header_overstates_the_clip(self, truncated_video: Path) -> None:
         warnings = probe(truncated_video).metadata.warnings
         assert any(f"declares {CFR_FRAME_COUNT} frames" in w for w in warnings)
+
+    def test_a_file_with_no_decodable_frames_is_refused(self, frameless_video: Path) -> None:
+        """Describing a clip that cannot be read is worse than refusing it."""
+        with pytest.raises(ProbeError, match="produces no frames") as excinfo:
+            probe(frameless_video)
+        assert excinfo.value.remediation is not None

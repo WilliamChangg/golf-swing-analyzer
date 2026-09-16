@@ -35,6 +35,8 @@ SCHEMA_DIR = OUT_DIR / "schema"
 EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.health", "EnvironmentReport"),
     ("analyzer.contracts.video", "VideoMetadata"),
+    ("analyzer.contracts.pose", "PoseExtractionResult"),
+    ("analyzer.contracts.progress", "ProgressUpdate"),
 )
 
 BANNER = """\
@@ -177,7 +179,9 @@ def generate() -> list[Path]:
 
         ts_file = OUT_DIR / f"{name}.ts"
         _run_generator(schema_file, ts_file)
-        ts_file.write_text(_dedupe_numbered_aliases(ts_file.read_text(encoding="utf-8")), encoding="utf-8")
+        ts_file.write_text(
+            _dedupe_numbered_aliases(ts_file.read_text(encoding="utf-8")), encoding="utf-8"
+        )
         written.append(ts_file)
 
         index_lines.append(f'export * from "./{name}";')

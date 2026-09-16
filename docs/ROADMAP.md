@@ -4,14 +4,14 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-1 complete (2 / 21).**
+**Progress: Phases 0-2 complete (3 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
 | 0   | Foundation            | ✅ **Done** | App launches; doctor reports the real measured environment |
 | 1   | Video ingestion       | ✅ **Done** | Correct metadata on VFR and rotated fixtures               |
-| 2   | Single-camera pose    | ⬜ Next     | Landmarks persisted and reloadable; estimator swappable    |
-| 3   | Temporal filtering    | ⬜          | Error bounds met against analytical trajectories           |
+| 2   | Single-camera pose    | ✅ **Done** | Landmarks persisted and reloadable; estimator swappable    |
+| 3   | Temporal filtering    | ⬜ Next     | Error bounds met against analytical trajectories           |
 | 4   | Swing phase detection | ⬜          | Phases correct on real swings, inspectable frame-by-frame  |
 | 5   | Biomechanics engine   | ⬜          | Metrics carry units, confidence, methodology               |
 | 6   | DTL + coordinates     | ⬜          | Conventions documented and tested                          |
@@ -134,19 +134,80 @@ median of 5, Apple M1 Pro / macOS 26.4.1):
   `architecture.md` confines that to `biomechanics`/`phases`/`coaching`.
   Ingestion reports the measured rate; Phase 4 is where it gets judged.
 
-## Phase 2 — Single-camera pose ⬜
+## Phase 2 — Single-camera pose ✅
 
 `PoseEstimator` Protocol with MediaPipe as one implementation; MediaPipe types
 must not leak past the adapter. VIDEO running mode with real timestamps. Keep
 normalized and world landmarks in separate fields — world landmarks are
 hip-centred and only roughly metric, and are **not** calibrated world coordinates.
 
-- [ ] 2.1 `Landmark` enum, `PoseFrame`, `PoseSequence`, `LandmarkSeries`
-- [ ] 2.2 MediaPipe adapter behind the Protocol
-- [ ] 2.3 Parquet store, long format, schema-versioned
-- [ ] 2.4 Progress notifications streamed to the UI
-- [ ] 2.5 Tests: round-trip, mapping completeness, no-detection frames, determinism
-- [ ] 2.6 Measure ms/frame for lite/full/heavy; pick the default on data; commit
+- [x] **2.1 Contracts** — `Landmark` (33, values are the model's own indices),
+      `LandmarkPoint`, `PoseFrame`, `PoseSequence`, `LandmarkSeries`,
+      `PoseExtractionResult`, `ProgressUpdate`
+- [x] **2.2 MediaPipe adapter** — behind `PoseEstimator`; no MediaPipe type
+      reaches a caller. BGR→RGB, VIDEO mode, strictly-increasing clock
+- [x] **2.3 Parquet store** — long format, schema-versioned, self-describing;
+      undetected frames stored as NaN rather than omitted
+- [x] **2.4 Progress** — reporter seam → JSON-RPC notification → Tauri event →
+      progress bar; also drives a Rich bar in the CLI
+- [x] **2.5 Tests** — 114 added: round-trip, mapping completeness, no-detection
+      frames, determinism, colour order, clock monotonicity, throttling
+- [x] **2.6 Measure ms/frame; pick the default** — measured on two real swings;
+      default kept at `full`, on the data, for the reason below
+
+**Measured** (`scripts/benchmark_pose.py`, Apple M1 Pro / macOS 26.4.1), on two
+real swings — a 68-frame 720x1280 face-on clip and a 239-frame 1920x1080
+down-the-line clip:
+
+| Model | Load    | ms/frame (face-on / DTL) | Frames/s | Poses found |
+| ----- | ------- | ------------------------ | -------- | ----------- |
+| lite  | ~190 ms | 11.6 / 11.0              | 86 / 91  | **100%**    |
+| full  | ~85 ms  | 17.7 / 17.2              | 56 / 58  | **100%**    |
+| heavy | ~120 ms | 67.1 / 66.3              | 15 / 15  | **100%**    |
+
+**The default stays `pose_landmarker_full`, and that is a decision made on the
+data rather than despite it.** All three variants find a pose in every frame, so
+detection rate does not discriminate between them. Speed does, but not in a way
+that binds: a swing clip is seconds long, so the spread is 0.8 s against 1.2 s
+of work on the face-on clip. The criterion that would actually discriminate --
+landmark accuracy -- is not measured anywhere yet, and picking the least
+accurate variant to save half a second on a measurement system would be
+optimising the wrong quantity. Revisit when Phase 12 provides an evaluation set.
+
+Note how far the earlier synthetic figures were off: on a clip with nobody in
+it, `heavy` measured 27.4 ms/frame, against 67.1 ms on a real swing. MediaPipe
+runs the detector when it finds nothing and the landmark model when it does, and
+those cost very different amounts. The benchmark's refusal to recommend below a
+50% detection rate is what stopped that becoming a wrong default.
+
+**Deliberate deviations from the original plan:**
+
+- **2.6 is not finished, and the benchmark says so rather than guessing.** No
+  footage containing a person exists in this repository, and MediaPipe takes two
+  different paths through its graph: with no pose found it runs the _detector_
+  every frame, and with one found it runs the _landmark_ model and re-detects
+  only when tracking is lost. The table above therefore measures the path taken
+  when nobody is in shot — a real path, and not the throughput of a real swing.
+  `benchmark_pose.py` refuses to recommend a model below a 50% detection rate,
+  so the default stays the manifest's `pose_landmarker_full`. One command
+  finishes this once a swing clip exists:
+  `uv run --project python python scripts/benchmark_pose.py --video <clip>`
+- **MediaPipe re-pinned to 1.0.0** ([ADR-0008](decisions/ADR-0008-mediapipe-1.0.0.md)).
+  1.0.1 aborts the process when the pose graph opens on macOS arm64. Phase 0's
+  health check had reported MediaPipe as OK on the strength of an import, so the
+  check now runs one real inference in a child process — an abort cannot be
+  caught in-process, and a probe that takes the engine down with it reports
+  nothing.
+- **"World landmarks" are called `HIP_LOCAL`.** MediaPipe's name would collide
+  with the genuinely-calibrated world coordinates Phase 9 produces, and the two
+  are not interchangeable: these are hip-centred, only roughly metric, and carry
+  no camera geometry. The word "world" appears nowhere in the pose contracts.
+- **The request timeout became an inactivity timeout.** Extraction over a 60 s
+  clip at 240 fps is 14,400 frames, well past any fixed budget. Every frame the
+  worker sends — progress included — resets the clock, so a slow job is allowed
+  to be slow while a wedged one still gives up.
+- **`ProgressEvent` renamed `ProgressUpdate`**, because the generated TypeScript
+  would otherwise collide with the DOM's built-in `ProgressEvent`.
 
 ## Phase 3 — Temporal filtering ⬜
 

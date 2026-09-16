@@ -68,9 +68,9 @@
       "type": "object"
     },
     "TimestampSource": {
-      "description": "Where a clip's per-frame times came from.\n\nPACKET_PTS      - presentation timestamps read from the container index.\n                  Authoritative: these are the times the frames are to be\n                  shown at, whether or not they are evenly spaced.\nCONTAINER_RATE  - synthesised from the container's declared average frame\n                  rate because no usable timestamps were found. A fallback,\n                  and one that makes variable frame rate undetectable, so\n                  anything derived from it is flagged.",
+      "description": "Where a clip's per-frame times came from.\n\nDECODED_FRAMES  - presentation timestamps of the frames a decoder actually\n                  emits, accounting for any edit list the container applies.\n                  Authoritative: these are the times the frames are shown at,\n                  whether or not they are evenly spaced.\n\n                  Deliberately not the container's *packet* timestamps. Those\n                  are cheaper to read and are wrong on real recordings: a\n                  clip with an MP4 edit list has packets a decoder never\n                  emits, and packet times offset from presentation times.\n\nCONTAINER_RATE  - synthesised from the container's declared average frame\n                  rate because no usable timestamps were found. A fallback,\n                  and one that makes variable frame rate undetectable, so\n                  anything derived from it is flagged.",
       "enum": [
-        "packet_pts",
+        "decoded_frames",
         "container_rate"
       ],
       "title": "TimestampSource",

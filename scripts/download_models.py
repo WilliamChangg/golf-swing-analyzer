@@ -50,10 +50,12 @@ def _download(entry: ModelEntry, target: Path) -> None:
     print(f"  downloading {entry.filename} ({_human(entry.size_bytes)})...")
 
     try:
-        with urllib.request.urlopen(entry.url) as response:  # noqa: S310 - manifest-pinned https URL
-            with partial.open("wb") as handle:
-                while chunk := response.read(_CHUNK):
-                    handle.write(chunk)
+        with (
+            urllib.request.urlopen(entry.url) as response,  # noqa: S310 - manifest-pinned https URL
+            partial.open("wb") as handle,
+        ):
+            while chunk := response.read(_CHUNK):
+                handle.write(chunk)
     except urllib.error.URLError as exc:
         partial.unlink(missing_ok=True)
         raise SystemExit(f"  failed to download {entry.name}: {exc}") from exc

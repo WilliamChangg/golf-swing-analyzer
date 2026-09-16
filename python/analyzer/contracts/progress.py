@@ -24,8 +24,14 @@ PROGRESS_SCHEMA_VERSION = 1
 PROGRESS_NOTIFICATION = "progress"
 
 
-class ProgressEvent(BaseModel):
-    """One progress update from a running engine method."""
+class ProgressUpdate(BaseModel):
+    """One progress update from a running engine method.
+
+    Named `ProgressUpdate` rather than the more obvious `ProgressEvent` because
+    the generated TypeScript would otherwise collide with the DOM's built-in
+    `ProgressEvent`, and a type that shadows a global in some files but not
+    others is a trap for later.
+    """
 
     schema_version: int = PROGRESS_SCHEMA_VERSION
     request_id: int | str | None = Field(

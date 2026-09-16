@@ -21,15 +21,22 @@ export type HashAlgorithm = "sha256" | "sha256-sampled-v1";
 /**
  * Where a clip's per-frame times came from.
  *
- * PACKET_PTS      - presentation timestamps read from the container index.
- *                   Authoritative: these are the times the frames are to be
- *                   shown at, whether or not they are evenly spaced.
+ * DECODED_FRAMES  - presentation timestamps of the frames a decoder actually
+ *                   emits, accounting for any edit list the container applies.
+ *                   Authoritative: these are the times the frames are shown at,
+ *                   whether or not they are evenly spaced.
+ *
+ *                   Deliberately not the container's *packet* timestamps. Those
+ *                   are cheaper to read and are wrong on real recordings: a
+ *                   clip with an MP4 edit list has packets a decoder never
+ *                   emits, and packet times offset from presentation times.
+ *
  * CONTAINER_RATE  - synthesised from the container's declared average frame
  *                   rate because no usable timestamps were found. A fallback,
  *                   and one that makes variable frame rate undetectable, so
  *                   anything derived from it is flagged.
  */
-export type TimestampSource = "packet_pts" | "container_rate";
+export type TimestampSource = "decoded_frames" | "container_rate";
 
 /**
  * Everything known about a video file without decoding it.

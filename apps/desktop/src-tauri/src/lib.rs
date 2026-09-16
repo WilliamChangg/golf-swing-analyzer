@@ -23,7 +23,8 @@ pub fn run() {
         .manage(Engine::new())
         .invoke_handler(tauri::generate_handler![
             commands::doctor,
-            commands::probe_video
+            commands::probe_video,
+            commands::extract_poses
         ])
         .run(tauri::generate_context!())
         .expect("error while running the application");

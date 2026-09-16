@@ -47,7 +47,7 @@ function metadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
       time_base: "1/15360",
     },
     timing: {
-      source: "packet_pts",
+      source: "decoded_frames",
       frame_count: 60,
       first_timestamp_s: 0,
       last_timestamp_s: 1.966667,

@@ -34,11 +34,11 @@ helper is constructed regardless of the delegate.
 Testing adjacent versions in throwaway environments, with the same model files
 and the same code:
 
-| Version | Result                      |
-| ------- | --------------------------- |
-| 0.10.35 | runs                        |
-| 1.0.0   | runs                        |
-| 1.0.1   | aborts the process          |
+| Version | Result             |
+| ------- | ------------------ |
+| 0.10.35 | runs               |
+| 1.0.0   | runs               |
+| 1.0.1   | aborts the process |
 
 So this is a regression introduced in 1.0.1, not a property of the 1.0 line.
 
@@ -65,13 +65,13 @@ check would have taken the engine down with it and produced no report at all.
 A child turns a fatal signal into an exit code, and the probe distinguishes the
 cases that follow from it:
 
-| Child outcome            | Reported  | Means                                   |
-| ------------------------ | --------- | --------------------------------------- |
-| exit 0 with the sentinel | `ok`      | inference ran, with its measured time   |
-| killed by a signal       | `error`   | the build cannot open its graph here    |
-| exit 4 (caught)          | `error`   | the model file is bad, the build is not |
-| exit 3                   | `missing` | no model to test with                   |
-| no model on disk         | `degraded`| unverified, which is not the same as false |
+| Child outcome            | Reported   | Means                                      |
+| ------------------------ | ---------- | ------------------------------------------ |
+| exit 0 with the sentinel | `ok`       | inference ran, with its measured time      |
+| killed by a signal       | `error`    | the build cannot open its graph here       |
+| exit 4 (caught)          | `error`    | the model file is bad, the build is not    |
+| exit 3                   | `missing`  | no model to test with                      |
+| no model on disk         | `degraded` | unverified, which is not the same as false |
 
 The last two rows matter as much as the first: "not verified" is reported as
 distinct from "verified working", because the alternative is the false green

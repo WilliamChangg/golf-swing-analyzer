@@ -1,0 +1,71 @@
+{
+  "description": "One progress update from a running engine method.\n\nNamed `ProgressUpdate` rather than the more obvious `ProgressEvent` because\nthe generated TypeScript would otherwise collide with the DOM's built-in\n`ProgressEvent`, and a type that shadows a global in some files but not\nothers is a trap for later.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The request this belongs to. None when the work was not RPC-driven."
+    },
+    "task": {
+      "description": "Engine method doing the work, e.g. 'extract_poses'.",
+      "type": "string"
+    },
+    "stage": {
+      "description": "Phase within the task, e.g. 'estimating'.",
+      "type": "string"
+    },
+    "current": {
+      "description": "Units completed.",
+      "type": "integer"
+    },
+    "total": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Units expected, when known. None means the total cannot be determined."
+    },
+    "elapsed_s": {
+      "type": "number"
+    },
+    "detail": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Short human-readable note, e.g. the model in use."
+    }
+  },
+  "required": [
+    "task",
+    "stage",
+    "current",
+    "elapsed_s"
+  ],
+  "title": "ProgressUpdate",
+  "type": "object"
+}

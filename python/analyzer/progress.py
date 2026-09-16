@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from analyzer.contracts.progress import ProgressEvent
+from analyzer.contracts.progress import ProgressUpdate
 
 # Roughly ten updates a second: fast enough to look continuous, slow enough that
 # the reporting is not itself a measurable cost.
@@ -27,23 +27,23 @@ DEFAULT_MIN_INTERVAL_S = 0.1
 class ProgressReporter(Protocol):
     """Anything a running method can report progress to."""
 
-    def report(self, event: ProgressEvent) -> None: ...
+    def report(self, event: ProgressUpdate) -> None: ...
 
 
 class NullReporter:
     """Discards everything. The default, so progress is never required."""
 
-    def report(self, event: ProgressEvent) -> None:
+    def report(self, event: ProgressUpdate) -> None:
         return
 
 
 class CallbackReporter:
     """Forwards events to a function."""
 
-    def __init__(self, callback: Callable[[ProgressEvent], None]) -> None:
+    def __init__(self, callback: Callable[[ProgressUpdate], None]) -> None:
         self._callback = callback
 
-    def report(self, event: ProgressEvent) -> None:
+    def report(self, event: ProgressUpdate) -> None:
         self._callback(event)
 
 
@@ -51,9 +51,9 @@ class RecordingReporter:
     """Keeps every event. For tests, and for asserting what was reported."""
 
     def __init__(self) -> None:
-        self.events: list[ProgressEvent] = []
+        self.events: list[ProgressUpdate] = []
 
-    def report(self, event: ProgressEvent) -> None:
+    def report(self, event: ProgressUpdate) -> None:
         self.events.append(event)
 
 
@@ -77,7 +77,7 @@ class ThrottledReporter:
         self._clock = clock
         self._last_sent: float | None = None
 
-    def report(self, event: ProgressEvent) -> None:
+    def report(self, event: ProgressUpdate) -> None:
         is_final = event.total is not None and event.current >= event.total
         now = self._clock()
 
@@ -119,7 +119,7 @@ class ProgressTracker:
         detail: str | None = None,
     ) -> None:
         self._reporter.report(
-            ProgressEvent(
+            ProgressUpdate(
                 request_id=self._request_id,
                 task=self._task,
                 stage=stage,

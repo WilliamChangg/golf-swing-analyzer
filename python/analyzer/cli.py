@@ -14,13 +14,24 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from analyzer import __version__
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.pose import PoseExtractionResult
+from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.rpc import EngineError
 from analyzer.contracts.video import TimestampSource, VideoMetadata
 from analyzer.dispatch import call
+from analyzer.progress import CallbackReporter
 
 app = typer.Typer(
     name="analyzer",
@@ -181,10 +192,38 @@ def _render_metadata(metadata: VideoMetadata) -> None:
     for warning in metadata.warnings:
         console.print(f"[yellow]![/yellow] {warning}")
 
-    if timing.source is TimestampSource.PACKET_PTS and timing.is_vfr is False:
+    if timing.source is TimestampSource.DECODED_FRAMES and timing.is_vfr is False:
         console.print(
             "[dim]Frame times are evenly spaced; index/fps arithmetic is valid here.[/dim]"
         )
+
+
+def _render_extraction(result: PoseExtractionResult) -> None:
+    stats, model = result.stats, result.model
+
+    table = Table(title=Path(result.video_path).name, title_justify="left", expand=True)
+    table.add_column("Property", no_wrap=True)
+    table.add_column("Value", overflow="fold")
+
+    detected = f"{stats.frames_detected} of {stats.frames_processed}"
+    rate_style = "green" if stats.detection_rate >= 0.9 else "yellow"
+    table.add_row("frames with a pose", f"[{rate_style}]{detected}[/{rate_style}]")
+    table.add_row("detection rate", f"{stats.detection_rate:.1%}")
+    table.add_row("time per frame", f"{stats.ms_per_frame:.2f} ms")
+    table.add_row("total time", f"{stats.elapsed_s:.2f} s")
+    table.add_row(
+        "mean visibility",
+        f"{stats.mean_visibility:.3f}" if stats.mean_visibility is not None else "not measured",
+    )
+    table.add_row("model", f"{model.name} ({model.variant}, {model.precision})")
+    table.add_row("inference on", model.delegate)
+    table.add_row("model digest", model.sha256[:16])
+    table.add_row("output", result.output_path)
+
+    console.print(table)
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
 
 
 @app.command()
@@ -226,3 +265,71 @@ def version() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def extract(
+    path: Annotated[Path, typer.Argument(help="Video file to extract poses from.")],
+    model: Annotated[
+        str | None,
+        typer.Option("--model", help="Manifest model name. Defaults to the manifest's choice."),
+    ] = None,
+    output: Annotated[
+        Path | None, typer.Option("--output", help="Where to write the Parquet file.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of a table.")
+    ] = False,
+) -> None:
+    """Run pose estimation over every frame of a clip and store the landmarks."""
+    params: dict[str, object] = {"path": str(path), "model": model}
+    if output is not None:
+        params["output"] = str(output)
+
+    # The same reporter seam the desktop app uses for notifications drives a
+    # terminal progress bar here, which is the point of it being a seam.
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+        # Redirected to stderr so `--json` output stays a clean pipe.
+        disable=as_json,
+    ) as progress:
+        bar = progress.add_task("Estimating pose", total=None)
+
+        def on_update(update: ProgressUpdate) -> None:
+            progress.update(
+                bar,
+                completed=update.current,
+                total=update.total,
+                description="Loading the model"
+                if update.stage == "starting"
+                else "Estimating pose",
+            )
+
+        try:
+            result = call("extract_poses", params, CallbackReporter(on_update))
+        except EngineError as exc:
+            progress.stop()
+            console.print(f"[red]{exc}[/red]")
+            remediation = (exc.data or {}).get("remediation")
+            if remediation:
+                console.print(f"[dim]fix: {remediation}[/dim]")
+            raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, PoseExtractionResult)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_extraction(result)
+
+    # Non-zero when nothing was found: a caller scripting this needs to know the
+    # run produced no usable landmarks, and an exit code is how it finds out.
+    if result.stats.frames_detected == 0:
+        raise typer.Exit(code=1)

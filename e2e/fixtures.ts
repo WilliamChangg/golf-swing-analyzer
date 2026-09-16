@@ -102,7 +102,7 @@ export const VFR_ROTATED_METADATA = {
     time_base: "1/15360",
   },
   timing: {
-    source: "packet_pts",
+    source: "decoded_frames",
     frame_count: 45,
     first_timestamp_s: 0,
     last_timestamp_s: 1.933333,
@@ -125,6 +125,34 @@ export const VFR_ROTATED_METADATA = {
     "Variable frame rate: 14 of 44 intervals differ from the median by more than one time-base tick (from 33.33 ms to 66.67 ms). Frame times must come from presentation timestamps; frame_index / fps is not valid for this clip.",
     "The container requests a 90 degree counter-clockwise display rotation (stored 1920x1080, presented 1080x1920). Frames are returned already rotated.",
   ],
+};
+
+/** A completed pose extraction, as the engine reports one. */
+export const POSE_RESULT = {
+  schema_version: 1,
+  video_path: "/Users/example/data/raw/2026-09-15/faceon.mov",
+  output_path:
+    "/Users/example/Library/Caches/golf-swing-analyzer/poses/sha256-sampled-v1-93c22821/pose_landmarker_full.parquet",
+  model: {
+    name: "pose_landmarker_full",
+    variant: "full",
+    precision: "float16",
+    sha256: "4eaa5eb7a9836522aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    delegate: "cpu",
+    min_pose_detection_confidence: 0.5,
+    min_pose_presence_confidence: 0.5,
+    min_tracking_confidence: 0.5,
+  },
+  extracted_at: "2026-09-16T06:41:00Z",
+  stats: {
+    frames_processed: 45,
+    frames_detected: 44,
+    detection_rate: 0.9778,
+    elapsed_s: 0.69,
+    ms_per_frame: 15.3,
+    mean_visibility: 0.912,
+  },
+  warnings: [],
 };
 
 /** What one stubbed command does when the app calls it. */
@@ -150,6 +178,11 @@ export async function stubEngine(
 ): Promise<void> {
   const commands: Record<string, CommandStub> = {
     doctor: { result: HEALTHY_REPORT },
+    // Tauri's event API rides the same bridge as commands. Answering it lets a
+    // screen that subscribes to progress get past its `await` — without this,
+    // any flow that reports progress would stall before it started.
+    "plugin:event|listen": { result: 1 },
+    "plugin:event|unlisten": { result: null },
     ...handlers,
   };
 
@@ -167,6 +200,10 @@ export async function stubEngine(
           : Promise.resolve(stub.result);
       },
       transformCallback: (cb: unknown) => cb,
+      // Called by the unlisten function Tauri's `listen` returns. Absent, it
+      // throws an unhandled rejection inside the page — which passes the test
+      // while leaving the app's teardown path untested.
+      unregisterListener: () => undefined,
     };
   }, commands);
 }

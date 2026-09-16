@@ -32,10 +32,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
 from analyzer.ingestion import (  # noqa: E402
-    DecodeBackend,
     FFmpegPipeFrameSource,
     OpenCVFrameSource,
     VideoMetadataCache,
+    VideoProbe,
     probe,
     probe_video,
 )
@@ -109,21 +109,33 @@ def ensure_video(path: Path | None) -> Path:
     source, encode = _SYNTHETIC_ARGS
     print(f"Generating {target.relative_to(REPO_ROOT)} ...")
     subprocess.run(  # noqa: S603
-        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", source]
-        + encode
-        + [str(target)],
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            source,
+            *encode,
+            str(target),
+        ],
         check=True,
     )
     return target
 
 
-def _decode_all_opencv(path: Path) -> int:
-    with OpenCVFrameSource(path, cache_bytes=1) as source:
+def _decode_all_opencv(probed: VideoProbe) -> int:
+    # The probe is passed in, not re-run: probing now costs more than the decode
+    # it precedes, so including it would make this a measurement of ffprobe.
+    with OpenCVFrameSource(probed, cache_bytes=1) as source:
         return sum(1 for _ in source.frames())
 
 
-def _decode_all_ffmpeg(path: Path, *, hardware: bool) -> int:
-    with FFmpegPipeFrameSource(path, hardware=hardware, cache_bytes=1) as source:
+def _decode_all_ffmpeg(probed: VideoProbe, *, hardware: bool) -> int:
+    with FFmpegPipeFrameSource(probed, hardware=hardware, cache_bytes=1) as source:
         return sum(1 for _ in source.frames())
 
 
@@ -135,9 +147,7 @@ def run(video: Path, repeats: int) -> tuple[list[Timing], list[tuple[str, str]]]
     timings: list[Timing] = []
 
     # Probe cost: what the metadata cache saves on a re-open.
-    timings.append(
-        _time("probe (2 ffprobe passes)", 1, repeats, lambda: (probe(video), 1)[1])
-    )
+    timings.append(_time("probe (2 ffprobe passes)", 1, repeats, lambda: (probe(video), 1)[1]))
 
     cache = VideoMetadataCache(REPO_ROOT / "data" / ".benchmark-cache")
     probe_video(video, cache=cache)  # prime
@@ -146,15 +156,13 @@ def run(video: Path, repeats: int) -> tuple[list[Timing], list[tuple[str, str]]]
     )
 
     # Decode throughput. The frame cache is disabled so every run does real work.
-    timings.append(
-        _time("decode: opencv", frames, repeats, lambda: _decode_all_opencv(video))
-    )
+    timings.append(_time("decode: opencv", frames, repeats, lambda: _decode_all_opencv(probed)))
     timings.append(
         _time(
             "decode: ffmpeg cpu",
             frames,
             repeats,
-            lambda: _decode_all_ffmpeg(video, hardware=False),
+            lambda: _decode_all_ffmpeg(probed, hardware=False),
         )
     )
     timings.append(
@@ -162,7 +170,7 @@ def run(video: Path, repeats: int) -> tuple[list[Timing], list[tuple[str, str]]]
             "decode: ffmpeg videotoolbox",
             frames,
             repeats,
-            lambda: _decode_all_ffmpeg(video, hardware=True),
+            lambda: _decode_all_ffmpeg(probed, hardware=True),
         )
     )
 

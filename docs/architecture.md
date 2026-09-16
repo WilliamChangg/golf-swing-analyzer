@@ -102,17 +102,19 @@ transport rather than engine data.
 contracts/      typed models shared with the desktop app
 hashing/        content digests for verification and cache keys
 paths/          filesystem layout resolution
+progress/       reporting from long-running methods
 environment/    hardware, tooling, model probing
 ingestion/      container inspection and frame decoding
+pose/           landmark estimation, storage, per-landmark series
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `pose`, `filtering`, `phases`, `biomechanics`, `coaching` as
-sibling packages with Protocol-typed seams (`PoseEstimator`, `ClubDetector`,
-`BallDetector`), following `ingestion`'s `FrameSource`. Golf-specific reasoning
-is confined to `biomechanics`, `phases`, and `coaching`; everything below is
-general computer vision.
+Later phases add `filtering`, `phases`, `biomechanics`, `coaching` as sibling
+packages with Protocol-typed seams (`ClubDetector`, `BallDetector`), following
+`ingestion`'s `FrameSource` and `pose`'s `PoseEstimator`. Golf-specific
+reasoning is confined to `biomechanics`, `phases`, and `coaching`; everything
+below is general computer vision.
 
 ## Video ingestion
 
@@ -158,6 +160,63 @@ yield display-oriented frames timed from the index, and are cross-checked
 against each other in the test suite. Which one to use, and why hardware decode
 is not the default, is [ADR-0007](decisions/ADR-0007-decode-backend.md).
 
+## Pose estimation
+
+`PoseEstimator` is the seam: MediaPipe is one implementation and none of its
+types reach a caller. That is what makes the model replaceable, and it is also
+what makes the pipeline testable — most of the pose tests run the whole path
+with a fake estimator, so decode, estimate, persist and reload are exercised
+without loading a model.
+
+**Two coordinate spaces, kept apart by name.** `IMAGE` is normalised to the
+displayed frame and is the only space in which a landmark can be drawn on video.
+`HIP_LOCAL` is what MediaPipe calls "world landmarks": approximate metres,
+centred on the hips, oriented to the body. They carry no information about where
+the camera was or how far away the subject stood. Calling them "world" would
+collide with the genuinely calibrated world coordinates Phase 9 produces by
+triangulation, and the two are not interchangeable, so the word does not appear
+in the pose contracts at all.
+
+**Landmarks are stored long, not wide.** One row per (frame, space, landmark),
+so adding a landmark or a space adds rows rather than columns and a file written
+today still reads after Phase 9. Frames with no detection are written as NaN
+rather than omitted: the file stays rectangular, and a gap arrives at the
+filtering layer already in the representation Phase 3 needs in order to refuse
+to interpolate across it. Schema version, source video, model digest, thresholds
+and run statistics live in the Parquet metadata, so a result always traces back
+to the artifact that produced it.
+
+**The clock MediaPipe sees is not the clock that is recorded.**
+`detect_for_video` takes integer milliseconds and requires them to increase
+strictly; at 480 fps frames are 2.08 ms apart, so rounding alone eventually
+repeats a value and the call is rejected. That clock is forced forward when it
+must be, and the count is reported. Every timestamp that reaches a stored
+sequence or a metric still comes from the container index — the nudged value is
+only used by MediaPipe's tracker to order frames.
+
+## Progress
+
+Long methods report through a `ProgressReporter` and have no idea what is on the
+other end. Three things are:
+
+```
+extract_poses  ──▶ ProgressTracker ──▶ ThrottledReporter ──▶ RPC notification
+                                                          ──▶ Rich progress bar (CLI)
+                                                          ──▶ list (tests)
+```
+
+Throttling lives in the worker rather than the call sites, because extraction
+reports once per frame and at 240 fps that would cost more in framing and pipe
+traffic than the work being described. The first update and the last always get
+through: a bar stuck below 100% on finished work reads as a hang.
+
+A JSON-RPC notification has no `id`, so the request id travels in the payload.
+Rust re-emits progress as a Tauri `engine://progress` event, and — the reason
+this matters beyond cosmetics — **every frame from the worker resets the
+engine's timeout**. That turns a fixed request budget into an inactivity
+timeout, which is what lets a 14,400-frame extraction outlast it while a wedged
+worker still gives up.
+
 ## Honest capability reporting
 
 The health screen reports torch's device and MediaPipe's delegate as **separate
@@ -166,9 +225,22 @@ while MediaPipe runs on CPU — the MediaPipe Tasks Python API has no GPU delega
 on macOS. A single "GPU: available" indicator would claim GPU pose inference the
 system cannot perform, so the UI states both and adds an explicit caveat.
 
-This generalises: the system never reports a capability it has not measured.
-Later phases extend the same rule to calibration status gating metric-scale 3D
-claims, and to detector confidence gating club/ball output.
+Phase 2 found the cost of getting this wrong in the codebase's own foundation.
+The Phase 0 check reported `mediapipe` as OK because `import mediapipe`
+succeeded — and pose inference aborted the process on first use, so the report
+was a green light for a pipeline that could not run a frame. The check now runs
+one real inference, in a child process, because an abort cannot be caught
+in-process and an in-process probe would have taken the engine down with it.
+See [ADR-0008](decisions/ADR-0008-mediapipe-1.0.0.md).
+
+The general rule that follows: **a probe must exercise the capability, not a
+proxy for it.** Import is a proxy. The same reasoning is why ingestion decodes a
+frame to settle rotation rather than trusting a property, and why the decode
+benchmark measures both backends rather than assuming the hardware one wins.
+
+This generalises further: the system never reports a capability it has not
+measured. Later phases extend the same rule to calibration status gating
+metric-scale 3D claims, and to detector confidence gating club/ball output.
 
 ## Baseline measurements
 
@@ -203,10 +275,35 @@ time.
 
 Hardware decode is the slowest of the three because the pipeline needs BGR
 frames in system memory: the GPU readback costs more than the decode it saves.
-The 45x probe gap is what the content-keyed metadata cache exists for.
 
-No figures exist yet for pose, filtering, or metrics, because none of those
-exist yet.
+Probing costs far more than it did in Phase 1 — 1326 ms against the 72.6 ms a
+packet-only pass took — because per-frame timestamps are now read from the
+frames a decoder emits. That was not a performance regression accepted for
+tidiness: packet timestamps are simply wrong on containers with an edit list,
+and wrong silently. The ~900x gap to a cache hit is what the content-keyed
+metadata cache exists for.
+
+### Pose (Phase 2, 2026-09-16)
+
+`scripts/benchmark_pose.py`, on two real swings: a 68-frame 720x1280 face-on
+clip and a 239-frame 1920x1080 down-the-line clip.
+
+| Model | Load    | ms/frame (face-on / DTL) | Frames/s | Poses found |
+| ----- | ------- | ------------------------ | -------- | ----------- |
+| lite  | ~190 ms | 11.6 / 11.0              | 86 / 91  | **100%**    |
+| full  | ~85 ms  | 17.7 / 17.2              | 56 / 58  | **100%**    |
+| heavy | ~120 ms | 67.1 / 66.3              | 15 / 15  | **100%**    |
+
+Per-frame cost barely moves with resolution, because MediaPipe resizes to a
+fixed input; it moves a great deal with which path the graph takes. On a clip
+with nobody in it `heavy` measured 27.4 ms/frame, against 67.1 ms here — the
+detector is cheap and the landmark model is not. That is why the benchmark
+refuses to recommend a model below a 50% detection rate.
+
+The health check also gained about a second, spent running one real pose
+inference in a child process rather than trusting an import.
+
+No figures exist yet for filtering or metrics, because neither exists yet.
 
 ## Testing strategy
 
@@ -224,6 +321,13 @@ two rotations, audio-only). The fixtures are committed rather than generated so
 the suite does not depend on the local ffmpeg writing a display matrix the same
 way; `scripts/make_video_fixtures.py --verify` re-checks that they still carry
 the properties the tests rely on, and CI runs it.
+
+The pose tests follow the same shape. Most run against a fake estimator, which
+is the evidence that `PoseEstimator` is a real seam rather than a shortcut; the
+MediaPipe adapter's own behaviour — colour order, no-detection handling,
+determinism — is tested separately against a real model. CI downloads the models
+and sets `GSA_REQUIRE_MODELS`, so a runner that failed to fetch them fails
+rather than skipping the suite and reporting green.
 
 Playwright drives the Vite dev server with a stubbed Tauri bridge rather than the
 packaged WebView; driving the real WebView needs `tauri-driver` plus a platform

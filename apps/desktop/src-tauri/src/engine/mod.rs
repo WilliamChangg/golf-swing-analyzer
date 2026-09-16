@@ -19,16 +19,23 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::{json, Value};
 
-/// How long to wait for a response.
+/// How long to wait *without hearing anything at all* from the worker.
 ///
-/// Generous because the first request pays the model- and framework-loading
-/// cost; subsequent requests return in milliseconds.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+/// An inactivity timeout, not a total-duration one. Pose extraction over a long
+/// clip runs for minutes — a 60 s clip at 240 fps is 14,400 frames, well past
+/// any fixed budget — but it reports progress while it does, and every frame
+/// that arrives resets this clock. So a slow job is allowed to be slow, while a
+/// worker that has genuinely wedged still gives up, which is the distinction a
+/// total-duration timeout cannot make.
+///
+/// Generous even so, because the first request pays the model- and
+/// framework-loading cost before it can report anything.
+const INACTIVITY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Error surfaced to the frontend. The `kind` field mirrors `EngineErrorKind`
 /// in packages/types so the UI can distinguish a missing install from a crash.
@@ -178,6 +185,20 @@ impl Engine {
     /// last call, so a crashed engine recovers on retry instead of staying
     /// permanently broken for the life of the app.
     pub fn request(&self, method: &str, params: Value) -> Result<Value, EngineError> {
+        self.request_with_notifications(method, params, &|_, _| {})
+    }
+
+    /// Send a request, forwarding any notifications that arrive before the reply.
+    ///
+    /// `on_notification` is called on this thread, between reads, so it must not
+    /// block for long. Emitting a Tauri event, which is what the commands do
+    /// with it, is a channel send.
+    pub fn request_with_notifications(
+        &self,
+        method: &str,
+        params: Value,
+        on_notification: &dyn Fn(&str, &Value),
+    ) -> Result<Value, EngineError> {
         let mut guard = self.worker.lock().unwrap_or_else(|e| e.into_inner());
 
         let dead = guard.as_mut().map(|w| !w.is_alive()).unwrap_or(true);
@@ -205,19 +226,16 @@ impl Engine {
             .and_then(|()| worker.stdin.flush())
             .map_err(|e| EngineError::transport(format!("could not write to engine: {e}")))?;
 
-        let deadline = Instant::now() + REQUEST_TIMEOUT;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(EngineError::timeout(format!(
-                    "`{method}` did not respond within {}s",
-                    REQUEST_TIMEOUT.as_secs()
-                )));
-            }
-
-            let line = match worker.lines.recv_timeout(remaining) {
+            // Reset on every read: the deadline measures silence, not duration.
+            let line = match worker.lines.recv_timeout(INACTIVITY_TIMEOUT) {
                 Ok(line) => line,
-                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(EngineError::timeout(format!(
+                        "`{method}` sent nothing for {}s",
+                        INACTIVITY_TIMEOUT.as_secs()
+                    )));
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     // Drop the dead worker so the next call spawns a fresh one.
                     *guard = None;
@@ -230,9 +248,13 @@ impl Engine {
             match parse_frame(&line, id)? {
                 Frame::Response(value) => return Ok(value),
                 Frame::Error(err) => return Err(err),
-                // Notifications (progress, ready) and replies to other requests
-                // are skipped; Phase 2 will forward progress to the UI here.
-                Frame::Other => continue,
+                Frame::Notification { method, params } => {
+                    on_notification(&method, &params);
+                }
+                // A reply to some other request. Nothing sends concurrent
+                // requests today, but skipping is the correct response either
+                // way and is cheaper than asserting it cannot happen.
+                Frame::Other => {}
             }
         }
     }
@@ -242,6 +264,7 @@ impl Engine {
 enum Frame {
     Response(Value),
     Error(EngineError),
+    Notification { method: String, params: Value },
     Other,
 }
 
@@ -250,9 +273,16 @@ fn parse_frame(line: &str, expect_id: i64) -> Result<Frame, EngineError> {
     let value: Value = serde_json::from_str(line)
         .map_err(|e| EngineError::protocol(format!("engine sent invalid JSON: {e}")))?;
 
-    // No id means a notification, which is never a reply to us.
+    // No id means a notification, which is never a reply to us but may still be
+    // worth forwarding — progress during a long call arrives this way.
     let Some(id) = value.get("id").and_then(Value::as_i64) else {
-        return Ok(Frame::Other);
+        return Ok(match value.get("method").and_then(Value::as_str) {
+            Some(method) => Frame::Notification {
+                method: method.to_string(),
+                params: value.get("params").cloned().unwrap_or(Value::Null),
+            },
+            None => Frame::Other,
+        });
     };
     if id != expect_id {
         return Ok(Frame::Other);
@@ -286,7 +316,42 @@ mod tests {
     #[test]
     fn notification_is_not_mistaken_for_a_reply() {
         let line = r#"{"jsonrpc":"2.0","method":"ready","params":{}}"#;
-        assert!(matches!(parse_frame(line, 1).unwrap(), Frame::Other));
+        match parse_frame(line, 1).unwrap() {
+            Frame::Notification { method, .. } => assert_eq!(method, "ready"),
+            other => panic!("expected a notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn progress_notification_carries_its_params() {
+        let line = r#"{"jsonrpc":"2.0","method":"progress","params":{"current":7,"total":60}}"#;
+        match parse_frame(line, 1).unwrap() {
+            Frame::Notification { method, params } => {
+                assert_eq!(method, "progress");
+                assert_eq!(params["current"], json!(7));
+                assert_eq!(params["total"], json!(60));
+            }
+            other => panic!("expected a notification, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_frame_with_neither_id_nor_method_is_ignored() {
+        assert!(matches!(
+            parse_frame(r#"{"jsonrpc":"2.0"}"#, 1).unwrap(),
+            Frame::Other
+        ));
+    }
+
+    #[test]
+    fn notification_without_params_is_still_a_notification() {
+        match parse_frame(r#"{"jsonrpc":"2.0","method":"ready"}"#, 1).unwrap() {
+            Frame::Notification { method, params } => {
+                assert_eq!(method, "ready");
+                assert_eq!(params, Value::Null);
+            }
+            other => panic!("expected a notification, got {other:?}"),
+        }
     }
 
     #[test]
