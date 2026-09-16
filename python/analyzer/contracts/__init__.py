@@ -6,6 +6,18 @@ checked-in output drifts.
 """
 
 from analyzer.contracts.cache import ContentKey, HashAlgorithm
+from analyzer.contracts.filtering import (
+    FILTER_SCHEMA_VERSION,
+    ConfidenceGate,
+    FilterConfig,
+    GapPolicy,
+    LandmarkFilterReport,
+    SequenceFilterReport,
+    SignalUnit,
+    SmoothingConfig,
+    StageReport,
+    unit_for,
+)
 from analyzer.contracts.health import (
     HEALTH_SCHEMA_VERSION,
     ComponentStatus,
@@ -35,17 +47,22 @@ from analyzer.contracts.video import (
 )
 
 __all__ = [
+    "FILTER_SCHEMA_VERSION",
     "HEALTH_SCHEMA_VERSION",
     "VIDEO_SCHEMA_VERSION",
     "ComponentStatus",
     "ComputeInfo",
+    "ConfidenceGate",
     "ContentKey",
     "EngineError",
     "EnvironmentReport",
     "ErrorCode",
+    "FilterConfig",
+    "GapPolicy",
     "HashAlgorithm",
     "HealthStatus",
     "IntervalStats",
+    "LandmarkFilterReport",
     "PlatformInfo",
     "RotationDegrees",
     "RpcError",
@@ -53,9 +70,14 @@ __all__ = [
     "RpcNotification",
     "RpcRequest",
     "RpcResponse",
+    "SequenceFilterReport",
+    "SignalUnit",
+    "SmoothingConfig",
+    "StageReport",
     "TimestampSource",
     "VideoMetadata",
     "VideoStreamInfo",
     "VideoTiming",
     "aggregate_status",
+    "unit_for",
 ]
