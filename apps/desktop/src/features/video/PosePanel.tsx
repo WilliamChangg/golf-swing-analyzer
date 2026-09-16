@@ -172,6 +172,19 @@ export function PosePanel({ videoPath }: { videoPath: string }) {
           ? { phase: "done", result: result.value }
           : { phase: "failed", error: result.error },
       );
+    } catch (cause) {
+      // `extractPoses` normalises engine failures into `EngineResult`, so a
+      // throw here means something outside that contract broke — the IPC bridge
+      // itself, or the event subscription. Without this the rejection escapes
+      // an unawaited click handler and the panel sits on "running" forever,
+      // which reads as a hang rather than as the failure it is.
+      setState({
+        phase: "failed",
+        error: {
+          kind: "transport",
+          message: cause instanceof Error ? cause.message : String(cause),
+        },
+      });
     } finally {
       unlisten.current?.();
       unlisten.current = null;

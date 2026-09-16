@@ -286,6 +286,25 @@ describe("PosePanel", () => {
     });
   });
 
+  it("shows a failure rather than hanging when the bridge itself throws", async () => {
+    // `extractPoses` normalises engine errors into EngineResult, so a throw
+    // means something outside that contract broke. Left uncaught it escapes the
+    // unawaited click handler as an unhandled rejection and the panel sits on
+    // "running" forever, which reads to a user as a hang rather than a failure.
+    onProgressMock.mockResolvedValue(vi.fn());
+    extractPosesMock.mockRejectedValue(new Error("worker died"));
+
+    render(<PosePanel videoPath={VIDEO} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /extract pose/i }),
+    );
+
+    expect(await screen.findByText(/worker died/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /extract pose/i }),
+    ).toBeEnabled();
+  });
+
   it("unsubscribes even when extraction fails", async () => {
     const unlisten = vi.fn();
     onProgressMock.mockResolvedValue(unlisten);
