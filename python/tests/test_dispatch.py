@@ -13,9 +13,24 @@ import pytest
 from pydantic import BaseModel
 
 from analyzer import dispatch
+from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.video import VideoMetadata
+from analyzer.dispatch import ProbeVideoParams
+from analyzer.progress import ProgressReporter, ProgressTracker, RecordingReporter
 from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, requires_ffprobe
+
+# Parameters good enough to invoke each registered method once. Maintained by
+# hand on purpose: the table is what makes a newly-registered method visible.
+_METHOD_PARAMS: dict[str, dict[str, object]] = {
+    "doctor": {},
+    "probe_video": {"path": str(CFR_30FPS)},
+    "extract_poses": {"path": str(CFR_30FPS)},
+}
+
+# Everything that runs in milliseconds. `extract_poses` loads a model and
+# decodes a clip, so it is exercised separately under the slow markers.
+_FAST_METHODS = {"doctor", "probe_video"}
 
 
 class TestCall:
@@ -42,7 +57,7 @@ class TestCall:
     ) -> None:
         """A handler blowing up must surface as a structured error, not propagate."""
 
-        def exploding(_params: dict[str, object]) -> BaseModel:
+        def exploding(_params: dict[str, object], _reporter: ProgressReporter) -> BaseModel:
             raise ZeroDivisionError("boom")
 
         monkeypatch.setitem(dispatch.METHODS, "explode", exploding)
@@ -57,7 +72,7 @@ class TestCall:
     ) -> None:
         """A handler's own typed error must keep its code."""
 
-        def picky(_params: dict[str, object]) -> BaseModel:
+        def picky(_params: dict[str, object], _reporter: ProgressReporter) -> BaseModel:
             raise EngineError("bad input", code=ErrorCode.UNSUPPORTED_INPUT)
 
         monkeypatch.setitem(dispatch.METHODS, "picky", picky)
@@ -66,21 +81,48 @@ class TestCall:
             dispatch.call("picky")
         assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
 
-    def test_every_registered_method_returns_a_contract_model(self) -> None:
-        """Guards the invariant the worker relies on when calling model_dump.
+    def test_every_registered_method_is_covered_by_the_table(self) -> None:
+        """A new method with no entry fails here rather than going unexercised.
 
-        The parameter table has to be kept up to date by hand, which is the
-        point: a new method with no entry fails here rather than going
-        unexercised.
+        Kept separate from the call below so that adding a method is caught even
+        when the suite is run without the markers the expensive ones need.
         """
-        params: dict[str, dict[str, object]] = {
-            "doctor": {},
-            "probe_video": {"path": str(CFR_30FPS)},
-        }
-        assert set(params) == set(dispatch.METHODS), "update the table for the new method"
+        assert set(_METHOD_PARAMS) == set(dispatch.METHODS), "add the new method to _METHOD_PARAMS"
 
-        for name, args in params.items():
-            assert isinstance(dispatch.call(name, args), BaseModel), name
+    @pytest.mark.parametrize("name", sorted(_FAST_METHODS))
+    def test_fast_methods_return_a_contract_model(self, name: str) -> None:
+        """Guards the invariant the worker relies on when calling model_dump."""
+        assert isinstance(dispatch.call(name, _METHOD_PARAMS[name]), BaseModel)
+
+    @pytest.mark.slow
+    @pytest.mark.requires_model
+    @requires_ffprobe
+    def test_extract_poses_returns_a_contract_model(self) -> None:
+        """Separated because it loads a model and decodes a clip: seconds, not milliseconds."""
+        result = dispatch.call("extract_poses", _METHOD_PARAMS["extract_poses"])
+        assert isinstance(result, PoseExtractionResult)
+        assert result.stats.frames_processed == CFR_FRAME_COUNT
+
+    def test_progress_is_reported_for_a_long_method(self) -> None:
+        """A method that takes seconds must say so while it is taking them."""
+        recorder = RecordingReporter()
+
+        def slow(_params: dict[str, object], reporter: ProgressReporter) -> BaseModel:
+            ProgressTracker(reporter, task="slow").report("working", 1, 2)
+            return ProbeVideoParams(path="x")
+
+        monkeypatch = pytest.MonkeyPatch()
+        monkeypatch.setitem(dispatch.METHODS, "slow", slow)
+        try:
+            dispatch.call("slow", {}, recorder)
+        finally:
+            monkeypatch.undo()
+
+        assert [e.stage for e in recorder.events] == ["working"]
+
+    def test_methods_that_ignore_progress_still_work(self) -> None:
+        """The reporter is always supplied, so a method never has to check for it."""
+        assert isinstance(dispatch.call("doctor", {}, RecordingReporter()), BaseModel)
 
 
 class TestProbeVideoParams:

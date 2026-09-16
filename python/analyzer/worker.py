@@ -25,6 +25,7 @@ from typing import Any, TextIO
 
 from analyzer import __version__
 from analyzer.contracts.health import HEALTH_SCHEMA_VERSION
+from analyzer.contracts.progress import PROGRESS_NOTIFICATION, PROGRESS_SCHEMA_VERSION
 from analyzer.contracts.rpc import (
     EngineError,
     ErrorCode,
@@ -35,6 +36,7 @@ from analyzer.contracts.rpc import (
     RpcResponse,
 )
 from analyzer.dispatch import METHODS, call
+from analyzer.progress import CallbackReporter, ThrottledReporter
 
 
 class Worker:
@@ -91,8 +93,22 @@ class Worker:
             )
             return
 
+        # Progress is throttled here rather than in the methods: a per-frame
+        # report at 240 fps would cost more in framing and pipe traffic than the
+        # work it describes. The request id travels in the payload because a
+        # JSON-RPC notification has no id of its own, and a client with two
+        # calls in flight needs to know which one moved.
+        reporter = ThrottledReporter(
+            CallbackReporter(
+                lambda event: self.notify(
+                    PROGRESS_NOTIFICATION,
+                    event.model_copy(update={"request_id": request.id}).model_dump(mode="json"),
+                )
+            )
+        )
+
         try:
-            result = call(request.method, request.params)
+            result = call(request.method, request.params, reporter)
         except EngineError as exc:
             self._error(request.id, exc.to_rpc_error())
             return
@@ -106,6 +122,7 @@ class Worker:
             {
                 "engine_version": __version__,
                 "health_schema_version": HEALTH_SCHEMA_VERSION,
+                "progress_schema_version": PROGRESS_SCHEMA_VERSION,
                 "methods": sorted(METHODS),
             },
         )

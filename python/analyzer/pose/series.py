@@ -1,0 +1,103 @@
+"""Per-landmark time series, the shape the filtering layer consumes.
+
+A `PoseSequence` is organised by frame, which is how it is produced and stored.
+Every numerical operation in Phase 3 -- smoothing, differentiating, gap
+handling -- runs along one landmark's trajectory through time instead, so the
+transpose happens once, here, into contiguous numpy arrays.
+
+Missing values are NaN, not zero and not interpolated. A landmark that was never
+detected and a landmark detected at the origin are different facts, and only NaN
+keeps them different all the way to the filter that has to decide what to do
+about the gap.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+from numpy.typing import NDArray
+
+from analyzer.contracts.pose import (
+    Landmark,
+    LandmarkPoint,
+    LandmarkSpace,
+    PoseSequence,
+)
+
+
+@dataclass(frozen=True)
+class LandmarkSeries:
+    """One landmark's trajectory through a clip, in one coordinate space."""
+
+    landmark: Landmark
+    space: LandmarkSpace
+    timestamps_s: NDArray[np.float64]
+    x: NDArray[np.float64]
+    y: NDArray[np.float64]
+    z: NDArray[np.float64]
+    visibility: NDArray[np.float64]
+    presence: NDArray[np.float64]
+
+    def __len__(self) -> int:
+        return int(self.timestamps_s.size)
+
+    @property
+    def observed(self) -> NDArray[np.bool_]:
+        """Frames in which this landmark was actually detected."""
+        return ~np.isnan(self.x)
+
+    @property
+    def observed_fraction(self) -> float:
+        """Proportion of frames with a value. 0.0 for an empty series."""
+        if len(self) == 0:
+            return 0.0
+        return float(np.count_nonzero(self.observed) / len(self))
+
+
+def _points_for(sequence: PoseSequence, space: LandmarkSpace) -> list[list[LandmarkPoint]]:
+    field = "image" if space is LandmarkSpace.IMAGE else "hip_local"
+    return [getattr(frame, field) for frame in sequence.frames]
+
+
+def landmark_series(
+    sequence: PoseSequence, landmark: Landmark, space: LandmarkSpace = LandmarkSpace.IMAGE
+) -> LandmarkSeries:
+    """Extract one landmark's trajectory, NaN where it was not detected."""
+    count = len(sequence.frames)
+    timestamps = np.empty(count, dtype=np.float64)
+    values = {
+        name: np.full(count, np.nan, dtype=np.float64)
+        for name in ("x", "y", "z", "visibility", "presence")
+    }
+
+    for row, (frame, points) in enumerate(
+        zip(sequence.frames, _points_for(sequence, space), strict=True)
+    ):
+        timestamps[row] = frame.timestamp_s
+        if not frame.detected or landmark >= len(points):
+            continue
+        point = points[landmark]
+        values["x"][row] = point.x
+        values["y"][row] = point.y
+        values["z"][row] = point.z
+        values["visibility"][row] = point.visibility
+        values["presence"][row] = point.presence
+
+    return LandmarkSeries(
+        landmark=landmark,
+        space=space,
+        timestamps_s=timestamps,
+        x=values["x"],
+        y=values["y"],
+        z=values["z"],
+        visibility=values["visibility"],
+        presence=values["presence"],
+    )
+
+
+def all_series(
+    sequence: PoseSequence, space: LandmarkSpace = LandmarkSpace.IMAGE
+) -> dict[Landmark, LandmarkSeries]:
+    """Every landmark's trajectory, keyed by landmark."""
+    return {landmark: landmark_series(sequence, landmark, space) for landmark in Landmark}

@@ -3,6 +3,10 @@
 Both entry points dispatch through this table, so a method is implemented once
 and is immediately reachable from the desktop app and from a terminal. That
 keeps the engine independently testable and scriptable without involving Rust.
+
+Every method is handed a `ProgressReporter`. Short methods ignore it; long ones
+report through it and are thereby indifferent to whether the other end is a
+JSON-RPC notification, a terminal progress bar, or a list in a test.
 """
 
 from __future__ import annotations
@@ -16,12 +20,13 @@ from pydantic import BaseModel, Field, ValidationError
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
+from analyzer.progress import NullReporter, ProgressReporter
 
-# A method takes validated params and returns a Pydantic contract model.
-Method = Callable[[dict[str, Any]], BaseModel]
+# A method takes validated params and a progress sink, and returns a contract model.
+Method = Callable[[dict[str, Any], ProgressReporter], BaseModel]
 
 
-def _doctor(params: dict[str, Any]) -> BaseModel:
+def _doctor(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
     """Environment health check. Takes no parameters."""
     if params:
         raise EngineError(
@@ -42,29 +47,85 @@ class ProbeVideoParams(BaseModel, extra="forbid"):
     refresh: bool = Field(default=False, description="Re-probe even if a cached result exists.")
 
 
-def _probe_video(params: dict[str, Any]) -> BaseModel:
+def _unsupported_input(exc: Exception, remediation: str | None) -> EngineError:
+    """Turn a user-fixable input problem into a typed error the UI can act on.
+
+    Distinguished from an internal error because the two need different
+    treatment: a wrong file is something the user corrects, a crash is not.
+    """
+    return EngineError(
+        str(exc),
+        code=ErrorCode.UNSUPPORTED_INPUT,
+        data={"remediation": remediation} if remediation else None,
+    )
+
+
+def _probe_video(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
     """Read a video's container metadata without decoding it."""
     parsed = ProbeVideoParams.model_validate(params)
     try:
         return probe_video(Path(parsed.path), refresh=parsed.refresh)
     except ProbeError as exc:
-        # The user chose a file this system cannot analyse. That is an input
-        # problem with a known remedy, not an engine fault, and the two need
-        # different treatment in the UI.
-        raise EngineError(
-            str(exc),
-            code=ErrorCode.UNSUPPORTED_INPUT,
-            data={"remediation": exc.remediation} if exc.remediation else None,
-        ) from exc
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+class ExtractPosesParams(BaseModel, extra="forbid"):
+    """Parameters for `extract_poses`."""
+
+    path: str = Field(description="Absolute path to the video file.")
+    model: str | None = Field(
+        default=None,
+        description="Manifest model name. None uses the manifest's default_pose_model.",
+    )
+    output: str | None = Field(
+        default=None,
+        description="Where to write the Parquet file. None uses the content-keyed cache path.",
+    )
+
+
+def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Run pose estimation over every frame of a clip and store the landmarks."""
+    parsed = ExtractPosesParams.model_validate(params)
+
+    # Imported here rather than at module scope: pulling in MediaPipe costs
+    # about a second, and the worker should not pay that at spawn for a session
+    # that may only ever call `doctor`.
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.extract import extract_and_store
+    from analyzer.pose.mediapipe_estimator import MediaPipePoseEstimator
+
+    try:
+        estimator = MediaPipePoseEstimator(parsed.model)
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    try:
+        return extract_and_store(
+            Path(parsed.path),
+            estimator,
+            output=Path(parsed.output) if parsed.output else None,
+            reporter=reporter,
+        )
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    finally:
+        estimator.close()
 
 
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
     "probe_video": _probe_video,
+    "extract_poses": _extract_poses,
 }
 
 
-def call(method: str, params: dict[str, Any] | None = None) -> BaseModel:
+def call(
+    method: str,
+    params: dict[str, Any] | None = None,
+    reporter: ProgressReporter | None = None,
+) -> BaseModel:
     """Invoke a registered method, normalising failures into EngineError.
 
     Unknown methods and parameter-validation failures are distinguished from
@@ -79,7 +140,7 @@ def call(method: str, params: dict[str, Any] | None = None) -> BaseModel:
         )
 
     try:
-        return handler(params or {})
+        return handler(params or {}, reporter or NullReporter())
     except EngineError:
         raise
     except ValidationError as exc:
