@@ -1,0 +1,201 @@
+{
+  "$defs": {
+    "ComponentStatus": {
+      "description": "Result of probing one required component of the analysis environment.",
+      "properties": {
+        "name": {
+          "description": "Stable identifier, e.g. 'ffmpeg' or 'torch'.",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/HealthStatus"
+        },
+        "detail": {
+          "description": "Human-readable result of the probe.",
+          "type": "string"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Version string as reported by the component itself, never inferred."
+        },
+        "remediation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Concrete action the user can take when status is not OK."
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "detail"
+      ],
+      "title": "ComponentStatus",
+      "type": "object"
+    },
+    "ComputeInfo": {
+      "description": "Measured acceleration capabilities.\n\n`mediapipe_delegate` is reported separately from the torch device because the\ntwo do not share a backend: on macOS the MediaPipe Tasks Python API has no\nGPU delegate, so pose inference runs on CPU even when torch has MPS.",
+      "properties": {
+        "torch_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mps_available": {
+          "description": "torch.backends.mps.is_available()",
+          "type": "boolean"
+        },
+        "mps_built": {
+          "description": "torch.backends.mps.is_built()",
+          "type": "boolean"
+        },
+        "cuda_available": {
+          "description": "torch.cuda.is_available()",
+          "type": "boolean"
+        },
+        "selected_device": {
+          "description": "Device the engine will actually use.",
+          "type": "string"
+        },
+        "cpu_fallback_available": {
+          "type": "boolean"
+        },
+        "mediapipe_delegate": {
+          "description": "Delegate MediaPipe will use on this platform ('cpu' or 'gpu').",
+          "type": "string"
+        },
+        "ffmpeg_hwaccels": {
+          "description": "Hardware decoders reported by `ffmpeg -hwaccels`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mps_available",
+        "mps_built",
+        "cuda_available",
+        "selected_device",
+        "cpu_fallback_available",
+        "mediapipe_delegate"
+      ],
+      "title": "ComputeInfo",
+      "type": "object"
+    },
+    "HealthStatus": {
+      "description": "Outcome of a single environment probe.\n\nOK        - present and usable\nDEGRADED  - present but limited (e.g. a slower fallback path is in use)\nMISSING   - not installed / not found; the user can fix this\nERROR     - the probe itself failed unexpectedly",
+      "enum": [
+        "ok",
+        "degraded",
+        "missing",
+        "error"
+      ],
+      "title": "HealthStatus",
+      "type": "string"
+    },
+    "PlatformInfo": {
+      "description": "Facts about the host, read from the interpreter and OS.",
+      "properties": {
+        "system": {
+          "type": "string"
+        },
+        "release": {
+          "type": "string"
+        },
+        "machine": {
+          "type": "string"
+        },
+        "cpu_count": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "python_version": {
+          "type": "string"
+        },
+        "python_executable": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "system",
+        "release",
+        "machine",
+        "cpu_count",
+        "python_version",
+        "python_executable"
+      ],
+      "title": "PlatformInfo",
+      "type": "object"
+    }
+  },
+  "description": "Complete environment health report returned by the `doctor` method.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "generated_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "overall_status": {
+      "$ref": "#/$defs/HealthStatus",
+      "description": "Worst status across all components, in the order OK < DEGRADED < MISSING < ERROR."
+    },
+    "platform": {
+      "$ref": "#/$defs/PlatformInfo"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/ComponentStatus"
+      },
+      "type": "array"
+    },
+    "compute": {
+      "$ref": "#/$defs/ComputeInfo"
+    },
+    "warnings": {
+      "description": "Non-fatal caveats the user should know about, e.g. CPU-only inference.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "generated_at",
+    "overall_status",
+    "platform",
+    "components",
+    "compute"
+  ],
+  "title": "EnvironmentReport",
+  "type": "object"
+}

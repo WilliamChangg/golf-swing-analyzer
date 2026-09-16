@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability set: the frontend may call the app's own commands and nothing else. No filesystem, shell, or network permissions are granted, because in Phase 0 the UI has no legitimate use for them. Permissions are added as features need them, not in advance.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

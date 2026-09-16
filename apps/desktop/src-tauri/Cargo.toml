@@ -1,0 +1,37 @@
+[package]
+name = "golf-swing-analyzer"
+version = "0.1.0"
+description = "Local-first golf swing biomechanics analyzer"
+authors = ["William Chang"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# Tauri builds the app as a library so the same code can be driven by tests and
+# by the thin main.rs binary.
+name = "golf_swing_analyzer_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# Note: no tauri-plugin-shell. The engine subprocess is spawned from Rust with
+# std::process, which needs no plugin; the shell plugin exists to let the
+# *frontend* spawn processes, which this app deliberately does not allow.
+
+[features]
+# Used by `tauri dev` to enable devtools in debug builds.
+default = []
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

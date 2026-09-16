@@ -1,0 +1,105 @@
+[project]
+name = "golf-swing-analyzer"
+version = "0.1.0"
+description = "Local-first golf swing biomechanics analysis engine"
+readme = "README.md"
+# Pinned to 3.12: MediaPipe 1.0.1 declares support for Python 3.9-3.12 only.
+# See docs/decisions/ADR-0001-python-312.md
+requires-python = "==3.12.*"
+
+dependencies = [
+    "mediapipe~=1.0.1",
+    # Constrained below OpenCV 5: the aruco/calibration/Hough APIs relied on in
+    # phases 8-10 changed in 5.x. See docs/decisions/ADR-0004-opencv-4x.md
+    "opencv-contrib-python>=4.14,<5",
+    "numpy~=2.5",
+    "scipy~=1.18",
+    "pyarrow~=25.0",
+    "torch~=2.14",
+    "pydantic~=2.13",
+    "typer~=0.27",
+    "rich~=15.0",
+]
+
+[project.scripts]
+analyzer = "analyzer.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest~=9.1",
+    "pytest-cov~=7.1",
+    "hypothesis~=6.168",
+    "ruff~=0.16",
+    "mypy~=2.3",
+]
+
+[tool.uv]
+# Use only uv-managed CPython builds. Without this, uv will happily build the
+# venv on top of whatever 3.12 it finds first -- on this machine that is the
+# Anaconda install -- which makes the environment depend on an unrelated
+# third-party toolchain that may be upgraded or removed out from under it.
+python-preference = "only-managed"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["analyzer"]
+
+# --------------------------------------------------------------------------
+# Tooling
+# --------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "slow: tests that run real inference or decode real video",
+    "requires_model: tests that need a downloaded model file",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # isort
+    "N",             # pep8-naming
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "A",             # builtins shadowing
+    "BLE",           # blind except: allowed only at process boundaries, with an explicit noqa
+    "S",             # bandit security checks
+    "C4",            # comprehensions
+    "SIM",           # simplify
+    "RET",           # returns
+    "PTH",           # use pathlib
+    "NPY",           # numpy-specific
+    "RUF",
+]
+ignore = [
+    "E501",  # line length is handled by the formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_unused_ignores = true
+disallow_any_generics = true
+show_error_codes = true
+pretty = true
+
+# Third-party packages without type stubs. Listing them explicitly (rather than
+# a blanket ignore) keeps the untyped surface visible.
+[[tool.mypy.overrides]]
+module = ["mediapipe.*", "cv2.*", "scipy.*", "pyarrow.*"]
+ignore_missing_imports = true

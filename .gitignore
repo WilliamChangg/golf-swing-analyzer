@@ -1,0 +1,57 @@
+# --- Rust / Tauri ---
+target/
+**/*.rs.bk
+apps/desktop/src-tauri/gen/
+
+# --- Node ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+playwright-report/
+test-results/
+coverage/
+
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Models (large binaries, fetched via scripts/download_models.py) ---
+models/*.task
+models/*.tflite
+models/*.onnx
+models/*.pt
+models/*.pth
+
+# --- Data: video and derived analysis artifacts never enter git ---
+data/**
+!data/README.md
+*.parquet
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Benchmarks output (regenerate, don't commit raw runs) ---
+benchmarks/raw/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Claude Code personal settings (not shared)
+.claude/settings.local.json
+
+# TypeScript build outputs
+dist-types/
+packages/types/dist/

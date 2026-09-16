@@ -1,0 +1,18 @@
+* text=auto eol=lf
+
+# Generated code: excluded from language stats and diff noise, but still reviewed
+# (CI enforces that it matches the Pydantic contracts — see scripts/gen_types.py).
+packages/types/src/generated/** linguist-generated=true
+
+# Lockfiles
+uv.lock       -diff linguist-generated=true
+package-lock.json -diff linguist-generated=true
+apps/desktop/src-tauri/Cargo.lock -diff linguist-generated=true
+
+# Binary assets
+*.task  binary
+*.onnx  binary
+*.pt    binary
+*.mp4   binary
+*.mov   binary
+*.parquet binary

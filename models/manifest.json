@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "default_pose_model": "pose_landmarker_full",
+  "_comment": [
+    "sha256 values below were computed from the artifacts actually downloaded and",
+    "used during development (see docs/decisions/ADR-0006-model-pinning.md).",
+    "The upstream URLs point at Google's 'latest' channel, so a future upstream",
+    "release will change the hash. A mismatch is reported as DEGRADED, not OK and",
+    "not a hard failure: the model still loads, but it is no longer the artifact",
+    "this project's measurements were taken against."
+  ],
+  "models": [
+    {
+      "name": "pose_landmarker_lite",
+      "kind": "pose_landmarker",
+      "filename": "pose_landmarker_lite.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task",
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+      "size_bytes": 5777746,
+      "precision": "float16",
+      "required": false
+    },
+    {
+      "name": "pose_landmarker_full",
+      "kind": "pose_landmarker",
+      "filename": "pose_landmarker_full.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task",
+      "sha256": "4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad",
+      "size_bytes": 9398198,
+      "precision": "float16",
+      "required": true
+    },
+    {
+      "name": "pose_landmarker_heavy",
+      "kind": "pose_landmarker",
+      "filename": "pose_landmarker_heavy.task",
+      "url": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task",
+      "sha256": "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b",
+      "size_bytes": 30664242,
+      "precision": "float16",
+      "required": false
+    }
+  ]
+}

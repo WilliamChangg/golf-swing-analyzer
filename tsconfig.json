@@ -1,0 +1,14 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/types"
+    },
+    {
+      "path": "./apps/desktop"
+    },
+    {
+      "path": "./e2e"
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref; a stale result is not worth the minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  python:
+    name: Python (lint, types, tests)
+    # arm64 macOS matches the development target. The pinned MediaPipe wheel is
+    # macos-arm64 only, so this cannot be moved to ubuntu without changing deps.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      - name: Sync environment
+        run: uv sync --project python --locked
+
+      - name: Ruff (lint)
+        run: uv run --project python ruff check python
+
+      - name: Ruff (format)
+        run: uv run --project python ruff format --check python
+
+      - name: mypy
+        run: uv run --project python mypy python/analyzer
+
+      - name: pytest
+        run: uv run --project python pytest python/tests
+
+  typescript:
+    name: TypeScript (lint, types, tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: tsc
+        run: npm run typecheck
+
+      - name: Vitest
+        run: npm test
+
+  contracts:
+    name: Generated types are current
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: python/uv.lock
+
+      - run: npm ci
+      - run: uv sync --project python --locked
+
+      # Fails if the Pydantic contracts changed without regenerating the
+      # TypeScript, which would let the two sides drift apart silently.
+      - name: Check codegen drift
+        run: npm run gen:types:check
+
+  rust:
+    name: Rust (fmt, clippy, tests)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: rustfmt
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check
+
+      - name: clippy
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+
+  e2e:
+    name: Playwright (UI flows)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
