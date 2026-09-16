@@ -25,6 +25,7 @@ from rich.progress import (
 from rich.table import Table
 
 from analyzer import __version__
+from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
@@ -255,6 +256,139 @@ def probe(
         typer.echo(json.dumps(metadata.model_dump(mode="json"), indent=2))
     else:
         _render_metadata(metadata)
+
+
+def _render_filter(report: SequenceFilterReport) -> None:
+    smoothing, gate, gaps = report.config.smoothing, report.config.gate, report.config.gaps
+
+    summary = Table(title=f"Filtering ({report.space.value})", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("frames", str(report.samples))
+    summary.add_row("landmarks", str(len(report.landmarks)))
+    summary.add_row("window", f"{smoothing.window_s:g} s, degree {smoothing.polyorder}")
+    summary.add_row(
+        "confidence gate",
+        f"visibility >= {gate.min_visibility:g}, presence >= {gate.min_presence:g}",
+    )
+    summary.add_row("max bridged gap", f"{gaps.max_gap_s:g} s")
+
+    valid = report.mean_valid_fraction
+    style = "green" if valid >= 0.9 else "yellow" if valid > 0 else "red"
+    summary.add_row("mean usable frames", f"[{style}]{valid:.1%}[/{style}]")
+    summary.add_row("elapsed", f"{report.elapsed_s * 1000:.1f} ms")
+    console.print(summary)
+
+    # The landmarks every later phase depends on, rather than all 33: a wall of
+    # rows buries the ones a reader is actually checking.
+    watched = {
+        "LEFT_WRIST": 15,
+        "RIGHT_WRIST": 16,
+        "LEFT_SHOULDER": 11,
+        "RIGHT_SHOULDER": 12,
+        "LEFT_HIP": 23,
+        "RIGHT_HIP": 24,
+    }
+    by_index = {entry.landmark: entry for entry in report.landmarks}
+
+    detail = Table(title="Key landmarks", title_justify="left", expand=True)
+    for column in ("landmark", "usable", "gated", "no detection", "filled", "blocked"):
+        detail.add_column(column, no_wrap=True)
+    detail.add_column("longest gap", no_wrap=True)
+    detail.add_column("residual (x,y,z)", overflow="fold")
+
+    for name, index in watched.items():
+        entry = by_index.get(index)
+        if entry is None:
+            continue
+        usable_style = "green" if entry.valid_fraction >= 0.9 else "yellow"
+        detail.add_row(
+            name.lower(),
+            f"[{usable_style}]{entry.valid_samples}/{entry.samples}[/{usable_style}]",
+            str(entry.gated_out),
+            str(entry.never_detected),
+            str(entry.filled),
+            str(entry.blocked),
+            f"{entry.longest_gap_s * 1000:.0f} ms",
+            ", ".join("-" if value != value else f"{value:.5f}" for value in entry.residual_rms),
+        )
+    console.print(detail)
+
+    console.print(
+        f"[dim]Units: position {report.landmarks[0].position_unit.value}, "
+        f"velocity {report.landmarks[0].velocity_unit.value}. "
+        "Neither is a calibrated metric quantity.[/dim]"
+        if report.landmarks
+        else ""
+    )
+
+    for warning in report.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command(name="filter")
+def filter_poses(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to filter, when given a video.")
+    ] = None,
+    space: Annotated[
+        str, typer.Option("--space", help="Coordinate space: image or hip_local.")
+    ] = "image",
+    window: Annotated[
+        float | None, typer.Option("--window", help="Fitting window in seconds.")
+    ] = None,
+    polyorder: Annotated[
+        int | None, typer.Option("--polyorder", help="Degree of the local polynomial.")
+    ] = None,
+    max_gap: Annotated[
+        float | None, typer.Option("--max-gap", help="Longest absence to bridge, in seconds.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of a table.")
+    ] = False,
+) -> None:
+    """Smooth stored landmarks, differentiate them, and report what was refused."""
+    smoothing: dict[str, object] = {}
+    if window is not None:
+        smoothing["window_s"] = window
+    if polyorder is not None:
+        smoothing["polyorder"] = polyorder
+
+    config: dict[str, object] = {}
+    if smoothing:
+        config["smoothing"] = smoothing
+    if max_gap is not None:
+        config["gaps"] = {"max_gap_s": max_gap}
+
+    params: dict[str, object] = {"path": str(path), "space": space, "model": model}
+    if config:
+        params["config"] = config
+
+    try:
+        report = call("filter_poses", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(report, SequenceFilterReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(report.model_dump(mode="json"), indent=2))
+        return
+
+    _render_filter(report)
+
+    # Non-zero when the clip yielded nothing usable, so a script driving this
+    # learns that no trajectory came out rather than reading an empty table.
+    if report.mean_valid_fraction == 0.0:
+        raise typer.Exit(code=1)
 
 
 @app.command()

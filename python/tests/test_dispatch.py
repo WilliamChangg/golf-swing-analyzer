@@ -7,12 +7,14 @@ of an error it can render.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
 from analyzer import dispatch
+from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.video import VideoMetadata
@@ -26,6 +28,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "doctor": {},
     "probe_video": {"path": str(CFR_30FPS)},
     "extract_poses": {"path": str(CFR_30FPS)},
+    "filter_poses": {"path": "poses.parquet"},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -162,3 +165,121 @@ class TestProbeVideoParams:
         result = dispatch.call("probe_video", {"path": str(CFR_30FPS)})
         assert isinstance(result, VideoMetadata)
         assert result.timing.frame_count == CFR_FRAME_COUNT
+
+
+class TestFilterPoses:
+    """`filter_poses` reads landmarks off disk, so its failure modes are about
+    finding them and refusing the ones it cannot interpret."""
+
+    @staticmethod
+    def _write_poses(directory: Path, *, fps: float = 120.0, count: int = 180) -> Path:
+        from analyzer.contracts.cache import ContentKey, HashAlgorithm
+        from analyzer.contracts.pose import (
+            LANDMARK_COUNT,
+            LandmarkPoint,
+            PoseExtractionStats,
+            PoseFrame,
+            PoseModelInfo,
+            PoseSequence,
+        )
+        from analyzer.pose.store import write_sequence
+
+        frames = []
+        for index in range(count):
+            points = [
+                LandmarkPoint(x=0.5, y=0.5 + index / 1000, z=0.0, visibility=0.9, presence=0.99)
+                for _ in range(LANDMARK_COUNT)
+            ]
+            frames.append(
+                PoseFrame(
+                    frame_index=index,
+                    timestamp_s=index / fps,
+                    detected=True,
+                    image=points,
+                    hip_local=points,
+                )
+            )
+
+        sequence = PoseSequence(
+            video_path="/data/swing.mov",
+            video_content_key=ContentKey(
+                algorithm=HashAlgorithm.SHA256_SAMPLED, digest="e" * 64, size_bytes=1
+            ),
+            model=PoseModelInfo(
+                name="fake",
+                variant="fake",
+                precision="float32",
+                sha256="0" * 64,
+                delegate="cpu",
+                min_pose_detection_confidence=0.5,
+                min_pose_presence_confidence=0.5,
+                min_tracking_confidence=0.5,
+            ),
+            extracted_at=datetime(2026, 9, 16, tzinfo=UTC),
+            stats=PoseExtractionStats(
+                frames_processed=count,
+                frames_detected=count,
+                detection_rate=1.0,
+                elapsed_s=1.0,
+                ms_per_frame=1.0,
+            ),
+            frames=frames,
+        )
+        return write_sequence(sequence, directory / "poses.parquet", landmark_count=LANDMARK_COUNT)
+
+    def test_returns_a_contract_model(self, tmp_path: Path) -> None:
+        poses = self._write_poses(tmp_path)
+        result = dispatch.call("filter_poses", {"path": str(poses)})
+        assert isinstance(result, SequenceFilterReport)
+        assert result.samples == 180
+        assert result.mean_valid_fraction > 0.9
+
+    def test_accepts_a_configuration_override(self, tmp_path: Path) -> None:
+        poses = self._write_poses(tmp_path)
+        result = dispatch.call(
+            "filter_poses",
+            {"path": str(poses), "config": {"gaps": {"max_gap_s": 0.25}}},
+        )
+        assert isinstance(result, SequenceFilterReport)
+        assert result.config.gaps.max_gap_s == 0.25
+
+    def test_rejects_an_unknown_parameter_rather_than_ignoring_it(self, tmp_path: Path) -> None:
+        poses = self._write_poses(tmp_path)
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("filter_poses", {"path": str(poses), "windo_s": 0.2})
+        assert excinfo.value.code == ErrorCode.INVALID_PARAMS
+
+    def test_rejects_a_configuration_that_cannot_determine_a_fit(self, tmp_path: Path) -> None:
+        poses = self._write_poses(tmp_path)
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call(
+                "filter_poses",
+                {
+                    "path": str(poses),
+                    "config": {"smoothing": {"polyorder": 4, "min_observations": 3}},
+                },
+            )
+        assert excinfo.value.code == ErrorCode.INVALID_PARAMS
+
+    def test_a_file_that_is_not_a_pose_file_is_unsupported_input(self, tmp_path: Path) -> None:
+        bogus = tmp_path / "not-poses.parquet"
+        bogus.write_bytes(b"certainly not parquet")
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("filter_poses", {"path": str(bogus)})
+        assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
+        assert (excinfo.value.data or {}).get("remediation")
+
+    @requires_ffprobe
+    def test_a_video_with_no_extraction_says_which_command_to_run(self) -> None:
+        """Given a clip rather than a Parquet file, the error is actionable."""
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("filter_poses", {"path": str(CFR_30FPS), "model": "pose_landmarker_lite"})
+        assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
+        assert "analyzer extract" in (excinfo.value.data or {}).get("remediation", "")
+
+    def test_reports_progress_through_the_landmarks(self, tmp_path: Path) -> None:
+        poses = self._write_poses(tmp_path)
+        reporter = RecordingReporter()
+        dispatch.call("filter_poses", {"path": str(poses)}, reporter)
+        assert [event.task for event in reporter.events] == ["filter_poses"] * len(reporter.events)
+        assert reporter.events[-1].stage == "done"

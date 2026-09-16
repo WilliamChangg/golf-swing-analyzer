@@ -106,15 +106,16 @@ progress/       reporting from long-running methods
 environment/    hardware, tooling, model probing
 ingestion/      container inspection and frame decoding
 pose/           landmark estimation, storage, per-landmark series
+filtering/      smoothing, gap policy, derivatives
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `filtering`, `phases`, `biomechanics`, `coaching` as sibling
-packages with Protocol-typed seams (`ClubDetector`, `BallDetector`), following
-`ingestion`'s `FrameSource` and `pose`'s `PoseEstimator`. Golf-specific
-reasoning is confined to `biomechanics`, `phases`, and `coaching`; everything
-below is general computer vision.
+Later phases add `phases`, `biomechanics`, `coaching` as sibling packages with
+Protocol-typed seams (`ClubDetector`, `BallDetector`), following `ingestion`'s
+`FrameSource`, `pose`'s `PoseEstimator` and `filtering`'s `FilterStage`.
+Golf-specific reasoning is confined to `biomechanics`, `phases`, and `coaching`;
+everything below is general computer vision.
 
 ## Video ingestion
 
@@ -193,6 +194,59 @@ repeats a value and the call is rejected. That clock is forced forward when it
 must be, and the count is reported. Every timestamp that reaches a stored
 sequence or a metric still comes from the container index — the nudged value is
 only used by MediaPipe's tracker to order frames.
+
+## Temporal filtering
+
+Pose estimation produces a position per frame, independently, with no notion
+that the frames form a motion. This layer turns that into a trajectory that can
+be differentiated, and decides which parts of it are supported well enough to
+use.
+
+**The fit runs on real timestamps.** Savitzky–Golay is a local least-squares
+polynomial fit whose coefficients collapse into a fixed convolution kernel
+_because the samples are uniformly spaced_ — an assumption Phase 1 established
+that consumer footage frequently violates. Rather than resample onto a uniform
+grid first, which interpolates the data before any of it is measured, the
+weighted least-squares problem is solved at each evaluation point over a window
+defined in seconds. Savitzky–Golay is then the special case this reduces to, and
+the test suite asserts that equivalence against SciPy rather than claiming it.
+Measured, the difference is nothing on uniform input and ~10x on a clip whose
+rate changes. [ADR-0009](decisions/ADR-0009-local-polynomial-filtering.md).
+
+**Derivatives come from the fit.** Velocity is the polynomial's linear
+coefficient and acceleration twice its quadratic one, so position, velocity and
+acceleration all describe the same curve. Finite-differencing smoothed positions
+would apply a second, unstated filter with a much worse noise response and leave
+the reported velocity inconsistent with the reported position. The `Signal` type
+enforces the corollary: any stage that changes values drops the derivatives that
+described them, because a stale derivative is exactly the kind of wrong number
+that survives review.
+
+```
+LandmarkSeries
+  └─ ConfidenceGateStage   low visibility/presence -> the same NaN as no detection
+      └─ GapPolicyStage    short absences bridged; long ones marked `blocked`
+          └─ LocalPolynomialStage   fit, and refuse where support is missing
+              └─ FilterPipeline     verifies blocked samples came out empty
+```
+
+**Refusal is checked, not trusted.** Two different rules prevent two different
+fabrications, and neither substitutes for the other. Bracketing inside the fit
+stops extrapolation past the observed range. The gap policy decides how far
+interpolation may go, and marks the rest `blocked` — and the pipeline re-checks
+on the way out that nothing acquired a value there, so a stage added later
+cannot quietly fill a refused gap.
+
+Every stage returns a report of what it did, so the difference between a clip's
+frame count and the count of frames carrying a usable position is always
+attributable: gated detections, refused gaps, or windows with too little
+support, each counted separately.
+
+**Where it declines entirely.** The defaults need five samples per window, which
+30 fps footage cannot supply over 0.10 s. Such a clip gets nothing, and the
+report names the minimum window its measured rate would support. That is the
+same rule as everywhere else in this system — report what was measured, refuse
+what was not — applied to a case where the honest answer is unhelpful.
 
 ## Progress
 
@@ -303,16 +357,33 @@ refuses to recommend a model below a 50% detection rate.
 The health check also gained about a second, spent running one real pose
 inference in a child process rather than trusting an import.
 
-No figures exist yet for filtering or metrics, because neither exists yet.
+### Filtering (Phase 3, 2026-09-16)
+
+`scripts/benchmark_filter.py`. Velocity RMS error against analytical
+trajectories at 120 fps, at a noise level of 0.0014 normalized_frame measured
+from real footage:
+
+| Sampling        | True timestamps | Assumed uniform | Ratio     |
+| --------------- | --------------- | --------------- | --------- |
+| uniform         | 0.0308          | 0.0309          | **1.00x** |
+| jitter, 50%     | 0.0402          | 0.0567          | 1.41x     |
+| rate change, 4x | 0.0836          | 0.8926          | **10.7x** |
+| dropped frames  | 0.0637          | 0.5740          | **9.0x**  |
+
+Filtering all 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
+17.5 ms for a 240-frame clip — against ~1.2 s to extract poses for the same 68
+frames. Nothing is cached as a result.
+
+No figures exist yet for metrics, because they do not exist yet.
 
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                       |
-| ------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (170)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching |
-| Transport framing, path resolution    | cargo test (9)  | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                              |
-| IPC wrappers, component rendering     | Vitest (34)     | error normalisation, status rendering, remediation display, metadata panels, failure states                                                  |
-| UI flows                              | Playwright (10) | layout, engine data rendering, import flow, screen switching, failure panel                                                                  |
+| Layer                                 | Tool            | Covers                                                                                                                                                        |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (407)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                               |
+| IPC wrappers, component rendering     | Vitest (60)     | error normalisation, status rendering, remediation display, metadata panels, failure states                                                                   |
+| UI flows                              | Playwright (15) | layout, engine data rendering, import flow, screen switching, failure panel                                                                                   |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

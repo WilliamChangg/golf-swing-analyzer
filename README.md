@@ -6,11 +6,12 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-2 of 21 complete.** The foundation, typed engine boundary,
-> environment health check, video ingestion, and single-camera pose extraction
-> are built and verified. No filtering, metrics, or coaching exist yet. Sections
-> below marked _Not yet implemented_ say so rather than describing features that
-> do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> **Status: Phases 0-3 of 21 complete.** The foundation, typed engine boundary,
+> environment health check, video ingestion, single-camera pose extraction, and
+> temporal filtering are built and verified. No phase detection, metrics, or
+> coaching exist yet. Sections below marked _Not yet implemented_ say so rather
+> than describing features that do not exist. See
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -92,22 +93,30 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 3-13 outstanding._ A clip can be imported,
-inspected, and run through pose estimation, from the app's **Video** screen or
-from a terminal:
+_Partially implemented — Phases 4-13 outstanding._ A clip can be imported,
+inspected, run through pose estimation, and filtered into trajectories with
+derivatives — from the app's **Video** screen or from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
 uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
 uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
+uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
+uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyorder 4
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
 reports what it measured: frames processed, how many contained a pose, time per
-frame, and the model digest it ran with. No filtering, metrics, or coaching
-consume that yet.
+frame, and the model digest it ran with.
 
-The engine methods are `doctor`, `probe_video` and `extract_poses`.
+Filtering reads those landmarks back and produces position, velocity and
+acceleration per landmark, along with an account of what it refused: detections
+below the confidence gate, gaps too long to bridge, and windows without enough
+support to fit. Nothing is persisted — filtering a clip costs milliseconds
+against seconds of extraction. No metrics or coaching consume it yet.
+
+The engine methods are `doctor`, `probe_video`, `extract_poses` and
+`filter_poses`.
 
 ## 6. Supported video formats
 
@@ -157,7 +166,7 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 3-11 outstanding._ Two stages are built.
+_Partially implemented — Phases 4-11 outstanding._ Three stages are built.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -172,8 +181,19 @@ is the only space a landmark can be drawn in, while `HIP_LOCAL` is MediaPipe's
 geometry. It is **not** calibrated world coordinates, and no metric claim rests
 on it. Real world coordinates arrive in Phase 9 from stereo triangulation.
 
-Filtering, phase detection, club and ball tracking are not built. Planned stages
-and their ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
+**Filtering.** Landmark trajectories are smoothed and differentiated by local
+polynomial regression solved at each sample on the clip's real timestamps.
+Savitzky–Golay is the uniform-grid special case of that, and the test suite pins
+the equivalence against SciPy to floating-point precision — but the general form
+is what runs, because a fixed convolution kernel silently biases every derivative
+on variable-rate footage. Velocity and acceleration are coefficients of the same
+fit rather than finite differences of smoothed positions, so the three are
+mutually consistent. Low-confidence detections become absences, absences longer
+than the gap policy stay absent, and windows without enough observations emit
+nothing at all. See [ADR-0009](docs/decisions/ADR-0009-local-polynomial-filtering.md).
+
+Phase detection, club and ball tracking are not built. Planned stages and their
+ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## 9. 3D reconstruction methodology
 
@@ -210,14 +230,15 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                           |
-| ---------- | ----- | ----------------------------------------------------------------------------------------------- |
-| pytest     | 170   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion (see below) |
-| cargo test | 9     | protocol framing, id correlation, `uv`/project resolution                                       |
-| Vitest     | 34    | IPC error normalisation, health screen, video metadata rendering                                |
-| Playwright | 10    | UI layout, engine-data rendering, import flow, failure panels                                   |
+| Suite      | Count | Scope                                                                                                |
+| ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
+| pytest     | 407   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                            |
+| Vitest     | 60    | IPC error normalisation, health screen, video metadata rendering, extraction panel                   |
+| Playwright | 15    | UI layout, engine-data rendering, import flow, failure panels                                        |
 
-All 223 pass as of Phase 1.
+All 494 pass as of Phase 3. (The counts above are what the suites report today;
+earlier revisions of this table understated them.)
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -239,12 +260,25 @@ separately: that it converts BGR to RGB before inference, that a frame with no
 pose is recorded rather than dropped, and that two runs over one clip agree
 exactly.
 
+The filtering tests are where numerical claims get checked against something
+independent, and they come in three kinds. **Equivalence:** on a uniform grid the
+fit must reproduce SciPy's `savgol_filter` for value, velocity and acceleration
+to floating-point precision — an independent implementation agreeing to ~1e-14 is
+a far stronger statement than a tolerance someone chose. **Exactness:** a
+polynomial of degree at most the fit's order must come back perfectly, on
+arbitrary non-uniform sampling, derivatives included. **Error bounds:** RMS
+limits against trajectories with closed-form derivatives, with the bounds taken
+from `scripts/benchmark_filter.py` rather than from whatever the code currently
+emits, so a change that halves the accuracy fails rather than passing quietly.
+
+Hypothesis covers the invariants a worked example would miss: adding a constant
+shifts position and leaves derivatives alone, shifting all timestamps changes
+nothing, and reversing time negates velocity while preserving acceleration —
+which is the property that catches a sign error in the local coordinate.
+
 CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
-
-Numerical algorithm tests against analytical solutions arrive with Phase 3,
-which is where the first real numerics land.
 
 ## 13. Performance benchmarks
 
@@ -301,8 +335,42 @@ against 67.1 ms on a real swing, because MediaPipe runs the detector when it
 finds nothing and the landmark model when it does. The benchmark refuses to
 recommend a model below a 50% detection rate for exactly that reason.
 
-No figures exist yet for filtering or metrics, because neither exists yet. A
-general benchmark harness arrives in Phase 17.
+**Temporal filtering** (2026-09-16, `scripts/benchmark_filter.py`). Accuracy is
+against analytical trajectories with closed-form derivatives, at a landmark noise
+level of 0.0014 normalized_frame measured from real footage. Worst case over
+three trajectories at 120 fps:
+
+| order | window     | pos RMS     | vel RMS    | acc RMS  | peak speed err |
+| ----- | ---------- | ----------- | ---------- | -------- | -------------- |
+| 2     | 0.10 s     | 0.00194     | 0.6226     | 13.69    | −8.4%          |
+| 3     | 0.10 s     | 0.00195     | 0.0435     | 13.68    | −1.1%          |
+| **4** | **0.10 s** | **0.00077** | **0.0437** | **3.29** | **−1.1%**      |
+| 4     | 0.125 s    | 0.00072     | 0.0609     | 2.33     | −0.7%          |
+
+That table is how the defaults were chosen rather than a report on them. Degree 2
+is not viable — it underestimates peak speed by 8%, an error phase detection
+would inherit when locating impact. Degree 4 beats degree 3 on acceleration by
+about 4x at the same velocity error.
+
+What assuming uniform sampling costs, same noise level, velocity RMS:
+
+| Sampling        | True timestamps | Assumed uniform | Ratio     |
+| --------------- | --------------- | --------------- | --------- |
+| uniform         | 0.0308          | 0.0309          | **1.00x** |
+| jitter, 50%     | 0.0402          | 0.0567          | 1.41x     |
+| rate change, 4x | 0.0836          | 0.8926          | **10.7x** |
+| dropped frames  | 0.0637          | 0.5740          | **9.0x**  |
+
+The first row is why the general method is affordable: on genuinely uniform input
+it costs nothing measurable. The last two are why it is necessary, and both are
+ordinary properties of phone footage.
+
+Throughput: 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
+17.5 ms for a 240-frame clip, against ~1.2 s to extract poses for the same 68
+frames. Filtering is not a bottleneck, which is why nothing is cached.
+
+No figures exist yet for metrics, because they do not exist yet. A general
+benchmark harness arrives in Phase 17.
 
 ## 14. Limitations
 
@@ -332,6 +400,19 @@ general benchmark harness arrives in Phase 17.
   reported because it is counted; nothing here says whether the landmarks that
   were found are in the right place. That needs a labelled set, which is
   Phase 12.
+- **Filtering needs about 60 fps or better at its default settings.** A 0.10 s
+  window with a degree-4 fit needs five samples, and 30 fps supplies three. Such
+  a clip gets no values at all, plus a message naming the minimum window its
+  measured rate would support — the alternative, widening the window silently,
+  produces numbers that are worse in a way nothing reports. Both reference clips
+  used during development are 24–30 fps, so this is the ordinary case rather than
+  an edge one, and it is the first quantitative backing for the ≥120 fps the
+  capture protocol asks for.
+- **Filter accuracy is measured against models of swing motion, not a swing.**
+  The trajectories in the benchmark have exact derivatives, which real footage
+  cannot until Phase 12 provides labelled landmarks. They were chosen to resemble
+  swing dynamics; no claim is made that they match one, and the defaults should
+  be re-derived against ground truth when it exists.
 - **MediaPipe runs on CPU.** The Tasks Python API has no macOS GPU delegate, and
   the health check reports the delegate it measured rather than the one it would
   prefer.

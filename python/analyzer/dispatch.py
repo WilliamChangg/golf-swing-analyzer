@@ -17,9 +17,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from analyzer.contracts.filtering import FilterConfig
+from analyzer.contracts.pose import LandmarkSpace
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
+from analyzer.paths import cache_dir
 from analyzer.progress import NullReporter, ProgressReporter
 
 # A method takes validated params and a progress sink, and returns a contract model.
@@ -114,10 +117,84 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
         estimator.close()
 
 
+class FilterPosesParams(BaseModel, extra="forbid"):
+    """Parameters for `filter_poses`."""
+
+    path: str = Field(
+        description=(
+            "A pose Parquet file, or the video it was extracted from -- in which "
+            "case the content-keyed cache is consulted for its landmarks."
+        )
+    )
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction to filter. Only used when `path` is a video.",
+    )
+    space: LandmarkSpace = Field(
+        default=LandmarkSpace.IMAGE,
+        description="Coordinate space to filter. HIP_LOCAL is not calibrated world geometry.",
+    )
+    config: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Gate, gap and smoothing policy. Defaults are the measured ones.",
+    )
+
+
+def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
+    """Find the landmarks to filter, from either a Parquet path or a video path.
+
+    Taking a video and resolving its cache entry is the common case: a caller
+    thinks in terms of the clip, not of where extraction happened to put its
+    output. When nothing has been extracted the error says which command to run
+    rather than reporting a missing file.
+    """
+    from analyzer.pose.estimator import resolve_model
+
+    candidate = Path(parsed.path)
+    if candidate.suffix == ".parquet":
+        return candidate
+
+    metadata = probe_video(candidate)
+    entry, _ = resolve_model(parsed.model)
+    poses = cache_dir() / "poses" / metadata.content_key.as_path_segment() / f"{entry.name}.parquet"
+    if not poses.exists():
+        raise EngineError(
+            f"No extracted poses for {candidate.name} with model '{entry.name}'.",
+            code=ErrorCode.UNSUPPORTED_INPUT,
+            data={"remediation": f"Run: analyzer extract {parsed.path} --model {entry.name}"},
+        )
+    return poses
+
+
+def _filter_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Smooth stored landmarks and differentiate them, reporting what was refused."""
+    parsed = FilterPosesParams.model_validate(params)
+
+    # Imported here rather than at module scope to keep the worker's spawn cost
+    # off a session that only ever calls `doctor`, matching `extract_poses`.
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(parsed)
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    result = filter_sequence(sequence, parsed.config, space=parsed.space, reporter=reporter)
+    return result.report
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
     "probe_video": _probe_video,
     "extract_poses": _extract_poses,
+    "filter_poses": _filter_poses,
 }
 
 
