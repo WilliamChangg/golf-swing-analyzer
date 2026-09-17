@@ -52,6 +52,11 @@ advance past a broken phase.
 **Measured:** worker spawn → ready 163 ms · first `doctor` 1373 ms · warm
 `doctor` 127 ms median · 12 components probed.
 
+`data/dtl/iron_dtl.mp4` (96 frames, 30 fps, added after the first pass) detects
+just as cleanly — takeaway frame 7, top 27, impact 38, finish 49, confidences
+0.94 / 0.79 / 0.81 / 0.00 — but only after a fix it forced. See the hand-source
+deviation below.
+
 **Deliberate deviations from the original plan:**
 
 - `tauri-plugin-shell` / `-dialog` / `-fs` were **not** added. The engine
@@ -355,6 +360,15 @@ smears the wrists exactly when they move fastest, and pose estimation loses them
 
 **Deliberate deviations from the original plan:**
 
+- **The hand source is chosen by longest unbroken tracking, not by frame
+  count.** Down-the-line footage hides one wrist behind the other, and which one
+  it hides changes through the swing: on `iron_dtl.mp4` the right wrist is
+  visible through the address and backswing while the left is not, and the left
+  takes over once the right is lost after impact. Counting frames picks the left
+  (59 against 48), which contains no address and no backswing, and the clip is
+  refused. Counting the longest unbroken run picks the right (48 against 44) and
+  every event is found. A swing is one continuous event, so the run that must
+  contain it is the thing worth maximising.
 - **Four events, not five.** `ADDRESS` is a phase with no event of its own,
   because its last frame _is_ the frame before the takeaway. An address event
   would sit one frame from the takeaway and imply a precision the signal does
@@ -411,7 +425,20 @@ flagged as an approximation.
 
 ## Phase 6 — DTL + coordinate systems ⬜
 
+**Carried in from Phase 4: IMAGE space is anisotropic and distances taken in it
+are wrong.** x is normalised by frame width and y by frame height, so on the
+1080x1920 clips here a vertical distance is under-weighted by 0.5625 against a
+horizontal one. Every Euclidean quantity that mixes the two — hand speed, hand
+travel, torso length — carries that distortion today. Phase 4 survives it because
+its gate is a _ratio_ of two such distances, which partly cancels, and because
+locating a maximum tolerates an anisotropic scaling; Phase 5's angles and
+lengths will not. The fix needs the display aspect ratio at the filtering layer,
+which the pose sequence does not currently carry: `PoseSequence` gains the
+display dimensions, or distances move into a space normalised by width alone.
+
 - [ ] 6.1 Image / normalized / camera / world frame types + `docs/coordinate-systems.md`
+- [ ] 6.1a Fix the anisotropic-distance defect above; re-measure Phase 4's
+      travel ratios against it
 - [ ] 6.2 DTL metrics: hand depth, spine angle, shaft orientation, club path, head movement
 - [ ] 6.3 View-tagged metrics so face-on and DTL never conflate
 - [ ] 6.4 Tests: round-trip conversions, known-projection fixtures

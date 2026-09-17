@@ -131,9 +131,16 @@ def _sequence(
     *,
     visibility: np.ndarray | None = None,
     detected: np.ndarray | None = None,
+    per_landmark_visibility: dict[int, np.ndarray] | None = None,
 ) -> PoseSequence:
-    """A pose sequence whose wrists follow the given path on a still body."""
+    """A pose sequence whose wrists follow the given path on a still body.
+
+    `per_landmark_visibility` overrides the shared value for named landmarks,
+    which is how down-the-line footage behaves: one wrist is hidden behind the
+    other, and which one changes through the swing.
+    """
     vis = np.full(t.size, 0.95) if visibility is None else visibility
+    overrides = per_landmark_visibility or {}
     seen = np.ones(t.size, dtype=bool) if detected is None else detected
     wrists = {int(Landmark.LEFT_WRIST), int(Landmark.RIGHT_WRIST)}
 
@@ -151,12 +158,13 @@ def _sequence(
                 px, py = float(x[index]) + offset, float(y[index])
             else:
                 px, py = _BODY.get(landmark, (0.5, 0.2))
+            channel = overrides.get(landmark)
             points.append(
                 LandmarkPoint(
                     x=px,
                     y=py,
                     z=0.0,
-                    visibility=float(vis[index]),
+                    visibility=float(vis[index] if channel is None else channel[index]),
                     presence=0.99,
                 )
             )
@@ -477,6 +485,46 @@ class TestSignals:
         x, y = _hand_path(t)
         filtered = filter_sequence(_sequence(x, y, t), FilterConfig())
         assert swing_signals(filtered).hand.source is HandSource.MIDPOINT
+
+    def test_picks_the_wrist_whose_tracking_covers_the_swing(self) -> None:
+        """The failure `data/dtl/iron_dtl.mp4` exposed.
+
+        Down-the-line footage hides one wrist behind the other, and which one it
+        hides changes through the swing. Here the right wrist is visible for the
+        swing and blind afterwards, while the left is blind through the address
+        and backswing and visible for the rest -- so the left is tracked on more
+        frames in total while containing no swing at all. Choosing by frame
+        count reports nothing; choosing by the longest unbroken run finds it.
+        """
+        t = np.arange(0.0, DURATION_S, 1.0 / FPS)
+        x, y = _hand_path(t)
+
+        # The right wrist is visible for one unbroken stretch covering the
+        # whole swing, then lost. The left is blind through the address, comes
+        # back, drops out again over the top, and is visible for the long quiet
+        # tail — more frames in total, split either side of the event.
+        right = np.where(t <= IMPACT_S + 0.15, 0.95, 0.1)
+        blind = (t < TAKEAWAY_S - 0.1) | ((t >= TOP_S - 0.1) & (t < TOP_S + 0.2))
+        left = np.where(blind, 0.1, 0.95)
+
+        sequence = _sequence(
+            x,
+            y,
+            t,
+            per_landmark_visibility={
+                int(Landmark.RIGHT_WRIST): right,
+                int(Landmark.LEFT_WRIST): left,
+            },
+        )
+        filtered = filter_sequence(sequence, FilterConfig())
+        signals = swing_signals(filtered)
+
+        left_valid = int(np.count_nonzero(filtered[Landmark.LEFT_WRIST].valid))
+        right_valid = int(np.count_nonzero(filtered[Landmark.RIGHT_WRIST].valid))
+        assert left_valid > right_valid, "the fixture must favour the wrong wrist on count"
+        assert signals.hand.source is HandSource.RIGHT_WRIST
+
+        assert detect_phases(filtered).detected
 
     def test_refuses_hip_local_space(self) -> None:
         """Hand height there is measured from an origin that moves with the body."""

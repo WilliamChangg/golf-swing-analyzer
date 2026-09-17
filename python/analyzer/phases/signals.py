@@ -181,6 +181,21 @@ def choose_hand(filtered: FilteredSequence) -> HandTrack:
     the differentiator reports as a velocity spike. Those spikes land exactly
     where tracking is hardest, which on a golf swing is around impact.
 
+    Chosen by the **longest unbroken run** of tracked frames rather than by how
+    many frames are tracked in total. A swing is one continuous event: address,
+    backswing, downswing and finish all have to fall inside a single run, and a
+    trajectory with a hole in the middle cannot contain one across the hole
+    however well tracked it is either side.
+
+    The two are not the same choice, and the difference decides whole clips.
+    Down-the-line footage hides one wrist behind the other, and which one it
+    hides changes through the swing: on `data/dtl/iron_dtl.mp4` the right wrist
+    is visible through address and the backswing while the left is not, and the
+    left takes over once the right disappears after impact. Counting frames
+    picks the left (59 against 48) and misses the entire address and backswing,
+    so no swing is found. Counting the longest run picks the right (48 against
+    44) and the swing is detected with every event confident.
+
     Ties go to the midpoint, which averages two independent estimates and is
     therefore the quieter signal when it is available at all.
     """
@@ -197,7 +212,26 @@ def choose_hand(filtered: FilteredSequence) -> HandTrack:
         _single(left, HandSource.LEFT_WRIST),
         _single(right, HandSource.RIGHT_WRIST),
     )
-    return max(candidates, key=lambda track: int(np.count_nonzero(track.valid)))
+    # Total coverage breaks a tie in the run length, and `max` keeps the first
+    # of equals, so the midpoint wins a tie in both.
+    return max(
+        candidates,
+        key=lambda track: (
+            longest_run(track.valid),
+            int(np.count_nonzero(track.valid)),
+        ),
+    )
+
+
+def longest_run(mask: NDArray[np.bool_]) -> int:
+    """Length of the longest unbroken run of True."""
+    if mask.size == 0:
+        return 0
+    best = current = 0
+    for value in mask:
+        current = current + 1 if value else 0
+        best = max(best, current)
+    return best
 
 
 def _line_angle_deg(

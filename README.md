@@ -448,12 +448,20 @@ benchmark harness arrives in Phase 17.
   kinematic estimate with a known bias in a known direction. It is corroborated
   against the lowest point of the hand arc, and Phases 10-11 will replace that
   with club and ball evidence.
-- **Phase detection is validated on one swing.** The face-on reference clip is
+- **Distances in IMAGE space are anisotropic, and slightly wrong.** x is
+  normalised by frame width and y by frame height, so on a 1080x1920 clip a
+  vertical distance counts for 0.5625 of a horizontal one of the same size in
+  pixels. Hand speed, hand travel and torso length all mix the two. Phase 4's
+  swing gate is a ratio of two such distances, which partly cancels the
+  distortion, and locating a maximum tolerates it — but the figures are not
+  geometry and should not be read as such. Phase 6 owns the fix.
+- **Phase detection is validated on two swings.** The face-on reference clip is
   the only recording here containing a swing the pipeline can see; the
+  face-on and iron down-the-line reference clips both detect cleanly; the driver
   down-the-line clip is 24 fps and loses the wrists to motion blur through the
-  part where the swing happens. Every event in it was checked by hand against
-  the signal, which is not the same as being checked against ground truth —
-  that needs the labelled set Phase 12 builds.
+  part where the swing happens, so it is refused. Every event was checked by
+  hand against the signal, which is not the same as being checked against ground
+  truth — that needs the labelled set Phase 12 builds.
 - **Detection thresholds are structural bounds, not golf norms.** They exist to
   reject motion that cannot be a swing (a two-second descent, hands that never
   travel further than a fraction of the subject's torso), and are deliberately

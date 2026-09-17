@@ -294,9 +294,20 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
     truncated = not after_impact
     if truncated:
         finish = int(len(speed) - 1 - np.argmax(np.isfinite(speed)[::-1]))
+        # Two different things cut a follow-through short, and they call for
+        # different fixes: keep recording, or fix the capture so the hands stay
+        # trackable. Saying "the clip ended" when the camera was still rolling
+        # sends the reader after the wrong one.
+        ran_out_of_clip = finish >= len(speed) - 1
+        cause = (
+            "the clip ended first"
+            if ran_out_of_clip
+            else f"tracking was lost at {t[finish]:.2f} s, with {t[-1] - t[finish]:.2f} s of "
+            "clip still to run"
+        )
         warnings.append(
-            "The hands had not come to rest when the clip ended, so the finish is reported "
-            "at the last tracked frame rather than located. Its confidence is reduced "
+            f"The hands had not come to rest before {cause}, so the finish is reported at "
+            "the last tracked frame rather than located. Its confidence is reduced "
             "accordingly."
         )
     else:
