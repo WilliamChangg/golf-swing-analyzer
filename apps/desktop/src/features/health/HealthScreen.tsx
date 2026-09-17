@@ -1,10 +1,10 @@
 /**
  * Environment health screen.
  *
- * The only functional screen in Phase 0. It renders exactly what the analysis
- * engine measured on this machine and nothing else: no component is shown as
- * healthy unless the engine said so, and a failed call renders as a failure
- * rather than an empty (and therefore falsely reassuring) list.
+ * Renders exactly what the analysis engine measured on this machine and nothing
+ * else: no component is shown as healthy unless the engine said so, and a
+ * failed call renders as a failure rather than an empty (and therefore falsely
+ * reassuring) list.
  */
 
 import type {
@@ -16,6 +16,7 @@ import type {
 import { Loader2, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { EngineErrorPanel } from "@/components/engine-error-panel";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -40,25 +41,6 @@ function toLoadState(result: EngineResult<EnvironmentReport>): LoadState {
     ? { phase: "loaded", report: result.value }
     : { phase: "failed", error: result.error };
 }
-
-/** Human-readable explanation for each way an engine call can fail. */
-const ERROR_HEADLINE: Record<EngineError["kind"], string> = {
-  spawn: "The analysis engine could not be started",
-  transport: "Lost contact with the analysis engine",
-  protocol: "The analysis engine spoke an unexpected protocol",
-  method: "The analysis engine reported an error",
-  timeout: "The analysis engine did not respond in time",
-};
-
-const ERROR_HINT: Record<EngineError["kind"], string> = {
-  spawn:
-    "Check that uv is installed and that `uv sync` has been run in the python/ directory.",
-  transport: "The worker process may have crashed. Try re-running the check.",
-  protocol:
-    "The desktop app and the analysis engine are likely different versions. Reinstall both from the same commit.",
-  method: "See the message above for the specific failure.",
-  timeout: "The first run loads PyTorch and MediaPipe, which can take time.",
-};
 
 function ComponentRow({ component }: { component: ComponentStatus }) {
   return (
@@ -143,34 +125,6 @@ function ComputePanel({ report }: { report: EnvironmentReport }) {
   );
 }
 
-function ErrorPanel({
-  error,
-  onRetry,
-}: {
-  error: EngineError;
-  onRetry: () => void;
-}) {
-  return (
-    <Card className="border-status-error/40">
-      <CardHeader>
-        <CardTitle className="text-status-error">
-          {ERROR_HEADLINE[error.kind]}
-        </CardTitle>
-        <CardDescription>{ERROR_HINT[error.kind]}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <pre className="bg-muted overflow-x-auto rounded-md p-3 font-mono text-xs whitespace-pre-wrap">
-          {error.message}
-          {error.code === undefined ? "" : `\n\n(code ${error.code})`}
-        </pre>
-        <Button onClick={onRetry} variant="outline" size="sm">
-          <RefreshCw /> Retry
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
 export function HealthScreen() {
   const [state, setState] = useState<LoadState>({ phase: "loading" });
 
@@ -193,14 +147,12 @@ export function HealthScreen() {
   }, []);
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-6 py-10">
-      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Golf Swing Analyzer
-          </h1>
+          <h2 className="text-lg font-semibold tracking-tight">Environment</h2>
           <p className="text-muted-foreground mt-1 text-sm">
-            Environment health check
+            What the analysis engine measured on this machine.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -221,7 +173,7 @@ export function HealthScreen() {
             Re-check
           </Button>
         </div>
-      </header>
+      </div>
 
       {state.phase === "loading" ? (
         <Card>
@@ -234,7 +186,7 @@ export function HealthScreen() {
       ) : null}
 
       {state.phase === "failed" ? (
-        <ErrorPanel error={state.error} onRetry={() => void runCheck()} />
+        <EngineErrorPanel error={state.error} onRetry={() => void runCheck()} />
       ) : null}
 
       {state.phase === "loaded" ? (
@@ -280,6 +232,6 @@ export function HealthScreen() {
           </Card>
         </div>
       ) : null}
-    </main>
+    </div>
   );
 }

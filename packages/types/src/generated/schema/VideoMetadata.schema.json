@@ -1,0 +1,340 @@
+{
+  "$defs": {
+    "ContentKey": {
+      "description": "Identity of a file's contents, used to key derived artifacts.\n\nThe algorithm travels with the digest so a cache written under one scheme is\nnever silently compared against a digest produced by another.",
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/HashAlgorithm"
+        },
+        "digest": {
+          "description": "Lowercase hex sha256 digest.",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "File size at the time the digest was taken.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "size_bytes"
+      ],
+      "title": "ContentKey",
+      "type": "object"
+    },
+    "HashAlgorithm": {
+      "description": "How a `ContentKey` digest was computed.\n\nSHA256          - the whole file. Use when the answer must be an integrity\n                  check, as it is for model weights.\nSHA256_SAMPLED  - size, plus sha256 over three fixed windows of the file.\n                  **This is not an integrity check.** It exists because\n                  hashing every byte of a multi-gigabyte recording on every\n                  open costs seconds, and a cache key only has to change\n                  when the file changes, not prove that it did not.",
+      "enum": [
+        "sha256",
+        "sha256-sampled-v1"
+      ],
+      "title": "HashAlgorithm",
+      "type": "string"
+    },
+    "IntervalStats": {
+      "description": "Measured spacing between consecutive presentation timestamps.\n\nReported so the `is_vfr` verdict can be checked rather than trusted: a clip\nwith one irregular interval out of 7000 and a clip that switches rate\nhalf-way through are both \"variable\", and these numbers are what tells them\napart.",
+      "properties": {
+        "median_s": {
+          "type": "number"
+        },
+        "min_s": {
+          "type": "number"
+        },
+        "max_s": {
+          "type": "number"
+        },
+        "quantum_s": {
+          "description": "One tick of the container's time base. Intervals cannot be resolved more finely than this, so it is the tolerance below which a difference is rounding rather than a real rate change.",
+          "type": "number"
+        },
+        "irregular_count": {
+          "description": "Intervals differing from the median by more than one time-base tick.",
+          "type": "integer"
+        },
+        "irregular_fraction": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "median_s",
+        "min_s",
+        "max_s",
+        "quantum_s",
+        "irregular_count",
+        "irregular_fraction"
+      ],
+      "title": "IntervalStats",
+      "type": "object"
+    },
+    "TimestampSource": {
+      "description": "Where a clip's per-frame times came from.\n\nDECODED_FRAMES  - presentation timestamps of the frames a decoder actually\n                  emits, accounting for any edit list the container applies.\n                  Authoritative: these are the times the frames are shown at,\n                  whether or not they are evenly spaced.\n\n                  Deliberately not the container's *packet* timestamps. Those\n                  are cheaper to read and are wrong on real recordings: a\n                  clip with an MP4 edit list has packets a decoder never\n                  emits, and packet times offset from presentation times.\n\nCONTAINER_RATE  - synthesised from the container's declared average frame\n                  rate because no usable timestamps were found. A fallback,\n                  and one that makes variable frame rate undetectable, so\n                  anything derived from it is flagged.",
+      "enum": [
+        "decoded_frames",
+        "container_rate"
+      ],
+      "title": "TimestampSource",
+      "type": "string"
+    },
+    "VideoStreamInfo": {
+      "description": "The video stream's coding and geometry, as the container declares them.",
+      "properties": {
+        "codec_name": {
+          "type": "string"
+        },
+        "codec_long_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pix_fmt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "coded_width": {
+          "description": "Width as stored, before any display rotation.",
+          "type": "integer"
+        },
+        "coded_height": {
+          "description": "Height as stored, before any display rotation.",
+          "type": "integer"
+        },
+        "display_width": {
+          "description": "Width after rotation. What a frame source yields.",
+          "type": "integer"
+        },
+        "display_height": {
+          "description": "Height after rotation. What a frame source yields.",
+          "type": "integer"
+        },
+        "rotation_ccw_degrees": {
+          "description": "Counter-clockwise rotation to apply to a stored frame to display it upright, taken from the container's display matrix.",
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ],
+          "type": "integer"
+        },
+        "rotation_source": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which container field the rotation came from: 'display_matrix' or 'rotate_tag'."
+        },
+        "sample_aspect_ratio": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bit_rate": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "time_base": {
+          "description": "Stream time base as a rational string, e.g. '1/15360'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "codec_name",
+        "coded_width",
+        "coded_height",
+        "display_width",
+        "display_height",
+        "rotation_ccw_degrees",
+        "time_base"
+      ],
+      "title": "VideoStreamInfo",
+      "type": "object"
+    },
+    "VideoTiming": {
+      "description": "When each frame is presented, and whether that is evenly spaced.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/TimestampSource"
+        },
+        "frame_count": {
+          "description": "Frames found in the container index.",
+          "type": "integer"
+        },
+        "first_timestamp_s": {
+          "type": "number"
+        },
+        "last_timestamp_s": {
+          "type": "number"
+        },
+        "timestamp_span_s": {
+          "description": "last - first. Measured exactly; assumes nothing about the final frame.",
+          "type": "number"
+        },
+        "duration_s": {
+          "description": "Estimated playback duration: the timestamp span plus the last observed interval, since how long the final frame is displayed is not recorded.",
+          "type": "number"
+        },
+        "container_duration_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Duration as declared by the container, for comparison. Not used for analysis."
+        },
+        "nominal_fps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The container's declared average frame rate. Display only."
+        },
+        "measured_fps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "(frame_count - 1) / timestamp_span_s. Meaningful as an average even on variable-rate clips; None when there are fewer than two frames."
+        },
+        "intervals": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntervalStats"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "None when timestamps were synthesised, or when there are fewer than two frames."
+        },
+        "is_vfr": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "True when any interval differs from the median by more than one time-base tick. None means it could not be determined, which is not the same as False."
+        }
+      },
+      "required": [
+        "source",
+        "frame_count",
+        "first_timestamp_s",
+        "last_timestamp_s",
+        "timestamp_span_s",
+        "duration_s"
+      ],
+      "title": "VideoTiming",
+      "type": "object"
+    }
+  },
+  "description": "Everything known about a video file without decoding it.\n\nProduced by `probe_video`. Every field is read from the container by ffprobe\nor computed from timestamps that were; nothing here is assumed.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "path": {
+      "type": "string"
+    },
+    "file_size_bytes": {
+      "type": "integer"
+    },
+    "content_key": {
+      "$ref": "#/$defs/ContentKey"
+    },
+    "probed_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "container_format": {
+      "description": "ffprobe's format_name, e.g. 'mov,mp4,m4a,3gp,3g2,mj2'.",
+      "type": "string"
+    },
+    "stream": {
+      "$ref": "#/$defs/VideoStreamInfo"
+    },
+    "timing": {
+      "$ref": "#/$defs/VideoTiming"
+    },
+    "warnings": {
+      "description": "Caveats that affect how the clip may be analysed, e.g. variable frame rate.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "path",
+    "file_size_bytes",
+    "content_key",
+    "probed_at",
+    "container_format",
+    "stream",
+    "timing"
+  ],
+  "title": "VideoMetadata",
+  "type": "object"
+}

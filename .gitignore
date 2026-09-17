@@ -55,3 +55,4 @@ benchmarks/raw/
 # TypeScript build outputs
 dist-types/
 packages/types/dist/
+*.tsbuildinfo

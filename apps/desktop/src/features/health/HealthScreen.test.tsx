@@ -1,9 +1,15 @@
+import type * as IpcModule from "@/lib/ipc";
 import type { EnvironmentReport } from "@gsa/types";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const doctorMock = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/ipc", () => ({ doctor: doctorMock }));
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  // Only `doctor` is stubbed. The shared error panel calls `remediationOf`, and
+  // replacing that too would test a different function than the app runs.
+  ...(await importOriginal<typeof IpcModule>()),
+  doctor: doctorMock,
+}));
 
 const { HealthScreen } = await import("./HealthScreen");
 

@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "PoseExtractionStats": {
+      "description": "Measured facts about one extraction run.\n\n`detection_rate` is a count, not a quality score. A low rate means the model\nfound nobody in most frames; it says nothing about whether the landmarks it\ndid find are correct, and no accuracy claim may be built on it.",
+      "properties": {
+        "frames_processed": {
+          "type": "integer"
+        },
+        "frames_detected": {
+          "type": "integer"
+        },
+        "detection_rate": {
+          "type": "number"
+        },
+        "elapsed_s": {
+          "type": "number"
+        },
+        "ms_per_frame": {
+          "type": "number"
+        },
+        "mean_visibility": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Mean visibility across detected landmarks. None when nothing was detected."
+        }
+      },
+      "required": [
+        "frames_processed",
+        "frames_detected",
+        "detection_rate",
+        "elapsed_s",
+        "ms_per_frame"
+      ],
+      "title": "PoseExtractionStats",
+      "type": "object"
+    },
+    "PoseModelInfo": {
+      "description": "Which model produced a sequence, pinned so results stay attributable.",
+      "properties": {
+        "name": {
+          "description": "Manifest name, e.g. 'pose_landmarker_full'.",
+          "type": "string"
+        },
+        "variant": {
+          "description": "lite / full / heavy.",
+          "type": "string"
+        },
+        "precision": {
+          "description": "Weight precision as the manifest records it.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Digest of the model file actually loaded.",
+          "type": "string"
+        },
+        "delegate": {
+          "description": "Where inference ran, as measured: 'cpu' or 'gpu'.",
+          "type": "string"
+        },
+        "min_pose_detection_confidence": {
+          "type": "number"
+        },
+        "min_pose_presence_confidence": {
+          "type": "number"
+        },
+        "min_tracking_confidence": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "variant",
+        "precision",
+        "sha256",
+        "delegate",
+        "min_pose_detection_confidence",
+        "min_pose_presence_confidence",
+        "min_tracking_confidence"
+      ],
+      "title": "PoseModelInfo",
+      "type": "object"
+    }
+  },
+  "description": "What the desktop app is told about a completed extraction.\n\nDeliberately excludes the landmarks themselves. A 240 fps clip carries tens\nof thousands of frames of 33 landmarks in two spaces, which belongs in a\ncolumnar file on disk rather than in a JSON-RPC response; the app is given\nthe path to read and the numbers to display.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "video_path": {
+      "type": "string"
+    },
+    "output_path": {
+      "description": "Parquet file holding the landmarks.",
+      "type": "string"
+    },
+    "model": {
+      "$ref": "#/$defs/PoseModelInfo"
+    },
+    "extracted_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "stats": {
+      "$ref": "#/$defs/PoseExtractionStats"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "video_path",
+    "output_path",
+    "model",
+    "extracted_at",
+    "stats"
+  ],
+  "title": "PoseExtractionResult",
+  "type": "object"
+}

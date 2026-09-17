@@ -26,6 +26,7 @@ from analyzer.environment.hardware import (
     probe_torch,
 )
 from analyzer.environment.models import probe_models
+from analyzer.environment.pose_runtime import probe_pose_runtime
 
 # Import name -> human label for the packages the pipeline depends on.
 # torch is probed separately because it also feeds the compute summary.
@@ -103,6 +104,10 @@ def run_doctor() -> EnvironmentReport:
     components.append(probe_ffmpeg())
     components.append(probe_ffprobe())
     components.extend(probe_models())
+    # Last, because it is the only probe that runs real work: about a second,
+    # against ~130 ms for everything above it. It earns that by being the only
+    # one that can tell a usable MediaPipe build from an unusable one.
+    components.append(probe_pose_runtime())
 
     hwaccels = list_hwaccels()
     compute = compute_info(hwaccels)

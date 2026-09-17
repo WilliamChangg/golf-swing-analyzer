@@ -8,7 +8,10 @@ readme = "README.md"
 requires-python = "==3.12.*"
 
 dependencies = [
-    "mediapipe~=1.0.1",
+    # Pinned exactly, not `~=1.0`: MediaPipe 1.0.1 aborts the process when the
+    # pose landmarker graph opens on macOS arm64. 1.0.0 is the last version that
+    # runs. See docs/decisions/ADR-0008-mediapipe-1.0.0.md
+    "mediapipe==1.0.0",
     # Constrained below OpenCV 5: the aruco/calibration/Hough APIs relied on in
     # phases 8-10 changed in 5.x. See docs/decisions/ADR-0004-opencv-4x.md
     "opencv-contrib-python>=4.14,<5",
@@ -100,6 +103,21 @@ pretty = true
 
 # Third-party packages without type stubs. Listing them explicitly (rather than
 # a blanket ignore) keeps the untyped surface visible.
+#
+# This covers modules mypy cannot find at all. A package that IS installed but
+# ships no py.typed marker raises the separate `import-untyped` code, which this
+# does not suppress -- those imports carry an explicit `# type: ignore` at the
+# import site instead, so every point where untyped code enters is visible in
+# the source rather than only in this file.
 [[tool.mypy.overrides]]
-module = ["mediapipe.*", "cv2.*", "scipy.*", "pyarrow.*"]
+module = [
+    "mediapipe",
+    "mediapipe.*",
+    "cv2",
+    "cv2.*",
+    "scipy",
+    "scipy.*",
+    "pyarrow",
+    "pyarrow.*",
+]
 ignore_missing_imports = true

@@ -8,16 +8,14 @@ by sha256.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from analyzer.contracts.health import ComponentStatus, HealthStatus
+from analyzer.hashing import sha256_file
 from analyzer.paths import model_manifest_path, models_dir
-
-_HASH_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -78,15 +76,6 @@ def load_manifest(path: Path | None = None) -> ModelManifest:
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ManifestError(f"Model manifest at {manifest_path} is malformed: {exc}") from exc
-
-
-def sha256_file(path: Path) -> str:
-    """Stream a file through sha256 rather than reading it into memory."""
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(_HASH_CHUNK_BYTES):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _download_hint(entry: ModelEntry) -> str:

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -24,6 +25,11 @@ thiserror = "2"
 # Note: no tauri-plugin-shell. The engine subprocess is spawned from Rust with
 # std::process, which needs no plugin; the shell plugin exists to let the
 # *frontend* spawn processes, which this app deliberately does not allow.
+#
+# Note: no tauri-plugin-fs either. Video import needs a file *picker*, which the
+# dialog plugin provides; the path it returns goes to Rust and then to the
+# engine, which does the reading. Granting the WebView filesystem access would
+# be a much larger permission than the feature actually calls for.
 
 [features]
 # Used by `tauri dev` to enable devtools in debug builds.
