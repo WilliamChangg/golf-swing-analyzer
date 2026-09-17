@@ -11,13 +11,13 @@ The code is `python/analyzer/coordinates.py`; the enum is
 
 ## The frames
 
-| Frame          | Units              | y      | Origin         | Isotropic | Metric | Status              |
-| -------------- | ------------------ | ------ | -------------- | --------- | ------ | ------------------- |
-| `IMAGE`        | x/W, y/H           | down   | top-left       | **no**    | no     | stored              |
-| `FRAME_WIDTHS` | x/W, (H−y_px)/W    | **up** | bottom-left    | yes       | no     | derived on read     |
-| `HIP_LOCAL`    | approximate metres | up     | hip midpoint   | yes       | approx | stored              |
-| `CAMERA`       | metres             | down   | camera centre  | yes       | **yes** | **triangulated**   |
-| `WORLD`        | metres             | —      | fixed to scene | yes       | yes    | **absent**          |
+| Frame          | Units              | y      | Origin         | Isotropic | Metric  | Status           |
+| -------------- | ------------------ | ------ | -------------- | --------- | ------- | ---------------- |
+| `IMAGE`        | x/W, y/H           | down   | top-left       | **no**    | no      | stored           |
+| `FRAME_WIDTHS` | x/W, (H−y_px)/W    | **up** | bottom-left    | yes       | no      | derived on read  |
+| `HIP_LOCAL`    | approximate metres | up     | hip midpoint   | yes       | approx  | stored           |
+| `CAMERA`       | metres             | down   | camera centre  | yes       | **yes** | **triangulated** |
+| `WORLD`        | metres             | —      | fixed to scene | yes       | yes     | **absent**       |
 
 `W` and `H` are the **displayed** frame dimensions, after rotation. A phone clip
 stores frames sideways with a display matrix; the coded and displayed dimensions
@@ -114,7 +114,7 @@ supply:
 - **which way is up.** The cameras do not know their own attitude. Nothing in a
   reconstruction distinguishes a level floor from a sloped one.
 - **which way the target line runs.** A body does not declare one, and Phase 6
-  already established that a down-the-line recording cannot even tell which *end*
+  already established that a down-the-line recording cannot even tell which _end_
   of the target line the camera stood at.
 
 Both fall out of a capture that lays the calibration board flat on the ground in

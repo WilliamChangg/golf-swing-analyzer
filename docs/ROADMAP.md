@@ -4,31 +4,31 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-9 complete (10 / 21).**
+**Progress: Phases 0-10 complete (11 / 21).**
 
-| #   | Phase                 | Status      | Exit criterion                                             |
-| --- | --------------------- | ----------- | ---------------------------------------------------------- |
-| 0   | Foundation            | ✅ **Done** | App launches; doctor reports the real measured environment |
-| 1   | Video ingestion       | ✅ **Done** | Correct metadata on VFR and rotated fixtures               |
-| 2   | Single-camera pose    | ✅ **Done** | Landmarks persisted and reloadable; estimator swappable    |
-| 3   | Temporal filtering    | ✅ **Done** | Error bounds met against analytical trajectories           |
-| 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame  |
-| 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology               |
-| 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                          |
-| 7   | Two-camera sync       | ✅ **Done** | Measured sync residual in ms                               |
+| #   | Phase                 | Status      | Exit criterion                                                 |
+| --- | --------------------- | ----------- | -------------------------------------------------------------- |
+| 0   | Foundation            | ✅ **Done** | App launches; doctor reports the real measured environment     |
+| 1   | Video ingestion       | ✅ **Done** | Correct metadata on VFR and rotated fixtures                   |
+| 2   | Single-camera pose    | ✅ **Done** | Landmarks persisted and reloadable; estimator swappable        |
+| 3   | Temporal filtering    | ✅ **Done** | Error bounds met against analytical trajectories               |
+| 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame      |
+| 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology                   |
+| 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                              |
+| 7   | Two-camera sync       | ✅ **Done** | Measured sync residual in ms                                   |
 | 8   | Camera calibration    | ✅ **Done** | Coverage gates claims; reprojection error shown for what it is |
-| 9   | 3D reconstruction     | ✅ **Done** | Reconstruction error measured on synthetic ground truth    |
-| 10  | Club tracking         | ⬜ Next     | Shaft tracked; low confidence emits nothing                |
-| 11  | Ball detection        | ⬜          | Impact-frame agreement measured                            |
-| 12  | Temporal ML           | ⬜          | Leak-free splits; metrics only from a real labelled set    |
-| 13  | Coaching engine       | ⬜          | Every finding cites computed evidence                      |
-| 14  | Desktop UI            | ⬜          | Full workflow end-to-end                                   |
-| 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                             |
-| 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                 |
-| 17  | Performance           | ⬜          | Before/after numbers recorded                              |
-| 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                     |
-| 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                     |
-| 20  | Documentation         | ⬜          | Docs match reality                                         |
+| 9   | 3D reconstruction     | ✅ **Done** | Reconstruction error measured on synthetic ground truth        |
+| 10  | Club tracking         | ✅ **Done** | Shaft tracked; low confidence emits nothing                    |
+| 11  | Ball detection        | ⬜ Next     | Impact-frame agreement measured                                |
+| 12  | Temporal ML           | ⬜          | Leak-free splits; metrics only from a real labelled set        |
+| 13  | Coaching engine       | ⬜          | Every finding cites computed evidence                          |
+| 14  | Desktop UI            | ⬜          | Full workflow end-to-end                                       |
+| 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                                 |
+| 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                     |
+| 17  | Performance           | ⬜          | Before/after numbers recorded                                  |
+| 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                         |
+| 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                         |
+| 20  | Documentation         | ⬜          | Docs match reality                                             |
 
 ---
 
@@ -839,7 +839,7 @@ replacement. Only coverage catches it, so coverage is the gate.
       `StereoCalibration`, `PairingReport`, `CameraRig`, and `CalibrationStatus`
       with three values rather than two
 - [x] **8.2 Charuco detection + intrinsics** — board generated from the same spec
-      it is detected with; views selected for being *different*, not for
+      it is detected with; views selected for being _different_, not for
       existing; the distortion model named rather than defaulted
 - [x] **8.3 Stereo extrinsics** — intrinsics held fixed; frames paired through
       Phase 7's time map, with the sync uncertainty converted into **pixels** by
@@ -894,12 +894,12 @@ give 0.02%.
 **What the lens does to a landmark, which is what Phase 8 buys a single-camera
 user.** Undistortion moves a point near the frame edge by:
 
-| lens                  | at the edge | worst   | h-fov |
-| --------------------- | ----------- | ------- | ----- |
-| phone main (k1 −0.28) | 171.5 px    | 199 px  | 68.9° |
-| phone wide (k1 −0.42) | 219.9 px    | 248 px  | 93.7° |
-| mild (k1 −0.10)       | 34.0 px     | 41 px   | 56.1° |
-| long lens (k1 −0.02)  | 2.5 px      | 3.0 px  | 35.5° |
+| lens                  | at the edge | worst  | h-fov |
+| --------------------- | ----------- | ------ | ----- |
+| phone main (k1 −0.28) | 171.5 px    | 199 px | 68.9° |
+| phone wide (k1 −0.42) | 219.9 px    | 248 px | 93.7° |
+| mild (k1 −0.10)       | 34.0 px     | 41 px  | 56.1° |
+| long lens (k1 −0.02)  | 2.5 px      | 3.0 px | 35.5° |
 
 On 1920x1080. Every angle, distance and speed Phases 4 to 6 compute is taken
 from landmark positions carrying that displacement, and nothing in those numbers
@@ -910,14 +910,14 @@ is still not depth.
 `data/face-on/PW_face-on.mp4` with a plausible phone lens (fx = 0.73 x frame
 width, k1 = -0.28) moves the metrics by:
 
-| metric                  | uncalibrated | undistorted | delta   |
-| ----------------------- | ------------ | ----------- | ------- |
-| Trail arm angle (top)   | 154.75°      | 155.93°     | +1.19°  |
-| Shoulder turn (impact)  | 24.39°       | 25.26°      | +0.87°  |
-| X-factor (impact)       | 6.10°        | 6.79°       | +0.69°  |
-| Shoulder turn (top)     | 50.21°       | 50.62°      | +0.41°  |
-| Peak hand speed         | 19.32        | 19.91       | **+3.0%** |
-| Hand path length        | 3.304        | 3.360       | +1.7%   |
+| metric                 | uncalibrated | undistorted | delta     |
+| ---------------------- | ------------ | ----------- | --------- |
+| Trail arm angle (top)  | 154.75°      | 155.93°     | +1.19°    |
+| Shoulder turn (impact) | 24.39°       | 25.26°      | +0.87°    |
+| X-factor (impact)      | 6.10°        | 6.79°       | +0.69°    |
+| Shoulder turn (top)    | 50.21°       | 50.62°      | +0.41°    |
+| Peak hand speed        | 19.32        | 19.91       | **+3.0%** |
+| Hand path length       | 3.304        | 3.360       | +1.7%     |
 
 **and moves no swing event at all** -- takeaway 13, top 38, impact 46, finish 65
 either way. Phase detection reads the shape of a speed curve, and a smooth
@@ -925,7 +925,7 @@ radial correction does not change where its extrema sit; the metrics read
 absolute angles and distances, and it does.
 
 **That lens is assumed, not measured**, because nobody has calibrated the phone
-that shot this clip. What the table establishes is the *size* of the correction
+that shot this clip. What the table establishes is the _size_ of the correction
 on real footage, not a corrected result -- and it is modest here because the
 player is near the middle of the frame, which is where the lens bends least.
 A swing framed closer to the edge inherits more of the 171 px.
@@ -957,7 +957,7 @@ intrinsics from 14 views.
   reading is that RMS is what `CalibrationStatus` keys on. It cannot be: the
   sweep above shows it flat while the answer moves by 400x. The intended
   replacement — OpenCV's own parameter standard deviations — fails the same test
-  and fails it *backwards*. Coverage is the gate; the other two are reported for
+  and fails it _backwards_. Coverage is the gate; the other two are reported for
   what they each genuinely say. [ADR-0012](decisions/ADR-0012-calibration-coverage.md).
 - **8.5 blocks nothing, and that is the assertion rather than an omission.**
   Every metric in the registry measures the image plane, which an uncalibrated
@@ -967,7 +967,7 @@ intrinsics from 14 views.
   metrics meet machinery that predates them rather than a check written on the
   day the first metric needs relaxing.
 - **`CalibrationStatus` has three values, because `INTRINSICS` is not half of
-  `STEREO`.** A calibrated single camera knows which *direction* a pixel came
+  `STEREO`.** A calibrated single camera knows which _direction_ a pixel came
   from and nothing about how far away it was. `apply.bearings` returns unit
   vectors for exactly that reason, and there is deliberately no function here
   that returns a 3D point.
@@ -981,17 +981,17 @@ intrinsics from 14 views.
   board's measured image speed puts it in the same unit as the reprojection error
   it would otherwise be mistaken for. This is what makes the capture instruction
   a measurement rather than folklore.
-- **Board speed is measured from *every* detection, not from the selected
+- **Board speed is measured from _every_ detection, not from the selected
   views** — and getting that wrong first is what the stereo benchmark caught.
   Selection keeps one view per board position, so differencing selected views
-  measures the speed of carrying the board *between* positions, which is large
+  measures the speed of carrying the board _between_ positions, which is large
   however patiently it was held at either end. Pairing now runs over all
   detections and distinctness is selected on the pairs.
 - **A mis-paired stereo capture is caught by the residual, not by the clock.**
   Board stations a second apart with an offset wrong by exactly a second pair
   every frame with its neighbour, simultaneous to the millisecond and showing the
   board in two different places. No time-based check can see that; the fit's
-  residual explodes and refuses. So stereo *does* gate on reprojection error —
+  residual explodes and refuses. So stereo _does_ gate on reprojection error —
   there it is measuring a correspondence rather than a model's fit to its own data.
 - **`CameraRole` moved to `contracts/camera.py`.** A rig is keyed by role and a
   project holds a rig, which made `projects` and `calibration` mutually
@@ -1000,7 +1000,7 @@ intrinsics from 14 views.
 - **The projects database gained a real migration** (version 1 → 2, adding
   `rigs`). Phase 7 recorded "one version and no upgrade path yet, which is the
   honest state". A project is the only state here that cannot be recomputed from
-  the files, so the second version migrates rather than refuses. A *newer*
+  the files, so the second version migrates rather than refuses. A _newer_
   database is still refused by name.
 - **A stereo calibration holds both intrinsics fixed.** Re-fitting them jointly
   lets the optimiser trade focal length against baseline over the small angular
@@ -1055,19 +1055,19 @@ pose estimator in the fixture, so no blur, no occlusion, no mis-tracked wrist.
 
 Accuracy against isotropic landmark noise, over the eight landmarks that move:
 
-| landmark sigma | median  | p95     | hands p95 | reprojection | uncertainty |
-| -------------- | ------- | ------- | --------- | ------------ | ----------- |
-| 0.5 px         | 1.0 mm  | 1.9 mm  | 1.9 mm    | 0.16 px      | 1.0 mm      |
-| **2.7 px**     | **5.5 mm** | **10.4 mm** | **10.5 mm** | 0.85 px | 5.4 mm  |
-| 5.0 px         | 10.1 mm | 19.3 mm | 19.4 mm   | 1.55 px      | 10.1 mm     |
-| 10.0 px        | 20.4 mm | 38.5 mm | 38.3 mm   | 2.45 px      | 20.2 mm     |
+| landmark sigma | median     | p95         | hands p95   | reprojection | uncertainty |
+| -------------- | ---------- | ----------- | ----------- | ------------ | ----------- |
+| 0.5 px         | 1.0 mm     | 1.9 mm      | 1.9 mm      | 0.16 px      | 1.0 mm      |
+| **2.7 px**     | **5.5 mm** | **10.4 mm** | **10.5 mm** | 0.85 px      | 5.4 mm      |
+| 5.0 px         | 10.1 mm    | 19.3 mm     | 19.4 mm     | 1.55 px      | 10.1 mm     |
+| 10.0 px        | 20.4 mm    | 38.5 mm     | 38.3 mm     | 2.45 px      | 20.2 mm     |
 
 2.7 px is the 0.0014 frame widths Phase 3 measured on real footage, at 1920 px
 wide — so the bolded row is what this pipeline would do on a perfect capture of a
 real swing.
 
-**The headline is the negative.** Displace every landmark in one view *along its
-epipolar line* — the direction in which a wrong depth is a perfect fit — and:
+**The headline is the negative.** Displace every landmark in one view _along its
+epipolar line_ — the direction in which a wrong depth is a perfect fit — and:
 
 | along-epipolar | median 3D error | **reprojection** | bone variation |
 | -------------- | --------------- | ---------------- | -------------- |
@@ -1101,29 +1101,29 @@ the gate and is checked **before** the residual.
 calibration tolerates unsynchronised cameras because pairing error is
 `sync_error × image_speed` and a board can be held still. Nothing in a swing is:
 
-| target fps | pairing        | hands p95 | nearest-frame cost |
-| ---------- | -------------- | --------- | ------------------ |
-| 240        | resampled      | 0.0 mm    | 1.6 px             |
-| 240        | nearest frame  | 2.4 mm    | 1.6 px             |
-| 120        | nearest frame  | 2.4 mm    | 3.3 px             |
-| 60         | **resampled**  | **0.0 mm**| 6.5 px             |
-| 60         | nearest frame  | **12.3 mm** | 6.5 px           |
-| 30         | refused        | —         | Phase 3's window floor |
+| target fps | pairing       | hands p95   | nearest-frame cost     |
+| ---------- | ------------- | ----------- | ---------------------- |
+| 240        | resampled     | 0.0 mm      | 1.6 px                 |
+| 240        | nearest frame | 2.4 mm      | 1.6 px                 |
+| 120        | nearest frame | 2.4 mm      | 3.3 px                 |
+| 60         | **resampled** | **0.0 mm**  | 6.5 px                 |
+| 60         | nearest frame | **12.3 mm** | 6.5 px                 |
+| 30         | refused       | —           | Phase 3's window floor |
 
 No landmark noise in that table, so every millimetre is the pairing. Resampling
-uses cubic Hermite interpolation of the position *and velocity* Phase 3 already
+uses cubic Hermite interpolation of the position _and velocity_ Phase 3 already
 fitted — no new kernel and no second smoothing pass.
 
 **The 3D rotations, against angles that are inputs.** The fixture turns the
 shoulders 92° and the pelvis 45° about a declared axis, so X-factor has a true
 value — which no single-camera measurement in this project has ever had:
 
-| landmark sigma | shoulder | pelvis | X-factor | reported ± | worst error |
-| -------------- | -------- | ------ | -------- | ---------- | ----------- |
-| 0.0 px         | 92.0°    | 45.0°  | 47.0°    | 0.0°       | 0.0°        |
-| 1.0 px         | 92.3°    | 44.6°  | 47.3°    | 1.1°       | 0.9°        |
-| 2.7 px         | 91.6°    | 44.5°  | 47.2°    | 3.0°       | 0.5°        |
-| 5.0 px         | — no swing detected: **Phase 4 refuses the clip** | | | | |
+| landmark sigma | shoulder                                          | pelvis | X-factor | reported ± | worst error |
+| -------------- | ------------------------------------------------- | ------ | -------- | ---------- | ----------- |
+| 0.0 px         | 92.0°                                             | 45.0°  | 47.0°    | 0.0°       | 0.0°        |
+| 1.0 px         | 92.3°                                             | 44.6°  | 47.3°    | 1.1°       | 0.9°        |
+| 2.7 px         | 91.6°                                             | 44.5°  | 47.2°    | 3.0°       | 0.5°        |
+| 5.0 px         | — no swing detected: **Phase 4 refuses the clip** |        |          |            |             |
 
 Truth: 92 / 45 / 47. The last row is the finding: **at 5 px of scatter the
 reconstruction is fine and the phase detector is not**, so there is no instant to
@@ -1141,7 +1141,7 @@ Nothing is cached, for the same measured reason as Phase 3.
 
 - **9.2's two checks are not equals, and finding that out corrected this
   phase's own design.** Left-right symmetry was built on the reasoning that a
-  consistent depth bias would give a *stably* wrong bone length that the
+  consistent depth bias would give a _stably_ wrong bone length that the
   variation check could not see. Measured, that reasoning is wrong: a swing
   rotates the body, so a displacement constant in the camera's frame is not
   constant relative to the bone. Displacing one elbow 5 cm along the optical axis
@@ -1172,7 +1172,7 @@ Nothing is cached, for the same measured reason as Phase 3.
 - **3D velocity is not a finite difference of the reconstructed track.**
   Differentiating the triangulation's least-squares condition through time gives
   `X_dot = (J'J)^-1 J' x_obs_dot`, which assembles the 3D velocity from the two
-  views' *fitted* image velocities. That is Phase 3's rule — a derivative comes
+  views' _fitted_ image velocities. That is Phase 3's rule — a derivative comes
   from the fit, never from differencing what the fit produced — applied one layer
   up, and it is exact at a converged reconstruction.
 - **The pixel sigma that drives every uncertainty is measured from the clip**,
@@ -1199,12 +1199,12 @@ Nothing is cached, for the same measured reason as Phase 3.
   ordinary noise levels, so the cameras moved to 3.4 m. And the clock offset is
   deliberately not a whole number of frames: at exactly 0.35 s every 120 fps
   reference instant maps onto an exact 60 fps target frame, so nearest-frame
-  pairing is *exact* and the sweep measuring what it costs measures zero.
+  pairing is _exact_ and the sweep measuring what it costs measures zero.
 - **A camera convention bug the reconstruction could not see.** `look_at` built
   with `cross(world_up, forward)` produces two cameras that are both upside down
   and mirrored. Triangulation is unaffected — the reference frame is merely
   rotated, and the measured error was zero — and Phase 4 caught it immediately,
-  because the hands reached their *lowest* point at the top of the backswing.
+  because the hands reached their _lowest_ point at the top of the backswing.
   There is now a test asserting the convention directly.
 - **No UI.** Phase 4 built an inspector because checking an event's timing needs
   the video frame by frame; a reconstruction is checked by its own bones and by
@@ -1232,15 +1232,307 @@ Nothing is cached, for the same measured reason as Phase 3.
   same swing, and Phase 8 that no real calibration footage exists. Everything
   above is synthetic, and the errors are a floor.
 
-## Phase 10 — Club tracking ⬜
+## Phase 10 — Club tracking ✅
 
-- [ ] 10.1 `ClubDetector` Protocol + `ClubFrame` contract
-- [ ] 10.2 ROI → Canny → probabilistic Hough → geometric filtering
-- [ ] 10.3 Temporal tracking + occlusion handling
-- [ ] 10.4 Club-head position + trajectory
-- [ ] 10.5 Overlay rendering
-- [ ] 10.6 Tests: synthetic shafts, blurred, occluded
-- [ ] 10.7 Measure detection rate and per-frame cost; commit
+`python/analyzer/club/{detector,hough,geometry,track,extract}.py` ·
+[ADR-0014](decisions/ADR-0014-club-evidence-and-coverage.md)
+
+The first thing this engine measures that is **not a body**. Everything below
+reads landmarks a model was trained to find, which arrive carrying the model's
+own opinion of how well it saw them. A golf shaft has no model, no landmark index
+and no reported visibility — it has edges. The phase's argument is the shape
+Phases 8 and 9 both found one and two layers down, and it is two different facts:
+the number a line detector reports about itself ranks a door frame above a golf
+club, and it does so most decisively in the frames that matter most.
+
+- [x] **10.1 `ClubDetector` Protocol + `ClubFrame` contract** — a shaft reported
+      as a **ray from the hands**: an origin the pose layer supplies, a direction
+      the image determines, and a length it frequently does not. `ClubFrame`
+      carries an observation or a named reason there is none, for every frame
+- [x] **10.2 ROI → Canny → probabilistic Hough → geometric filtering** — Canny
+      thresholds from the searched region's own median rather than fixed; every
+      bound stated in torso lengths; `support` measured along the ray **from the
+      hands**, which makes "the shaft reaches the grip" a measurement instead of
+      a second threshold
+- [x] **10.3 Temporal tracking + occlusion handling** — seeded where the evidence
+      is best and grown outward, not started at frame zero. The predicted
+      direction **scores** candidates and never **supplies** one, so an occluded
+      frame emits nothing and leaves a visible hole
+- [x] **10.4 Club-head position + trajectory** — emitted only where the evidence
+      ran to the end of the club, which on a smeared downswing is a minority of
+      frames. Plus a club-head impact estimate, independent of Phase 4's and
+      deliberately not replacing it
+- [x] **10.5 Overlay rendering** — `scripts/overlay_club.py`, drawing the tracked
+      shaft, the rival it was chosen over, the head trail over observed frames
+      only, and **the refused frames stamped with the reason**
+- [x] **10.6 Tests** — 91 added (all pytest; 814 → 905): a rendered shaft at
+      known angles, blurred, occluded and cluttered; the tracker against
+      constructed evidence; the whole path through a real container
+- [x] **10.7 Measure detection rate and per-frame cost; commit**
+
+**Measured** (`scripts/benchmark_club.py`, Apple M1 Pro / macOS 26.4.1). A shaft
+drawn at an angle that is an input, smeared by a declared exposure. **A floor,
+not an estimate**: no defocus, no compression, a flat background, and a club 1.1
+torso lengths long where a real one is about 2.5 — a longer lever smears
+proportionally more.
+
+The headline is the gap between two numbers a reader would assume are the same.
+Coverage per swing phase at 120 fps, against the exposure as a fraction of the
+frame interval:
+
+| shutter | max smear | overall | address | backswing | **DOWNSWING** | follow | err p95 |
+| ------- | --------- | ------- | ------- | --------- | ------------- | ------ | ------- |
+| 0.03    | 0.8 px    | 100%    | 100%    | 99%       | **100%**      | 100%   | 0.63°   |
+| 0.125   | 3.5 px    | 99%     | 100%    | 99%       | **100%**      | 98%    | 0.69°   |
+| 0.25    | 6.9 px    | 93%     | 100%    | 98%       | **83%**       | 73%    | 0.79°   |
+| 0.5     | 13.9 px   | 86%     | 100%    | 93%       | **65%**       | 62%    | 1.15°   |
+| 1.0     | 27.7 px   | 64%     | 100%    | 58%       | **25%**       | 23%    | 1.18°   |
+
+A tracker reporting "64% coverage" has tracked a quarter of the downswing. The
+address column is 100% in every row and is a large share of the aggregate, so it
+carries no information about the capture at all — which is why coverage is
+reported per phase and `ClubTrackingReport.coverage` is documented as the number
+**not** to read alone.
+
+**Blur is a cliff, not a decline**, and that is what makes it a capture problem
+with no processing fix:
+
+| smear at the head | found    | support | angle error |
+| ----------------- | -------- | ------- | ----------- |
+| 0.0 px            | **100%** | 1.00    | 0.44°       |
+| 4.8 px            | **100%** | 1.00    | 0.88°       |
+| 9.6 px            | **100%** | 1.00    | 0.90°       |
+| 14.4 px           | **0%**   | —       | —           |
+| 28.8 px           | **0%**   | —       | —           |
+
+An exposure draws a rotating club as a fan with no edge in it. Where the club is
+found the angle is right to about half a degree, and where it is not, lowering a
+threshold recovers nothing — so there is deliberately no sensitivity setting in
+`ClubConfig` trading detection rate against accuracy. There is nothing to trade.
+
+**The shutter is the lever; the frame rate is not.** Holding the exposure at
+1/500 s rather than at a fraction of the interval:
+
+| fps | 1/4 shutter: smear / overall / downswing | 1/500 s: smear / overall / downswing |
+| --- | ---------------------------------------- | ------------------------------------ |
+| 30  | 27.6 px / 62% / —                        | 6.6 px / 96% / —                     |
+| 60  | 13.8 px / 87% / 62%                      | 6.6 px / 97% / **92%**               |
+| 120 | 6.9 px / 92% / 81%                       | 6.7 px / 96% / **90%**               |
+| 240 | 3.5 px / 100% / 99%                      | 6.7 px / 96% / **88%**               |
+
+Four times the frames buy nothing once the shutter is fixed. The 30 fps rows have
+no downswing column because no swing is detected there at all — Phase 3's window
+floor reappearing, rather than anything about the club.
+
+**What the temporal check is worth**, against picking the best-supported
+candidate, which is what a Hough transform ranks by and what a per-frame detector
+_is_:
+
+| background lines | tracker: kept / wrong | evidence only: kept / wrong |
+| ---------------- | --------------------- | --------------------------- |
+| 0                | 289 / **0**           | 296 / **0**                 |
+| 1                | 285 / **0**           | 294 / **4**                 |
+| 2                | 285 / **0**           | 294 / **7**                 |
+| 3                | 277 / **0**           | 297 / **15**                |
+| 4                | 279 / **0**           | 298 / **17**                |
+
+The tracker keeps about 20 fewer frames and gets all of them right. A vertical
+line through the hands scores **the same support as the club and more length**,
+so evidence alone ranks it first — and once the club smears it is the only
+candidate left. What separates them is that a door frame does not rotate.
+
+**The case it does not handle, and cannot see.** A rectangular occluder's
+boundary is a long straight line; where it runs near the hands it is sharp,
+stationary and, once the real club is hidden behind it, unopposed:
+
+| occluder    | tracked | downswing | wrong | **conf. when wrong** | head seen |
+| ----------- | ------- | --------- | ----- | -------------------- | --------- |
+| nothing     | 93%     | 79%       | 0     | —                    | 97%       |
+| upper third | 54%     | 44%       | 18    | **0.98**             | 8%        |
+| upper half  | 47%     | 31%       | 4     | **0.81**             | 97%       |
+| a wide band | 64%     | 38%       | 0     | —                    | 100%      |
+
+Those eighteen frames score 0.98 against the 0.99 a correct frame carries. All
+three factors are satisfied and the answer is the occluder's edge; continuity
+cannot reject a stationary line the tracker is _already on_, because such a line
+agrees perfectly with a prediction extrapolated from two frames already on it.
+Recorded rather than fixed, the way Phase 7 recorded that Phase 4's event
+confidence does not detect a badly located event. The two things that would catch
+it — a rule that the shaft must rotate during the backswing, and a detector that
+has seen a half-occluded club — are a golf norm and a learned model respectively,
+and both need the labelled set Phase 12 builds.
+
+**Impact from the club head, against Phase 4's hand-speed peak:**
+
+| shutter | downswing coverage | club head | kinematic | delta    |
+| ------- | ------------------ | --------- | --------- | -------- |
+| 0.03    | 100%               | 203       | 204       | −1 frame |
+| 0.125   | 100%               | 203       | 204       | −1 frame |
+| 0.25    | 83%                | refused   | —         | —        |
+| 0.5     | 69%                | refused   | —         | —        |
+| 1.0     | 27%                | refused   | —         | —        |
+
+Refused wherever the downswing was not more than half tracked, which is most of
+the table. The two rows that answer agree with Phase 4 to a frame — and that is a
+check of the **arithmetic**, not of the physics: this fixture puts the hands' peak
+speed and the club head's lowest point at the same instant by construction. On
+real footage the hands peak first, which is the whole reason two estimates are
+worth having.
+
+**Cost:** 6.2 ms/frame to detect over a search region of 3.2 torso lengths (the
+whole frame on this fixture), and 4.0 ms to track a 312-frame clip once the
+candidates exist. Against ~17 ms/frame to extract the poses that must come first.
+Nothing is cached, for the same measured reason as Phase 3.
+
+**On real footage, and this is the part worth reading.** The tour-pro clips are
+the only recordings here a club can be looked for in, and they are 30 fps
+social-media reposts of slow-motion captures — the worst case the tables above
+describe. `rory_face_on.mp4` at a factor of 7:
+
+| phase          | tracked | coverage | median confidence | club-head speed |
+| -------------- | ------- | -------- | ----------------- | --------------- |
+| address        | 27/161  | 17%      | 0.54              | 6,233 px/s      |
+| backswing      | 56/142  | 39%      | 0.61              | 5,765 px/s      |
+| downswing      | 18/78   | **23%**  | 0.69              | 8,744 px/s      |
+| follow-through | 23/145  | 16%      | 0.68              | 8,690 px/s      |
+
+21% clip-wide, in 29 separate runs, with the club head reached in 16% of tracked
+frames. The clip reports up to **217 px** of smear at a 360-degree shutter, which
+is twenty times the bound the blur sweep measured — so most of this clip could
+not have been tracked by anything of this kind, and the system says so rather
+than producing a line anyway.
+
+**Checked by eye with `scripts/overlay_club.py`, the tracked frames are the
+club.** At address the ray runs from the hands down the shaft to the ball; in the
+downswing it lies along the shaft to the head. That is the confirmation the
+overlay exists for, and it is not something any number in the report could have
+supplied.
+
+**And the failure the synthetic occlusion sweep predicted is there, in the real
+clip, at the confidence it predicted.** Nine of the 139 tracked frames — 6.5% —
+follow the vertical **edge of the yardage sign** behind the player rather than
+the club, at a median confidence of **0.98**. The sign's edge is long, sharp,
+stationary and passes through the hands at the finish, exactly where the club has
+gone behind the player's head; there is no rival to bring the margin down and a
+stationary line matches a prediction extrapolated from two frames already on it.
+All nine fall _after_ the detected swing, so per-phase coverage happens not to
+report them — which is luck rather than design, and is recorded as such.
+
+The down-the-line clip inverts the usual ordering, which is worth knowing: 8%
+clip-wide but **25% through the downswing**, its best-covered phase. Down the
+line the club points towards the camera at address and is foreshortened past the
+minimum length, so "detection is easiest where the club is slowest" turns out to
+be a face-on observation rather than a general one.
+
+**Deliberate deviations from the original plan:**
+
+- **The detector is stateless and the tracker is offline, which inverts the seam
+  Phase 2 established.** `PoseEstimator` documents that implementations are
+  stateful and must be called in increasing timestamp order. A `ClubDetector`
+  sees one frame, knows nothing about any other, and returns **every** candidate
+  rather than a decision. That is what makes the seeding possible — the track
+  starts where the evidence is best, which is address or the top, and grows into
+  the downswing, where a forward-only tracker would arrive carrying whatever it
+  had picked up on the way. It is Phase 4's nested searches one layer along. It
+  also removes the failure that makes classical trackers untrustworthy: a
+  detector told what the tracker believes narrows its search towards it, confirms
+  it, and narrows further.
+- **`margin` is measured on `support × continuity`, not on evidence alone**, and
+  that was a decision rather than an implementation detail. The question it
+  answers is "given everything known at this frame, was the choice clear". At a
+  frame where a smeared club sits at 0.6 support against a door frame at 1.0, the
+  choice _is_ clear, because the door frame scores nothing on continuity —
+  scoring the margin on evidence alone reports that frame as ambiguous and
+  refuses a **correct** detection at exactly the point in the swing where this
+  phase is hardest.
+- **Both ends of a line through the hands are offered as candidates.** A door
+  frame and a club pointing the other way are the same pixels, so taking the
+  farther endpoint silently picks one — and measured, it picked wrong for runs of
+  several frames and reported it at a confidence of 1.00. Offering both puts them
+  against each other: with no prediction the margin collapses and the frame is
+  refused, and with a tracked neighbour the prediction separates them.
+- **The transform is asked for _fragments_, not shafts**, and conflating the two
+  cost the club entirely on the first pass. `ClubConfig.min_shaft_length_torso`
+  is how far a shaft must reach **from the hands**; Hough's `minLineLength` is how
+  long one unbroken run of collinear edge pixels must be, and an antialiased
+  diagonal does not produce one long run. A clean 275-pixel shaft came back as
+  four fragments of 100–200 px, every one of which a 200-pixel minimum discarded
+  — reporting "no candidate" with the club in plain view under 779 edge pixels.
+  The transform now gets a quarter of the bound and the geometry measures the
+  thing the bound is about.
+- **`support` is measured in a band around the ray, because a bar has no edge
+  down its middle.** Canny finds the two _sides_ of a shaft and the ray from grip
+  to tip runs between them: sampled on the ray alone a clean shaft scores 0.005,
+  and 1.000 once the band covers its own thickness. The band scales with the
+  torso, because the shaft's apparent thickness does.
+- **A rate is never measured across a tracking gap.** Nothing says how many
+  half-turns the shaft made while unobserved, which is the same reason
+  `unwrap_deg` refuses to carry phase across a break. Taking the nearest tracked
+  neighbour across a three-frame hole reported **8,050 °/s on a club turning at
+  700**; adjacent frames only, and a frame beside a gap gets a one-sided rate.
+- **A frame the temporal check rejected may not be re-seeded.** The first version
+  of the growth loop re-seeded any unassigned frame, and a seed is accepted on
+  evidence alone — so a shaft jumping 157° in one frame at 120 fps was refused as
+  `DISCONTINUOUS` by the walk and then re-admitted by the next seed at a
+  confidence of 1.0. Seeding is now only for frames with no tracked neighbour
+  inside the prediction window, which is exactly the set that has not already
+  been judged.
+- **The club-head impact estimate is gated on downswing coverage**, not on
+  anything local to itself. Without that gate a clip whose head blurred away
+  through impact reports the lowest point of whatever survived — measured, **38
+  frames late**, with both local checks passing: the minimum sat inside the
+  observed set and its neighbours were adjacent frames. Only the coverage of the
+  phase the minimum was supposed to fall in can see that.
+- **No lens correction is applied, and the half-measure is what is ruled out.**
+  Every other consumer of `filter_sequence` undistorts the landmarks when a
+  calibration exists. Doing that here would be actively wrong: the detector
+  searches the **raw** frame, so an undistorted anchor points at a place in the
+  image where the hands are not. Correcting properly means undistorting the
+  frame, and it matters for a second reason a landmark does not have — a straight
+  club in the world is a _curved_ line in a distorted image, so the straight-line
+  model the transform rests on is itself violated near the frame edge.
+- **The per-frame observations cross the engine boundary**, which departs from
+  `PoseExtractionResult` and `ReconstructionReport`. Two things make this the
+  different case: a club track is _one_ object per frame rather than 33 landmarks
+  in two spaces, so a swing's worth is kilobytes where a pose sequence is
+  megabytes; and a detector is checked by **drawing** it, so a report that omitted
+  the geometry would force every consumer to re-run the detection to see it.
+- **`ClubTrackingReport` is not exported to TypeScript.** It is reachable over RPC
+  and from `analyzer club`, and no UI renders it — the club overlay canvas is
+  Phase 14.5, which is where it earns an export. Same reasoning that kept
+  `SequenceFilterReport` out until Phase 4 built its panel and `Project` out until
+  Phase 14.1.
+- **No UI, and `scripts/overlay_club.py` is the deliverable for 10.5.** Phase 4
+  built an inspector because checking an event's _timing_ needs the video frame by
+  frame; a detector is checked by drawing its output on the frame it came from,
+  which is what Phase 5 and Phase 9 concluded too. The overlay writes the refused
+  frames as well as the tracked ones, because a contact sheet of only the
+  successes would show a tracker that works.
+- **`pixels_to_frame_widths` was added to `coordinates.py`**, and it is the first
+  time that direction has been needed. Every layer up to here measured landmarks a
+  model had already normalised, so pixels were something the system converted
+  _to_, for drawing. Club tracking is the first thing that takes a measurement off
+  the pixel grid itself.
+- **A shaft angle is a direction and is unwrapped; a shoulder line is an
+  orientation and is folded.** The two operations are opposites, they now both
+  exist in this codebase, and a reader who confuses them gets a plausible number
+  either way — so each says in its own docstring which kind of object it is for.
+  A swing carries the shaft through more than a full turn and across ±180 exactly
+  once, in the downswing.
+- **No club-head speed metric, and no shaft-plane metric.** Phase 6.2 deferred
+  "shaft orientation and club path" here, and what this phase can honestly supply
+  is a shaft **direction**, well determined, in the frames where the club was
+  found. A club-head speed needs a length the image frequently does not contain,
+  and a club path needs the head observed through the downswing, which is exactly
+  where it is not. The biomechanics registry is unchanged; promoting a shaft angle
+  into a `Metric` needs a decision about what a metric measured in 44% of a
+  downswing means, and that belongs with the coverage gate rather than beside it.
+- **Club tracking has never been run on real footage.** No clip in this
+  repository has been club-tracked and checked by eye, because the reference
+  clips are 24–30 fps with the hands already lost to motion blur through the
+  downswing — Phase 4 refuses one of them outright for that reason. One command
+  finishes this once a fast-shutter clip exists:
+  `uv run --project python python scripts/overlay_club.py <clip> --video`
 
 ## Phase 11 — Ball detection ⬜
 

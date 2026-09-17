@@ -161,6 +161,35 @@ def frame_widths_to_pixels(
     return np.stack((x, y), axis=-1)
 
 
+def pixels_to_frame_widths(
+    points: NDArray[np.float64], geometry: FrameGeometry
+) -> NDArray[np.float64]:
+    """Displayed pixel coordinates to frame widths. The inverse of the above.
+
+    Takes `(..., 2)` and returns `(..., 2)`.
+
+    This direction appears later than the others because nothing needed it until
+    Phase 10. Every layer up to there measured landmarks a model had already
+    normalised, so pixels were something the system converted *to*, for drawing.
+    Club tracking is the first thing in this engine that takes a measurement off
+    the pixel grid itself -- a line found by a Hough transform is in pixels and
+    in nothing else -- so it is the first thing that has to come back the other
+    way.
+
+    Pixels are themselves isotropic, which is worth stating because it is the
+    reason this is a scale and a flip rather than the two-part correction
+    `image_to_frame_widths` performs. The anisotropy IMAGE space suffers from is
+    an artefact of dividing the two axes by different numbers; the grid a decoder
+    hands over does not have it, so an angle measured in pixels is already the
+    angle in the picture and survives this conversion up to the sign of y.
+    """
+    scale = float(geometry.width)
+    converted = np.asarray(points, dtype=np.float64)
+    x = converted[..., 0] / scale
+    y = (float(geometry.height) - converted[..., 1]) / scale
+    return np.stack((x, y), axis=-1)
+
+
 def image_to_pixels(points: NDArray[np.float64], geometry: FrameGeometry) -> NDArray[np.float64]:
     """Normalised IMAGE coordinates to displayed pixels, origin top-left."""
     converted = np.asarray(points, dtype=np.float64)

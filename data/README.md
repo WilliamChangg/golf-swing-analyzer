@@ -60,6 +60,20 @@ The tour-pro clips found two defects the amateur footage could not, because they
 contain a full turn and a slow-motion clock. Both are recorded in
 [../docs/decisions/ADR-0010-projected-biomechanics.md](../docs/decisions/ADR-0010-projected-biomechanics.md).
 
+Both tour clips have now been club-tracked, and they found the failure the
+synthetic sweeps predicted. `rory_face_on.mp4` tracks 21% of frames clip-wide in
+29 separate runs, and nine of the 139 tracked frames follow the vertical **edge
+of the yardage sign** behind the player rather than the club — at a median
+confidence of 0.98. Checked against the frames with `scripts/overlay_club.py`,
+everything else is genuinely the shaft. The clip reports up to 217 px of
+club-head smear at a 360-degree shutter, twenty times the ten-pixel bound, which
+is why most of it is refused.
+
+`dtl/rory_dtl.mp4` inverts the usual ordering: 8% clip-wide but 25% through the
+downswing, its best-covered phase. Down the line the club points towards the
+camera at address and is foreshortened past the minimum length, so "the club is
+easiest to find where it is slowest" turns out to be a face-on observation.
+
 `face-on/rory_face_on.mp4` also carries the only **observed** impact in the
 project: the ball is on the tee at frame 360 and gone at frame 361. Phase 4's
 kinematic estimate is the only thing in the pipeline that can be checked against
@@ -110,7 +124,7 @@ across that range, which is why the system gates on the angle and refuses below
 | Setting        | Recommendation               | Why                                                                                                          |
 | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | Frame rate     | **≥ 120 fps**, 240 preferred | Downswing lasts ~0.25 s; at 30 fps that is ~8 frames total, far too coarse to locate impact or measure tempo |
-| Shutter speed  | **1/1000 s or faster**       | Limits motion blur on the club head, which classical shaft detection depends on                              |
+| Shutter speed  | **1/1000 s or faster**       | Measured: shaft detection dies above ~10 px of smear, and it is a cliff. See below                           |
 | Resolution     | 1080p is sufficient          | Frame rate and shutter matter far more than resolution                                                       |
 | Stabilisation  | **Off**                      | Digital stabilisation warps the frame non-rigidly, corrupting geometry                                       |
 | Focus/exposure | Locked                       | Refocus mid-swing changes apparent scale                                                                     |
@@ -123,9 +137,65 @@ across that range, which is why the system gates on the angle and refuses below
   and destroys landmark confidence.
 - Uncluttered background. Vertical lines behind the player (door frames, fence
   posts, window mullions) are the main false-positive source for Hough-based
-  shaft detection.
+  shaft detection, and that is now measured rather than asserted: a door frame
+  passing through the hands scores **the same edge support as the club and more
+  length**, so evidence alone ranks it first. What rescues it is that a door
+  frame does not rotate — see below.
 - Clothing that contrasts with the background; avoid very loose garments, which
   hide joint positions.
+
+### Filming so the club can be tracked (Phase 10)
+
+The club is the fastest thing in the frame and the only thing in it with no model
+behind it — a shaft is found by its edges, and motion blur destroys edges. That
+makes the shutter the single setting that decides whether club tracking works,
+and the bound is measured rather than advised
+(`scripts/benchmark_club.py --sweep blur`):
+
+| smear at the club head | shaft found | angle error |
+| ---------------------- | ----------- | ----------- |
+| 0 px                   | **100%**    | 0.4°        |
+| 5 px                   | **100%**    | 0.9°        |
+| 10 px                  | **100%**    | 0.9°        |
+| 14 px                  | **0%**      | —           |
+| 29 px                  | **0%**      | —           |
+
+**It is a cliff, not a decline.** A smeared shaft does not become a weaker line,
+it stops being a line: an exposure draws a rotating club as a fan with no edge in
+it. Where the club is found the angle is right to about half a degree, and where
+it is not, no setting recovers it. There is deliberately no sensitivity option
+that trades detection rate against accuracy, because there is nothing to trade.
+
+Smear is `club-head speed in the image x exposure time`, so the arithmetic is
+yours to do before you press record. A club head crossing 8,000 px/s on a 1080p
+frame — an ordinary tour-speed swing at ordinary framing — needs an exposure
+under about 1/800 s to stay inside the bound. That is where the 1/1000 s in the
+table above comes from.
+
+**Nothing in a video file records the exposure**, so the system cannot measure
+your shutter. What it reports instead is `max_blur_px`: the club head's measured
+image speed times the frame interval, which is the smear at a 360° shutter — the
+worst any camera does — and therefore an upper bound. A shutter _n_ times faster
+than the frame interval divides it by _n_.
+
+**The frame rate is a second, weaker lever.** More frames make each exposure
+shorter only if the camera is already shutter-limited by them, and they do not
+help a camera that is exposing for the whole interval in poor light. Bright
+light is what buys a fast shutter. Film outside.
+
+**A clip's overall detection rate is not the number to read.** Detection is easy
+at address, where the club is stationary, and address plus the follow-through are
+most of a clip. The downswing is where every metric worth computing lives and it
+is the part that fails first:
+
+| shutter         | overall | address | **downswing** |
+| --------------- | ------- | ------- | ------------- |
+| 1/4 of interval | 93%     | 100%    | **83%**       |
+| 180° (1/2)      | 86%     | 100%    | **65%**       |
+| 360° (full)     | 64%     | 100%    | **25%**       |
+
+`analyzer club <clip>` prints the per-phase table first for that reason. If the
+downswing row is low, the shutter is the thing to change.
 
 ### Synchronising the two cameras
 
@@ -203,7 +273,7 @@ software can check.
 Generate the board here rather than downloading one. A pattern from a website is
 a pattern whose dictionary, square count and marker layout are all guesses, and
 OpenCV changed the Charuco layout in 4.6 — a board from an older generator
-produces corners in the *wrong places* rather than no corners at all, which is
+produces corners in the _wrong places_ rather than no corners at all, which is
 much the worse failure.
 
 ### Capturing a camera
@@ -226,18 +296,18 @@ exactly what Charuco tolerates and a plain chessboard does not.
 **Vary the distance.** The calibration otherwise describes the lens at one
 working distance.
 
-| what to vary   | why                                       | the bound     |
-| -------------- | ----------------------------------------- | ------------- |
-| tilt           | separates focal length from distance      | ≥ 20° spread  |
-| position       | distortion is measurable only off-centre  | ≥ 35% of frame |
-| distance       | one distance measures one working distance | reported      |
-| number of views | 8 well-spread views reach 0.08% focal error | ≥ 8         |
+| what to vary    | why                                         | the bound      |
+| --------------- | ------------------------------------------- | -------------- |
+| tilt            | separates focal length from distance        | ≥ 20° spread   |
+| position        | distortion is measurable only off-centre    | ≥ 35% of frame |
+| distance        | one distance measures one working distance  | reported       |
+| number of views | 8 well-spread views reach 0.08% focal error | ≥ 8            |
 
 Twenty views buy 0.02% against eight views' 0.08%. Spread matters far more than
 count, which is why the system measures spread directly.
 
 **Calibrate at the setting you will film at.** A calibration belongs to a camera
-*and* a zoom, lens and capture resolution. Frame size is the only part of that a
+_and_ a zoom, lens and capture resolution. Frame size is the only part of that a
 file records, and the system refuses a calibration applied to footage of a
 different size; zoom and lens changes leave no trace at all. Use `--notes` to
 record what the file cannot.
@@ -288,7 +358,7 @@ points — bone lengths, true joint angles, speeds in metres per second, and
 rotations about the body's own spine axis — because none of those depends on the
 frame they are expressed in.
 
-What it does not give is a *scene* frame, because nothing in the capture says
+What it does not give is a _scene_ frame, because nothing in the capture says
 which way is up or which way the shot goes. The cost is specific: a **3D forward
 spine tilt**, the posture angle a coach actually talks about, needs a vertical
 and so is not produced.

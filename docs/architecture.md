@@ -112,20 +112,23 @@ phases/         swing event detection
 sync/           relating two cameras' clocks to each other
 calibration/    what a pixel means: the lens, and where the cameras stand
 reconstruction/ where two calibrated rays meet: metres, in three dimensions
+club/           the shaft: a ray from the hands, and when to emit nothing
 biomechanics/   measured metrics, with units, confidence and methodology
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `coaching` as a sibling package, and Protocol-typed seams
-(`ClubDetector`, `BallDetector`) following `ingestion`'s `FrameSource`, `pose`'s
-`PoseEstimator` and `filtering`'s `FilterStage`. Golf-specific reasoning is
-confined to `phases`, `sync`, `biomechanics` and `coaching`; everything below is
-general computer vision that would serve any moving body. `sync` is the
-marginal member of that set: its mechanism — an affine time map and a masked
-cross-correlation — would align any pair of recordings of anything, and only its
-choice of signal (hand speed, and the four named swing events) is golf-specific.
+Later phases add `coaching` as a sibling package, and a `BallDetector` seam
+following `ingestion`'s `FrameSource`, `pose`'s `PoseEstimator`, `filtering`'s
+`FilterStage` and `club`'s `ClubDetector`. Golf-specific reasoning is confined to
+`phases`, `sync`, `club`, `biomechanics` and `coaching`; everything below is
+general computer vision that would serve any moving body. `sync` and `club` are
+the marginal members of that set. `sync`'s mechanism — an affine time map and a
+masked cross-correlation — would align any pair of recordings of anything, and
+only its choice of signal (hand speed, and the four named swing events) is
+golf-specific; `club`'s would follow any rigid rod held in a pair of hands, and
+only the assumption that there is one is about golf.
 
 `projects` sits apart from the rest, because it holds the only state here that
 cannot be recomputed. Everything else is either input the user already has or a
@@ -437,7 +440,7 @@ stays at 0.21–0.27 px across a range over which the focal length error moves f
 
 **The principled-looking replacement fails backwards.** OpenCV returns a standard
 deviation for every intrinsic, propagated through the fit's Jacobian, and the
-design here assumed that would catch it. It is *smallest* where the answer is
+design here assumed that would catch it. It is _smallest_ where the answer is
 worst — 0.012% on a capture wrong by 6% — because the distortion coefficients
 absorb the degeneracy and leave a tightly determined wrong answer. A covariance
 computed from one set of views cannot see outside them.
@@ -456,7 +459,7 @@ CoverageReport        what the views could possibly determine   the gate
 values rather than two so that nothing can read it as one. `INTRINSICS` means the
 lens can be removed from a landmark — worth 171 px at the frame edge on an
 ordinary phone, inherited by every angle and distance measured above it — and
-means a pixel is a known *direction*. It is not a position: the distance along
+means a pixel is a known _direction_. It is not a position: the distance along
 that direction is exactly what the projection destroyed. `apply.bearings` returns
 unit vectors for that reason, and there is deliberately no function here that
 returns a 3D point. Two of those rays meet, and that is Phase 9.
@@ -485,7 +488,7 @@ either way, which is why the system measures this rather than advising it.
 The one failure a clock cannot catch is aliasing — board stations a second apart
 with an offset wrong by exactly a second pair each frame with its neighbour,
 simultaneous to the millisecond and showing the board in two different places.
-The fit's residual catches that, so stereo *does* gate on reprojection error:
+The fit's residual catches that, so stereo _does_ gate on reprojection error:
 there it is measuring a correspondence rather than a model's fit to its own data.
 
 ## Multi-view 3D reconstruction
@@ -497,8 +500,8 @@ below it, its central finding is a negative.
 **The reprojection residual is blind along the epipolar line.** A point detected
 in camera 1 defines a ray, and every 3D point on that ray projects into camera 2
 along a single line. Split camera 2's detection error into two components: the
-part *across* that line has no 3D explanation and lands in the residual, and the
-part *along* it is explained perfectly by a point further up or down the ray. The
+part _across_ that line has no 3D explanation and lands in the residual, and the
+part _along_ it is explained perfectly by a point further up or down the ray. The
 first is visible, the second is invisible, and the second is the one that moves
 the answer in depth.
 
@@ -534,7 +537,7 @@ residual flat at 0.84 px. [ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
 
 **Bone length is the independent check**, because a point sliding along its ray
 changes its distance to its neighbours, and a bone does not change length during a
-swing. It needs no ground truth and no anatomical table: the *variation* across a
+swing. It needs no ground truth and no anatomical table: the _variation_ across a
 clip is error whatever the absolute value is.
 
 ```
@@ -562,6 +565,97 @@ laid the board flat on the ground, which the protocol does not currently ask for
 Every length, angle and speed between two reconstructed points is unaffected,
 because none of them depends on the frame — which is why the spatial metrics are
 rotations about the body's own measured spine axis rather than about a vertical.
+
+## Club tracking
+
+The first layer that measures an **object the player is holding** rather than the
+player. Everything below reads landmarks a model was trained to find, which
+arrive with the model's own opinion of how well it saw them. A golf shaft has no
+model, no landmark index and no reported visibility. It has edges, and the whole
+of this layer is about what edges can and cannot be asked.
+
+```
+video frame + hand anchor
+  └─ roi        a disc of 3.2 torso lengths around the hands
+      └─ canny  thresholds from the region's own median, not fixed
+          └─ hough_p   line fragments, not shafts
+              └─ geometry  which fragments could be a club somebody is holding
+                  └─ track   one per frame, or a named reason there is none
+```
+
+**A shaft is a ray from the hands: an origin, a direction, and often no length.**
+Those three are not equally trustworthy and the contract keeps them apart. The
+origin is supplied by the pose layer, the direction is determined well — half a
+degree, wherever the club is found at all — and how far along the ray the club
+_ends_ is frequently not determined at all. That is Phase 8's split in a
+different medium: `apply.bearings` returns unit vectors and offers no function
+turning one into a point, because a calibrated pixel is a direction and the
+distance along it is what the projection destroyed. Here the distance is what
+motion blur destroyed, and `reaches_head` says whether the question was answered.
+
+Two things shorten a segment and one view cannot separate them: the head was
+smeared, or the club was pointing at the camera and is genuinely short in the
+picture — the same foreshortening Phase 5 measures rotation from. A stereo pair
+would separate them.
+
+**Three numbers, each labelled with the question it answers**, which is the shape
+Phases 8 and 9 both arrived at because the failure is the same shape again:
+
+```
+support        how much edge evidence backs this line        the fit
+margin         whether anything else in frame fits as well   a check
+phase coverage whether the frames that matter have any       the gate
+```
+
+**Support is not the quality, and through the downswing it is anti-correlated
+with correctness.** A Hough transform prefers whatever is longest, straightest
+and sharpest. The club is the fastest thing in the frame and therefore the
+blurriest; the door frame behind the player is stationary and stays sharp. So
+evidence ranks the background _above_ the club exactly where the club matters
+most — measured, a door frame through the hands scores the same support and more
+length than a sharp club, and is the only candidate left once the club smears.
+
+**The aggregate detection rate hides the downswing**, and that is the second
+finding rather than a restatement of the first. Detection is easy where the club
+is slow, and address plus the follow-through are most of a clip:
+
+| shutter         | overall | address | **downswing** |
+| --------------- | ------- | ------- | ------------- |
+| 1/4 of interval | 93%     | 100%    | **83%**       |
+| 180°            | 86%     | 100%    | **65%**       |
+| 360°            | 64%     | 100%    | **25%**       |
+
+The address column carries no information about the capture at all.
+[ADR-0014](decisions/ADR-0014-club-evidence-and-coverage.md).
+
+**The detector is stateless and the tracker is offline**, which is the opposite
+of `PoseEstimator` and is what Phase 4's nested searches buy one layer along. A
+frame-by-frame tracker starts at frame zero and commits; this one runs over a
+clip that already exists, so it seeds where the evidence is **best** — address,
+or the top — and grows outward into the downswing, where a forward-only tracker
+would arrive carrying whatever it had picked up on the way. Keeping the detector
+unaware of the tracker's belief also removes the failure that makes classical
+trackers untrustworthy: a search narrowed by the current belief finds what it
+expects and confirms it.
+
+**The prediction scores candidates and never supplies one.** That is Phase 3's
+gap rule in a different medium: a value produced where there is no observation is
+an invention however smooth it looks, so a frame with nothing acceptable leaves a
+hole. Most of what this layer produces on consumer footage is holes.
+
+**Blur is a capture bound with no processing fix.** A smeared shaft does not
+become a weaker line, it stops being one — found in 100% of frames up to about
+9 px of smear and 0% past 14, with the angle right to half a degree either side
+of nothing. So there is no sensitivity setting that trades detection rate against
+accuracy, because there is nothing to trade. What the system reports instead is
+`max_blur_px`: the club head's measured image speed times the frame interval,
+which is the smear at a 360° shutter and an upper bound on what the clip actually
+carried, since nothing in a video file records the exposure.
+
+`club` sits with `phases`, `sync` and `biomechanics` on the golf-specific side of
+the line drawn above, and it is the second marginal member of that set for the
+reason `sync` is the first: its mechanism would follow any rigid rod held in a
+pair of hands, and only the assumption that there is one is about golf.
 
 ## Projects
 
@@ -625,7 +719,7 @@ benchmark measures both backends rather than assuming the hardware one wins.
 
 This generalises further: the system never reports a capability it has not
 measured. Phase 8 extends it to calibration, where the rule needed sharpening:
-a capability must be gated on evidence about the *capture*, not on the estimator's
+a capability must be gated on evidence about the _capture_, not on the estimator's
 opinion of its own fit. Both of the numbers a calibration reports about itself
 pass a capture whose focal length is wrong by tens of percent. Later phases apply
 the same rule to detector confidence gating club and ball output.
@@ -744,17 +838,17 @@ wrist — the errors are a **floor**.
 
 Accuracy over the eight landmarks that move, against isotropic landmark noise:
 
-| landmark sigma | median  | p95     | reprojection | uncertainty |
-| -------------- | ------- | ------- | ------------ | ----------- |
-| 0.5 px         | 1.0 mm  | 1.9 mm  | 0.16 px      | 1.0 mm      |
-| **2.7 px**     | **5.5 mm** | **10.4 mm** | 0.85 px | 5.4 mm  |
-| 5.0 px         | 10.1 mm | 19.3 mm | 1.55 px      | 10.1 mm     |
+| landmark sigma | median     | p95         | reprojection | uncertainty |
+| -------------- | ---------- | ----------- | ------------ | ----------- |
+| 0.5 px         | 1.0 mm     | 1.9 mm      | 0.16 px      | 1.0 mm      |
+| **2.7 px**     | **5.5 mm** | **10.4 mm** | 0.85 px      | 5.4 mm      |
+| 5.0 px         | 10.1 mm    | 19.3 mm     | 1.55 px      | 10.1 mm     |
 
 2.7 px is the 0.0014 frame widths Phase 3 measured on real footage, at 1920 px
 wide.
 
 The two sweeps that decided the design both show the residual refusing to move
-while the answer does — along the epipolar line it is *exactly* 0.00 px while the
+while the answer does — along the epipolar line it is _exactly_ 0.00 px while the
 error reaches 10.8 mm, and across a camera separation sweep from 90° to 8° it is
 flat at 0.84 px while the error grows 4.7x. See the section above and
 [ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
@@ -765,12 +859,12 @@ measured reason as Phase 3.
 
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (814)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
-| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                       |
-| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                 |
+| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (905)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction, club tracking |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                                                                                   |
+| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                                                       |
+| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                                                   |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

@@ -35,6 +35,7 @@ from analyzer.contracts.calibration import (
     CameraRig,
     StereoCalibration,
 )
+from analyzer.contracts.club import ClubTrackingReport
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.metrics import (
@@ -45,7 +46,7 @@ from analyzer.contracts.metrics import (
     MetricSet,
     MetricUnit,
 )
-from analyzer.contracts.phases import SwingPhases
+from analyzer.contracts.phases import SwingPhase, SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.projects import Project, ProjectList
@@ -1932,6 +1933,201 @@ def reconstruct(
     # Non-zero when nothing came out, so a script driving this learns that the
     # pair produced no positions rather than reading an empty report as success.
     if not result.reconstructed:
+        raise typer.Exit(code=1)
+
+
+def _render_club(result: ClubTrackingReport) -> None:
+    """Coverage per phase first, because the aggregate rate is the misleading one.
+
+    Laid out like the calibration and reconstruction reviews and for the same
+    reason a third time: a reader shown one headline number will take it for the
+    quality, and here that number is wrong in a predictable direction. Detection
+    is easy where the club is slow, so the clip-wide rate is an average over the
+    frames nobody wants to measure. The per-phase table is what the verdict rests
+    on and it goes first.
+    """
+    summary = Table(title="Club tracking", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("tracked", "[green]YES[/green]" if result.tracked else "[yellow]NO[/yellow]")
+    summary.add_row("detector", f"{result.detector.name}  [dim]{result.detector.method}[/dim]")
+    summary.add_row("frames", f"{result.tracked_frames} of {result.frame_count} carry a shaft")
+    summary.add_row(
+        "coverage",
+        f"{result.coverage:.0%}  [dim](clip-wide -- see the per-phase table, not this)[/dim]",
+    )
+    if result.unanchored_frames:
+        summary.add_row(
+            "runs",
+            f"{result.unanchored_frames}  [dim](separately seeded; a track in pieces is "
+            "weaker than one piece)[/dim]",
+        )
+    if result.slow_motion_factor != 1.0:
+        summary.add_row("slow motion", f"{result.slow_motion_factor:g}x  [dim]as supplied[/dim]")
+    console.print(summary)
+
+    if result.phase_coverage:
+        phases = Table(title="Coverage by phase", title_justify="left", expand=True)
+        phases.add_column("Phase", no_wrap=True)
+        phases.add_column("Tracked", justify="right")
+        phases.add_column("Coverage", justify="right")
+        phases.add_column("Confidence", justify="right")
+        phases.add_column("Club-head speed", justify="right")
+        for entry in result.phase_coverage:
+            style = (
+                "green" if entry.coverage >= 0.8 else "yellow" if entry.coverage >= 0.5 else "red"
+            )
+            # The downswing is emphasised because it is the row the verdict rests
+            # on, and it is the one a reader skims past on the way to the total.
+            name = entry.phase.value
+            if entry.phase is SwingPhase.DOWNSWING:
+                name = f"[bold]{name}[/bold]"
+            phases.add_row(
+                name,
+                f"{entry.tracked}/{entry.frames}",
+                f"[{style}]{entry.coverage:.0%}[/{style}]",
+                "-" if entry.median_confidence is None else f"{entry.median_confidence:.2f}",
+                "-"
+                if entry.median_tip_speed_px_s is None
+                else f"{entry.median_tip_speed_px_s:,.0f} px/s",
+            )
+        console.print(phases)
+    else:
+        console.print(
+            "[yellow]No swing was detected, so coverage is clip-wide only.[/yellow] "
+            "[dim]That number is dominated by the frames where the club is nearly still.[/dim]"
+        )
+
+    quality = result.quality
+    if quality is not None:
+        detail = Table(title="Quality", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "support",
+            f"{_opt(quality.median_support)} median  [dim](edge evidence -- the fit)[/dim]",
+        )
+        detail.add_row(
+            "margin",
+            f"{_opt(quality.median_margin)} median  [dim](over the best rival -- the check "
+            "support cannot make)[/dim]",
+        )
+        detail.add_row(
+            "continuity",
+            f"{_opt(quality.median_continuity)} median  [dim](agreement with the predicted "
+            "direction)[/dim]",
+        )
+        detail.add_row(
+            "confidence", f"{_opt(quality.median_confidence)} median  [dim](the product)[/dim]"
+        )
+        detail.add_row(
+            "shaft turn rate",
+            f"{_rate(quality.median_angular_rate_deg_s)} median, "
+            f"{_rate(quality.max_angular_rate_deg_s)} peak",
+        )
+        if quality.max_blur_px is not None:
+            style = (
+                "red"
+                if quality.max_blur_px > 20
+                else "yellow"
+                if quality.max_blur_px > 10
+                else "green"
+            )
+            detail.add_row(
+                "club-head smear",
+                f"[{style}]up to {quality.max_blur_px:.0f} px[/{style}]  [dim](at a 360-degree "
+                "shutter; a shutter n times faster divides it by n, and nothing in the file "
+                "records which)[/dim]",
+            )
+        detail.add_row(
+            "club head seen",
+            f"{quality.head_fraction:.0%} of tracked frames  [dim](elsewhere a shaft direction "
+            "with no length)[/dim]",
+        )
+        console.print(detail)
+
+    if result.impact is not None:
+        impact = result.impact
+        delta = "" if impact.delta_s is None else f", {impact.delta_s * 1000:+.0f} ms from it"
+        console.print(
+            f"[bold]Impact from the club head:[/bold] frame {impact.frame_index} "
+            f"({impact.timestamp_s:.3f} s){delta}. "
+            f"[dim]Phase 4's hand-speed estimate is frame {impact.kinematic_frame}; the two are "
+            "independent and neither replaces the other.[/dim]"
+        )
+
+    if result.refusals:
+        counts = ", ".join(
+            f"{reason.value} {count}" for reason, count in sorted(result.refusals.items())
+        )
+        console.print(f"[dim]Frames carrying nothing, by reason: {counts}[/dim]")
+
+    if result.refusal:
+        console.print(f"[yellow]{result.refusal}[/yellow]")
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+def _opt(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
+
+
+def _rate(value: float | None) -> str:
+    return "-" if value is None else f"{value:,.0f} deg/s"
+
+
+@app.command()
+def club(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the hand anchors.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    min_confidence: Annotated[
+        float | None,
+        typer.Option("--min-confidence", help="Below this a frame emits nothing."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Track the club shaft through a clip, refusing where the evidence will not carry it."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if min_confidence is not None:
+        params["club"] = {"min_confidence": min_confidence}
+
+    try:
+        result = _run_with_progress("track_club", params, "Tracking the club")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ClubTrackingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_club(result)
+
+    # Non-zero when nothing was tracked, so a script driving this learns that the
+    # clip produced no shaft rather than reading an empty report as success.
+    if not result.tracked:
         raise typer.Exit(code=1)
 
 

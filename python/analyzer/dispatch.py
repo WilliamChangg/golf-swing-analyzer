@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
 from analyzer.contracts.camera import CameraRole
+from analyzer.contracts.club import ClubConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
@@ -1003,6 +1004,132 @@ def _choose_pair(
     return reference, only_other(reference.id)
 
 
+# --- club tracking (Phase 10) ---------------------------------------------
+
+
+class TrackClubParams(BaseModel, extra="forbid"):
+    """Parameters for `track_club`.
+
+    `path` is a **video**, and it is the only analysis method here that cannot
+    take a pose Parquet instead. Everything else above Phase 2 measures the
+    landmarks; this measures the pixels, and a stored pose file does not contain
+    any. The landmarks are still needed -- they say where the hands are -- so
+    this resolves them from the content-keyed cache the way every other method
+    does, and requires that the footage they came from is still on disk.
+    """
+
+    path: str = Field(description="Absolute path to the video file. Not a pose Parquet.")
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction supplies the hand anchors. None uses the default.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy for the hand trajectory the search is anchored on.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description=(
+            "Structural bounds a motion must satisfy to be reported as a swing. "
+            "A detected swing is what makes per-phase coverage reportable, which "
+            "is the number this phase's verdict rests on; a clip with no swing in "
+            "it is still tracked, and says so."
+        ),
+    )
+    club: ClubConfig = Field(
+        default_factory=ClubConfig, description="Search geometry, and when to emit nothing."
+    )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. It reaches the "
+            "club layer through the timestamps, which decide the prediction "
+            "window and every rate reported here."
+        ),
+    )
+
+
+def _track_club(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Track the club through a clip, anchored on its filtered hand trajectory.
+
+    **No lens correction is applied here, and that is deliberate rather than
+    missing.** Every other consumer of `filter_sequence` undistorts the landmarks
+    when a calibration is available, because a lens displaces a landmark by tens
+    of pixels near the frame edge. Doing that here would be actively wrong: the
+    detector searches the *raw* frame, so an undistorted anchor would point at a
+    place in the image where the hands are not, and the search region, the
+    support ray and the reported grip all hang off it.
+
+    Correcting this properly means undistorting the **frame**, which is a remap
+    per frame rather than a transform per landmark, and it matters for a second
+    reason a landmark does not have: a straight club in the world is a *curved*
+    line in a distorted image, so the straight-line model a Hough transform rests
+    on is itself violated near the edge. Neither is fixed here; the club is
+    tracked in the picture as taken, which is what the picture contains.
+    """
+    parsed = TrackClubParams.model_validate(params)
+
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Club tracking reads the video, not a pose file: a shaft is found in the "
+                "pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself. Its landmarks are resolved from the cache automatically.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
+    )
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        # Not fatal here, unlike everywhere else. Phases decide what coverage is
+        # reported *against*; the club is in the frame either way, and a clip the
+        # detector will not call a swing is exactly the clip where seeing where
+        # the club went is most useful.
+        detected = None
+
+    try:
+        return track_club(
+            source,
+            filtered,
+            HoughShaftDetector(parsed.club),
+            phases=detected,
+            config=parsed.club,
+            reporter=reporter,
+        )
+    except ClubDetectionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
 # --- calibration (Phase 8) ------------------------------------------------
 
 
@@ -1565,6 +1692,7 @@ METHODS: dict[str, Method] = {
     "get_calibration": _get_calibration,
     "clear_calibration": _clear_calibration,
     "reconstruct": _reconstruct,
+    "track_club": _track_club,
 }
 
 

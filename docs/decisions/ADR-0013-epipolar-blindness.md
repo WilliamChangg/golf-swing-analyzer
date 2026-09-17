@@ -46,7 +46,7 @@ error into two components:
 - **Across the epipolar line.** No 3D point on camera 1's ray projects there. The
   two rays are skew, the optimiser splits the difference, and the miss lands in
   the residual. **Visible.**
-- **Along the epipolar line.** There *is* a point on camera 1's ray that projects
+- **Along the epipolar line.** There _is_ a point on camera 1's ray that projects
   exactly there — further along, or nearer. The fit is perfect and the depth is
   wrong. **Invisible.**
 
@@ -69,7 +69,7 @@ sweep that moves the answer by a centimetre, because every one of those displace
 detections has a perfect 3D explanation.
 
 The complement matters as much, and it is why the residual is still reported and
-still gates. The same pixel counts applied *isotropically*:
+still gates. The same pixel counts applied _isotropically_:
 
 | sigma | median 3D error | reprojection |
 | ----- | --------------- | ------------ |
@@ -135,12 +135,12 @@ Two qualifications, both measured:
   the shoulders and pelvis turning different amounts. That is the floor in the
   table above, and it is why `max_bone_variation` is 10% rather than 2%.
 - **Left-right symmetry is corroboration, not a second instrument.** It was built
-  on the reasoning that a consistent depth bias would give a *stably* wrong length
+  on the reasoning that a consistent depth bias would give a _stably_ wrong length
   that variation could not see. Measured, that reasoning is wrong: a swing rotates
   the body, so a displacement constant in the camera's frame is not constant
   relative to the bone. Displacing one elbow 5 cm along the optical axis makes the
   forearm's variation 11% — past the bound — while the left-right disagreement is
-  2.6%, well inside it. It is kept because it localises: it says which *side* is
+  2.6%, well inside it. It is kept because it localises: it says which _side_ is
   being reconstructed worse, which a per-segment number does not.
 
 ## What this costs, and what the alternative would have been
@@ -179,7 +179,7 @@ uncertainty_m        what the first two imply, in metres             the answer
 ## Alternatives considered
 
 **Gate on the residual, as the textbooks score it.** Rejected on the two sweeps
-above. It is the number that a degenerate capture makes *better*, because two
+above. It is the number that a degenerate capture makes _better_, because two
 nearly-parallel rays can be brought into agreement by sliding a point a long way
 in depth.
 
