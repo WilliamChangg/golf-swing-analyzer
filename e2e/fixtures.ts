@@ -506,3 +506,124 @@ export const SYNC_MODEL = {
     "Synchronisation aligns two swing-shaped signals; it cannot tell that both cameras filmed the same swing. The residual is the only evidence on that question, because two swings of different tempo cannot be aligned by any offset and any clock rate.",
   ],
 };
+
+/**
+ * A calibration from a capture that determines what it measures.
+ *
+ * The numbers are the ones `scripts/benchmark_calibration.py` produces on a
+ * well-spread 14-view capture, so the panel is exercised against a real
+ * calibration's proportions.
+ */
+export const GOOD_CALIBRATION = {
+  schema_version: 1,
+  role: "face_on",
+  intrinsics: {
+    fx: 1399.4,
+    fy: 1399.7,
+    cx: 957.7,
+    cy: 540.3,
+    distortion: [-0.28, 0.1208, 0.0013, -0.0004],
+    model: "radial_tangential_4",
+    image_width: 1920,
+    image_height: 1080,
+    fx_uncertainty: 4.65,
+    fy_uncertainty: 4.6,
+    cx_uncertainty: 1.2,
+    cy_uncertainty: 1.1,
+  },
+  quality: {
+    rms_reprojection_px: 0.237,
+    max_reprojection_px: 0.72,
+    per_view_rms_px: [0.2, 0.25, 0.28],
+    coverage: {
+      views: 14,
+      corners: 321,
+      image_fraction: 0.82,
+      edge_fraction: 0.16,
+      tilt_range_deg: 41.8,
+      scale_range: 2.46,
+      methodology: "Area is the fraction of a 12x8 grid containing a corner.",
+    },
+    degrees_of_freedom: 550,
+  },
+  detection: {
+    frames_scanned: 200,
+    frames_with_board: 60,
+    views_used: 14,
+    corners_total: 321,
+    board: {
+      squares_x: 7,
+      squares_y: 5,
+      square_length_m: 0.035,
+      marker_length_m: 0.026,
+      family: "DICT_5X5_100",
+      legacy_pattern: false,
+    },
+    observations: [
+      {
+        frame: 0,
+        corners: 24,
+        reprojection_rms_px: 0.21,
+        tilt_deg: 32,
+        distance_m: 0.62,
+        centroid_x: 420,
+        centroid_y: 310,
+        used: true,
+      },
+      {
+        frame: 12,
+        corners: 18,
+        reprojection_rms_px: 0.29,
+        tilt_deg: 11,
+        distance_m: 0.88,
+        centroid_x: 1520,
+        centroid_y: 760,
+        used: true,
+      },
+      {
+        frame: 20,
+        corners: 24,
+        reprojection_rms_px: null,
+        tilt_deg: null,
+        distance_m: null,
+        centroid_x: 900,
+        centroid_y: 540,
+        used: false,
+        dropped_reason: "a view already covered this position and scale",
+      },
+    ],
+    warnings: [],
+  },
+  calibrated_at: "2026-09-17T00:00:00Z",
+  source: "/Users/example/data/calibration/faceon.mov",
+  notes: "",
+  usable: true,
+  refusal: null,
+  warnings: [],
+};
+
+/**
+ * The capture this whole phase exists to catch.
+ *
+ * Its reprojection error is *better* than `GOOD_CALIBRATION`'s and its focal
+ * length is wrong by a third. Used to assert that the UI never lets the
+ * residual read as the verdict.
+ */
+export const DEGENERATE_CALIBRATION = {
+  ...GOOD_CALIBRATION,
+  intrinsics: { ...GOOD_CALIBRATION.intrinsics, fx: 1854.4, fy: 1854.9 },
+  usable: false,
+  refusal:
+    "The board was held within 2 degrees of one orientation throughout, and 20 degrees of spread is required. Held square to the camera, a board cannot separate focal length from distance -- a longer lens further away makes the same picture -- so the fit is free to choose badly while fitting well. Tilt the board substantially between views.",
+  quality: {
+    ...GOOD_CALIBRATION.quality,
+    rms_reprojection_px: 0.222,
+    coverage: {
+      ...GOOD_CALIBRATION.quality.coverage,
+      image_fraction: 0.17,
+      edge_fraction: 0,
+      tilt_range_deg: 1.9,
+      scale_range: 1.09,
+    },
+  },
+};

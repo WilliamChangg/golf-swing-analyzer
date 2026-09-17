@@ -31,6 +31,7 @@ from analyzer.biomechanics.anchors import build_anchors
 from analyzer.biomechanics.body import body_from
 from analyzer.biomechanics.registry import REGISTRY, definition
 from analyzer.biomechanics.view import infer_view
+from analyzer.contracts.calibration import CalibrationStatus
 from analyzer.contracts.metrics import (
     CameraView,
     Metric,
@@ -53,6 +54,7 @@ def _empty(
     config: MetricConfig,
     torso_length: float,
     reason: str,
+    calibration: CalibrationStatus,
 ) -> MetricSet:
     return MetricSet(
         computed=False,
@@ -60,6 +62,7 @@ def _empty(
         torso_length=torso_length,
         geometry=filtered.geometry,
         frames=int(filtered.t.size),
+        calibration=calibration,
         slow_motion_factor=filtered.slow_motion_factor,
         config=config,
         warnings=[reason],
@@ -101,6 +104,75 @@ def _apply_view_gate(
         for name in sorted(blocked, key=lambda entry: entry.value)
     )
     return [metric for metric in produced if metric.name not in blocked], survivors
+
+
+def _apply_calibration_gate(
+    produced: list[Metric], refused: list[RefusedMetric], status: CalibrationStatus
+) -> tuple[list[Metric], list[RefusedMetric]]:
+    """Let what is known about the camera's geometry have the last word too.
+
+    The second of the two central gates, and the mirror of `_apply_view_gate`:
+    one asks whether the recording *contains* a quantity, the other whether this
+    build is entitled to *claim* it. They are separate because they fail
+    separately -- a face-on camera contains a shoulder turn whether or not it is
+    calibrated, and a stereo rig cannot recover a quantity its footage never saw.
+
+    **On this build it blocks nothing, and that is the point being asserted
+    rather than an oversight.** Every metric in the registry is a measurement of
+    the image plane, which an uncalibrated camera supplies; a calibration makes
+    them cleaner by removing the lens and does not promote any of them to a
+    statement about three dimensions. The gate exists now, enforced and tested,
+    so that Phase 9's metrics are refused by machinery that predates them --
+    rather than by a check written on the same day as the first metric that
+    needs it, when the metric is the reason to weaken it.
+    """
+    blocked = {name for name, entry in REGISTRY.items() if not status.at_least(entry.requires)}
+    if not blocked:
+        return produced, refused
+
+    survivors = [entry for entry in refused if entry.name not in blocked]
+    survivors.extend(
+        RefusedMetric(
+            name=name,
+            reason=(
+                f"{definition(name).label} needs a {definition(name).requires.value} "
+                f"calibration and this project has {status.value}. "
+                f"{definition(name).summary}"
+            ),
+        )
+        for name in sorted(blocked, key=lambda entry: entry.value)
+    )
+    return [metric for metric in produced if metric.name not in blocked], survivors
+
+
+def _calibration_warnings(status: CalibrationStatus) -> list[str]:
+    """What the calibration state means for reading these numbers.
+
+    Stated on every result rather than only when something was refused, because
+    the interesting case is the one where nothing was: a reader who sees no
+    refusals should not conclude that the geometry was known.
+    """
+    if status is CalibrationStatus.NONE:
+        return [
+            "This camera is not calibrated, so the landmarks these metrics are measured "
+            "from still carry the lens's distortion -- tens of pixels near the frame edge "
+            "on an ordinary phone, and nothing in the numbers shows it. Calibrating the "
+            "camera removes it and makes every angle and distance below a cleaner "
+            "statement about the image plane."
+        ]
+    if status is CalibrationStatus.INTRINSICS:
+        return [
+            "The lens has been measured and removed from these landmarks. They remain "
+            "measurements of the image plane: a calibrated camera knows which direction "
+            "a pixel came from and not how far away it was, so no value here is a "
+            "metric-scale claim about the body. That needs two calibrated views of the "
+            "same instant, which is Phase 9."
+        ]
+    return [
+        "Both cameras are calibrated and their relative pose is known, so metric-scale "
+        "3D reconstruction is possible for this project. The metrics below are still "
+        "the single-view projected ones; nothing here triangulates yet."
+    ]
 
 
 def _view_warnings(result: MetricSet) -> list[str]:
@@ -158,8 +230,15 @@ def compute_metrics(
     filtered: FilteredSequence,
     phases: SwingPhases,
     config: MetricConfig | None = None,
+    calibration: CalibrationStatus = CalibrationStatus.NONE,
 ) -> MetricSet:
-    """Measure every biomechanics metric this clip supports."""
+    """Measure every biomechanics metric this clip supports.
+
+    `calibration` says what is known about this camera's geometry. It does not
+    change how anything is computed -- the lens, if one was measured, came off
+    the landmarks far below this, in `pose/series.py` -- and it decides what may
+    be reported, which is a different question asked in a different place.
+    """
     resolved = config or MetricConfig()
 
     if not phases.detected:
@@ -170,6 +249,7 @@ def compute_metrics(
             "No swing was detected in this clip, so there are no events to measure metrics "
             "at. Every metric here is anchored to an instant or an interval of a swing; "
             "without one, a reported value would be a measurement of an invented moment.",
+            calibration,
         )
 
     body = body_from(filtered)
@@ -182,6 +262,7 @@ def compute_metrics(
             "The subject's torso was never tracked, so there is no scale to express a "
             "distance in. Lengths here are in torso lengths precisely so that they do not "
             "depend on where the camera was put, and that requires a torso to measure.",
+            calibration,
         )
 
     anchors = build_anchors(phases)
@@ -203,6 +284,7 @@ def compute_metrics(
         [*posture_refused, *rotation_refused, *arm_refused, *timing_refused],
         view,
     )
+    produced, all_refused = _apply_calibration_gate(produced, all_refused, calibration)
 
     result = MetricSet(
         computed=True,
@@ -214,10 +296,11 @@ def compute_metrics(
         torso_length=body.torso_length,
         geometry=filtered.geometry,
         frames=len(body),
+        calibration=calibration,
         slow_motion_factor=filtered.slow_motion_factor,
         config=resolved,
     )
-    result.warnings = _view_warnings(result)
+    result.warnings = [*_view_warnings(result), *_calibration_warnings(calibration)]
     return result
 
 

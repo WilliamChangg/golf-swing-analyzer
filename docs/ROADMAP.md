@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-7 complete (8 / 21).**
+**Progress: Phases 0-8 complete (9 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -16,8 +16,8 @@ advance past a broken phase.
 | 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology               |
 | 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                          |
 | 7   | Two-camera sync       | ✅ **Done** | Measured sync residual in ms                               |
-| 8   | Camera calibration    | ⬜ Next     | Reprojection error reported; status gates claims           |
-| 9   | 3D reconstruction     | ⬜          | Reconstruction error measured on synthetic ground truth    |
+| 8   | Camera calibration    | ✅ **Done** | Coverage gates claims; reprojection error shown for what it is |
+| 9   | 3D reconstruction     | ⬜ Next     | Reconstruction error measured on synthetic ground truth    |
 | 10  | Club tracking         | ⬜          | Shaft tracked; low confidence emits nothing                |
 | 11  | Ball detection        | ⬜          | Impact-frame agreement measured                            |
 | 12  | Temporal ML           | ⬜          | Leak-free splits; metrics only from a real labelled set    |
@@ -823,18 +823,194 @@ is cached, for the same measured reason as Phase 3.
   while the fixture only knows how to produce a clip. A second copy of it would
   have been a second definition of what a swing looks like.
 
-## Phase 8 — Camera calibration ⬜
+## Phase 8 — Camera calibration ✅
 
-Charuco over plain chessboard (tolerates occlusion, unambiguous correspondences).
-`CalibrationStatus` gates what the system may claim.
+`python/analyzer/calibration/{board,detect,intrinsics,stereo,apply}.py` ·
+[ADR-0012](decisions/ADR-0012-calibration-coverage.md)
 
-- [ ] 8.1 Calibration contracts (K, distortion, R, T, RMS, status)
-- [ ] 8.2 Charuco detection + intrinsics
-- [ ] 8.3 Stereo extrinsics
-- [ ] 8.4 Capture/review UI with per-view reprojection error
-- [ ] 8.5 Status gating enforced across the metric layer
-- [ ] 8.6 Tests: synthetic board projections with known parameters
-- [ ] 8.7 Document reconstruction limits; commit
+The first layer that turns a picture back into a statement about space. It also
+contains the phase's whole argument, which is a **negative**: the number every
+calibration tool prints as its quality measure is blind to the one failure that
+matters, and so is the parameter uncertainty that looks like the principled
+replacement. Only coverage catches it, so coverage is the gate.
+
+- [x] **8.1 Calibration contracts** — `CameraIntrinsics` (K, distortion, and the
+      fit's own parameter uncertainties), `CoverageReport`, `CalibrationQuality`,
+      `StereoCalibration`, `PairingReport`, `CameraRig`, and `CalibrationStatus`
+      with three values rather than two
+- [x] **8.2 Charuco detection + intrinsics** — board generated from the same spec
+      it is detected with; views selected for being *different*, not for
+      existing; the distortion model named rather than defaulted
+- [x] **8.3 Stereo extrinsics** — intrinsics held fixed; frames paired through
+      Phase 7's time map, with the sync uncertainty converted into **pixels** by
+      multiplying it by the board's measured image speed
+- [x] **8.4 Capture/review UI** — per-view reprojection error, the coverage
+      numbers that decide usability, and a map of where in the frame each board
+      view actually landed
+- [x] **8.5 Status gating enforced across the metric layer** —
+      `MetricDefinition.requires` and a central gate in `compute.py`, mirroring
+      the view gate. It blocks nothing today, and a test asserts that it would
+- [x] **8.6 Tests** — 59 added: a rendered board photographed by a camera whose
+      parameters are inputs, detected by the real detector
+- [x] **8.7 Document reconstruction limits; commit**
+
+**Measured** (`scripts/benchmark_calibration.py`, Apple M1 Pro / macOS 26.4.1).
+A synthetic camera at fx = 1400 px on a 1920x1080 frame with k1 = −0.28; median
+of 3 seeds, 14 board views each. **A floor, not an estimate**: the renderer has
+no blur, no defocus and no bowed sheet.
+
+The headline, sweeping how much the board was tilted:
+
+| tilt spread | RMS px | reported σ(fx) | **true fx error** |
+| ----------- | ------ | -------------- | ----------------- |
+| ±0°         | 0.220  | 0.012%         | **6.33%**         |
+| ±2°         | 0.210  | 0.012%         | **10.04%**        |
+| ±10°        | 0.269  | 1.22%          | **23.25%**        |
+| ±20°        | 0.245  | 0.656%         | 0.10%             |
+| ±35°        | 0.218  | 0.314%         | **0.05%**         |
+
+The residual is flat across a range over which the focal length error varies by
+a factor of four hundred, and **the reported uncertainty is thirty times smaller
+exactly where the answer is worst** — because the distortion coefficients absorb
+the degeneracy and leave a tightly determined wrong answer. That second half
+overturned this phase's own design. Full reasoning in
+[ADR-0012](decisions/ADR-0012-calibration-coverage.md).
+
+Frame coverage, and the distortion model, both measured the same way:
+
+| capture         | model   | fx err | k1 err | error at the frame edge |
+| --------------- | ------- | ------ | ------ | ----------------------- |
+| corners reached | rt4     | 0.05%  | 0.003  | **2.1 px**              |
+| corners reached | rt5     | 0.05%  | 0.004  | 9.5 px                  |
+| corners reached | pinhole | 9.64%  | 0.280  | 202.3 px                |
+| centred only    | rt4     | 0.14%  | 0.001  | 34.4 px                 |
+| centred only    | rt5     | 0.13%  | 0.004  | **180.6 px**            |
+
+OpenCV's fifth coefficient is worth a factor of four at the edge on a good
+capture and a factor of five in the other direction on a poor one, so the
+default is four. Eight well-spread views are enough (0.08% focal error); twenty
+give 0.02%.
+
+**What the lens does to a landmark, which is what Phase 8 buys a single-camera
+user.** Undistortion moves a point near the frame edge by:
+
+| lens                  | at the edge | worst   | h-fov |
+| --------------------- | ----------- | ------- | ----- |
+| phone main (k1 −0.28) | 171.5 px    | 199 px  | 68.9° |
+| phone wide (k1 −0.42) | 219.9 px    | 248 px  | 93.7° |
+| mild (k1 −0.10)       | 34.0 px     | 41 px   | 56.1° |
+| long lens (k1 −0.02)  | 2.5 px      | 3.0 px  | 35.5° |
+
+On 1920x1080. Every angle, distance and speed Phases 4 to 6 compute is taken
+from landmark positions carrying that displacement, and nothing in those numbers
+shows it. This is the one thing a calibration does for a single camera — and it
+is still not depth.
+
+**What it changes on real footage, and what it does not.** Undistorting
+`data/face-on/PW_face-on.mp4` with a plausible phone lens (fx = 0.73 x frame
+width, k1 = -0.28) moves the metrics by:
+
+| metric                  | uncalibrated | undistorted | delta   |
+| ----------------------- | ------------ | ----------- | ------- |
+| Trail arm angle (top)   | 154.75°      | 155.93°     | +1.19°  |
+| Shoulder turn (impact)  | 24.39°       | 25.26°      | +0.87°  |
+| X-factor (impact)       | 6.10°        | 6.79°       | +0.69°  |
+| Shoulder turn (top)     | 50.21°       | 50.62°      | +0.41°  |
+| Peak hand speed         | 19.32        | 19.91       | **+3.0%** |
+| Hand path length        | 3.304        | 3.360       | +1.7%   |
+
+**and moves no swing event at all** -- takeaway 13, top 38, impact 46, finish 65
+either way. Phase detection reads the shape of a speed curve, and a smooth
+radial correction does not change where its extrema sit; the metrics read
+absolute angles and distances, and it does.
+
+**That lens is assumed, not measured**, because nobody has calibrated the phone
+that shot this clip. What the table establishes is the *size* of the correction
+on real footage, not a corrected result -- and it is modest here because the
+player is near the middle of the frame, which is where the lens bends least.
+A swing framed closer to the edge inherits more of the 171 px.
+
+**Two unsynchronised cameras can be stereo-calibrated, and the condition is
+measurable.** Both cameras at 30 fps, clocks related to 12 ms:
+
+| board             | image speed | pairing error | pairs | baseline err | rotation err |
+| ----------------- | ----------- | ------------- | ----- | ------------ | ------------ |
+| held 1 s          | 0.0 px/s    | 0.00 px       | 7     | **0.104%**   | **0.031°**   |
+| held 0.2 s        | 0.0 px/s    | 0.00 px       | 7     | 0.104%       | 0.031°       |
+| held **3 frames** | 0.0 px/s    | 0.00 px       | 7     | 0.104%       | 0.031°       |
+| held 2 frames     | —           | —             | 2     | refused      | —            |
+| never stops       | —           | —             | 0     | refused      | —            |
+
+**Three frames of stillness is the whole requirement** — a tenth of a second at
+30 fps. The sync error is multiplied by the board's image speed, so a still
+board makes an unsynchronised pair as good as a genlocked one; a moving one is
+refused rather than fitted badly. The images are equally sharp in every row,
+which is why this is measured rather than left as advice.
+
+**Cost:** 3.7 ms/frame to detect the board at 1920x1080, 13.5 ms to fit
+intrinsics from 14 views.
+
+**Deliberate deviations from the original plan:**
+
+- **The quality gate is not the reprojection error, and finding that out
+  overturned the design.** 8.1 lists "RMS" among the contracts and the obvious
+  reading is that RMS is what `CalibrationStatus` keys on. It cannot be: the
+  sweep above shows it flat while the answer moves by 400x. The intended
+  replacement — OpenCV's own parameter standard deviations — fails the same test
+  and fails it *backwards*. Coverage is the gate; the other two are reported for
+  what they each genuinely say. [ADR-0012](decisions/ADR-0012-calibration-coverage.md).
+- **8.5 blocks nothing, and that is the assertion rather than an omission.**
+  Every metric in the registry measures the image plane, which an uncalibrated
+  camera supplies; a calibration makes those measurements cleaner and does not
+  promote one of them into a claim about three dimensions. The gate is built,
+  enforced and tested against a registry entry that demands stereo, so Phase 9's
+  metrics meet machinery that predates them rather than a check written on the
+  day the first metric needs relaxing.
+- **`CalibrationStatus` has three values, because `INTRINSICS` is not half of
+  `STEREO`.** A calibrated single camera knows which *direction* a pixel came
+  from and nothing about how far away it was. `apply.bearings` returns unit
+  vectors for exactly that reason, and there is deliberately no function here
+  that returns a 3D point.
+- **Undistortion went into `pose/series.py`, below the filter**, next to the
+  aspect correction and the slow-motion factor, for the third instance of the
+  same reason: the filter is linear, so a correction applied to positions before
+  fitting emerges correctly signed in the velocity and acceleration rather than
+  needing a second correction kept in step by hand.
+- **The sync error reaches stereo calibration as a length in pixels, not as
+  milliseconds.** Phase 7 reports `TimeMap.uncertainty_at`; multiplying it by the
+  board's measured image speed puts it in the same unit as the reprojection error
+  it would otherwise be mistaken for. This is what makes the capture instruction
+  a measurement rather than folklore.
+- **Board speed is measured from *every* detection, not from the selected
+  views** — and getting that wrong first is what the stereo benchmark caught.
+  Selection keeps one view per board position, so differencing selected views
+  measures the speed of carrying the board *between* positions, which is large
+  however patiently it was held at either end. Pairing now runs over all
+  detections and distinctness is selected on the pairs.
+- **A mis-paired stereo capture is caught by the residual, not by the clock.**
+  Board stations a second apart with an offset wrong by exactly a second pair
+  every frame with its neighbour, simultaneous to the millisecond and showing the
+  board in two different places. No time-based check can see that; the fit's
+  residual explodes and refuses. So stereo *does* gate on reprojection error —
+  there it is measuring a correspondence rather than a model's fit to its own data.
+- **`CameraRole` moved to `contracts/camera.py`.** A rig is keyed by role and a
+  project holds a rig, which made `projects` and `calibration` mutually
+  dependent. A module for one enum is worth it when the alternative is a cycle;
+  `projects` re-exports it so nothing else changed.
+- **The projects database gained a real migration** (version 1 → 2, adding
+  `rigs`). Phase 7 recorded "one version and no upgrade path yet, which is the
+  honest state". A project is the only state here that cannot be recomputed from
+  the files, so the second version migrates rather than refuses. A *newer*
+  database is still refused by name.
+- **A stereo calibration holds both intrinsics fixed.** Re-fitting them jointly
+  lets the optimiser trade focal length against baseline over the small angular
+  range two cameras share, replacing two calibrations each measured from a
+  proper spread of board views with one determined by whatever both cameras
+  happened to see at once.
+- **No real calibration footage exists in this project**, so 8.7's limits are
+  documented against a synthetic camera and the benchmark says so in its own
+  docstring. One command finishes this once a board has been filmed:
+  `uv run --project python python scripts/benchmark_calibration.py --real <dir>`
 
 ## Phase 9 — Multi-view 3D reconstruction ⬜
 

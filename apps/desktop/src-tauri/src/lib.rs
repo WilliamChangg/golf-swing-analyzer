@@ -26,7 +26,9 @@ pub fn run() {
             commands::probe_video,
             commands::extract_poses,
             commands::detect_phases,
-            commands::sync_clips
+            commands::sync_clips,
+            commands::calibrate_camera,
+            commands::get_calibration
         ])
         .run(tauri::generate_context!())
         .expect("error while running the application");

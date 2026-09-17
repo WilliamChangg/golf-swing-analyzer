@@ -54,6 +54,7 @@ from types import TracebackType
 from pydantic import ValidationError
 
 from analyzer.contracts.cache import ContentKey, HashAlgorithm
+from analyzer.contracts.calibration import CALIBRATION_SCHEMA_VERSION, CameraRig
 from analyzer.contracts.projects import (
     PROJECTS_SCHEMA_VERSION,
     CameraRole,
@@ -100,6 +101,19 @@ CREATE TABLE syncs (
 
 CREATE INDEX clips_by_project ON clips(project_id);
 CREATE INDEX syncs_by_project ON syncs(project_id);
+"""
+
+# Added in Phase 8, and separated from `_SCHEMA` so that creating a fresh
+# database and upgrading an existing one run exactly the same statement rather
+# than two that have to be kept saying the same thing.
+_RIGS_TABLE = """
+CREATE TABLE rigs (
+    project_id                 INTEGER PRIMARY KEY
+                               REFERENCES projects(id) ON DELETE CASCADE,
+    calibration_schema_version INTEGER NOT NULL,
+    model_json                 TEXT    NOT NULL,
+    updated_at                 TEXT    NOT NULL
+);
 """
 
 
@@ -168,22 +182,29 @@ class ProjectStore:
         return connection
 
     def _migrate(self, connection: sqlite3.Connection) -> None:
-        """Create the schema, or refuse a version this build does not know.
+        """Create the schema, or bring an older one forward, or refuse a newer one.
 
-        There is one version and no upgrade path yet, which is the honest state:
-        writing a migration for a shape that has never shipped would be writing
-        it against a guess. What matters now is that a database from a *newer*
-        build is refused by name rather than read with today's assumptions.
+        Upgrades run in order and each one is additive, which is what makes them
+        safe to apply to a database someone is relying on. A project is the only
+        state in this engine that cannot be recomputed from the files, so an
+        older database is migrated rather than refused -- refusing it would be
+        asking the user to throw away the one thing they cannot get back.
+
+        A database from a *newer* build is still refused, by name. That
+        direction cannot be handled: this build does not know what changed, and
+        reading tomorrow's rows into today's fields is how a stale assumption
+        becomes a silent wrong answer.
         """
         version = int(connection.execute("PRAGMA user_version").fetchone()[0])
 
         if version == 0:
             with connection:
                 connection.executescript(_SCHEMA)
+                connection.executescript(_RIGS_TABLE)
                 connection.execute(f"PRAGMA user_version = {PROJECTS_SCHEMA_VERSION}")
             return
 
-        if version != PROJECTS_SCHEMA_VERSION:
+        if version > PROJECTS_SCHEMA_VERSION:
             raise ProjectError(
                 f"{self.path} was written with project schema version {version}; this build "
                 f"understands version {PROJECTS_SCHEMA_VERSION}.",
@@ -192,6 +213,12 @@ class ProjectStore:
                     "start a fresh database."
                 ),
             )
+
+        if version < PROJECTS_SCHEMA_VERSION:
+            with connection:
+                if version < 2:
+                    connection.executescript(_RIGS_TABLE)
+                connection.execute(f"PRAGMA user_version = {PROJECTS_SCHEMA_VERSION}")
 
     @contextmanager
     def _write(self) -> Iterator[sqlite3.Connection]:
@@ -258,9 +285,12 @@ class ProjectStore:
         ]
 
         syncs: list[ProjectSync] = []
+        rig: CameraRig | None = None
         warnings: list[str] = []
         if with_syncs:
             syncs, warnings = self._syncs(connection, int(row["id"]))
+            rig, rig_warnings = self._rig(connection, int(row["id"]))
+            warnings.extend(rig_warnings)
 
         return Project(
             id=int(row["id"]),
@@ -269,6 +299,7 @@ class ProjectStore:
             created_at=datetime.fromisoformat(str(row["created_at"])),
             clips=clips,
             syncs=syncs,
+            rig=rig,
             warnings=warnings,
         )
 
@@ -470,4 +501,85 @@ class ProjectStore:
                     _now().isoformat(),
                 ),
             )
+        return self.get_project(project_id)
+
+    # -- calibration -------------------------------------------------------
+
+    @staticmethod
+    def _rig(connection: sqlite3.Connection, project_id: int) -> tuple[CameraRig | None, list[str]]:
+        """Read the stored rig, skipping it if this build cannot read it.
+
+        Same shape as `_syncs`, and for the same reason: the version is checked
+        against the column rather than against the parsed document, so a rig
+        written by a future build never reaches `model_validate_json`, where it
+        would either fail on a field name or succeed by ignoring a field whose
+        meaning changed.
+
+        A stale rig costs the project its calibration and nothing else. That is
+        the right blast radius -- an uncalibrated project is a supported state,
+        and losing the metric-scale claims is much better than making them from
+        a document this build is guessing at.
+        """
+        row = connection.execute(
+            "SELECT * FROM rigs WHERE project_id = ?", (project_id,)
+        ).fetchone()
+        if row is None:
+            return None, []
+
+        version = int(row["calibration_schema_version"])
+        if version != CALIBRATION_SCHEMA_VERSION:
+            return None, [
+                f"The stored camera calibration was written under calibration schema "
+                f"version {version}; this build reads version "
+                f"{CALIBRATION_SCHEMA_VERSION}. It was left out, so this project is "
+                "treated as uncalibrated. Re-run the calibration to replace it."
+            ]
+
+        try:
+            return CameraRig.model_validate_json(str(row["model_json"])), []
+        except ValidationError as exc:
+            return None, [
+                f"The stored camera calibration did not parse and was left out: "
+                f"{exc.error_count()} field(s) did not match the contract. This project is "
+                "treated as uncalibrated. Re-run the calibration."
+            ]
+
+    def save_rig(self, project_id: int, rig: CameraRig) -> Project:
+        """Store what is known about this project's cameras, replacing any previous rig.
+
+        Written whole rather than merged, because the parts are not independent:
+        `CameraRig.status` is `STEREO` only when both intrinsics and the
+        extrinsics between them agree about which cameras they describe, and
+        updating one camera's intrinsics without reconsidering the extrinsics
+        fitted against the old ones would leave a rig whose three pieces
+        describe two different setups. Callers that mean to change one camera
+        read the rig, change it, and write it back -- which makes the question
+        "is the stereo pose still valid?" one they have to answer.
+        """
+        self.get_project(project_id)
+
+        with self._write() as connection:
+            connection.execute(
+                """
+                INSERT INTO rigs (
+                    project_id, calibration_schema_version, model_json, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(project_id) DO UPDATE SET
+                    calibration_schema_version = excluded.calibration_schema_version,
+                    model_json = excluded.model_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    project_id,
+                    rig.schema_version,
+                    json.dumps(rig.model_dump(mode="json")),
+                    _now().isoformat(),
+                ),
+            )
+        return self.get_project(project_id)
+
+    def clear_rig(self, project_id: int) -> Project:
+        """Forget this project's calibration. The footage is untouched."""
+        with self._write() as connection:
+            connection.execute("DELETE FROM rigs WHERE project_id = ?", (project_id,))
         return self.get_project(project_id)

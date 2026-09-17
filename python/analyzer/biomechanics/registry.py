@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+from analyzer.contracts.calibration import CalibrationStatus
 from analyzer.contracts.metrics import (
     CameraView,
     Metric,
@@ -85,6 +86,23 @@ class MetricDefinition:
     and the identical computation down the line is forward posture angle; a
     consumer handed only the number and the unit would have no way to tell, and
     would be equally convinced either way.
+    """
+
+    requires: CalibrationStatus = CalibrationStatus.NONE
+    """The calibration this quantity cannot honestly be produced without.
+
+    `NONE` for everything in this build, and that is a statement rather than a
+    placeholder: every metric here is a measurement of the image plane, and an
+    image plane is what an uncalibrated camera gives you. A calibration makes
+    these *better* -- the lens comes off the landmarks first -- and none of them
+    starts claiming a third dimension because one exists.
+
+    The field is here so that Phase 9's metrics declare `STEREO` and are refused
+    by `compute.py` when a project has no stereo calibration, rather than
+    arriving alongside a gate invented at the same time. The gate is enforced
+    and tested now, against a set where it blocks nothing; the alternative is a
+    check written on the same day as the first metric that needs it, by which
+    point the metric is the reason to weaken it.
     """
 
     meaning: str = ""

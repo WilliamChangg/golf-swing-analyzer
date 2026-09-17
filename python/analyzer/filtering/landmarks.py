@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from analyzer.contracts.calibration import CameraIntrinsics
 from analyzer.contracts.filtering import (
     FilterConfig,
     LandmarkFilterReport,
@@ -108,6 +109,12 @@ class FilteredSequence:
     geometry: FrameGeometry
     slow_motion_factor: float
     report: SequenceFilterReport
+    intrinsics: CameraIntrinsics | None = None
+    """The calibration the landmarks were undistorted with, or None.
+
+    Carried for the same reason `geometry` is: the layer above cannot tell from
+    the numbers whether a lens was removed from them, and the difference decides
+    what the measurements are entitled to claim."""
 
     def __getitem__(self, landmark: Landmark) -> FilteredLandmark:
         return self.landmarks[landmark]
@@ -267,10 +274,17 @@ def filter_sequence(
     space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
     slow_motion_factor: float = 1.0,
     landmarks: tuple[Landmark, ...] | None = None,
+    intrinsics: CameraIntrinsics | None = None,
     reporter: ProgressReporter | None = None,
     request_id: int | str | None = None,
 ) -> FilteredSequence:
-    """Filter every landmark of a stored pose sequence."""
+    """Filter every landmark of a stored pose sequence.
+
+    `intrinsics` is passed straight down to `landmark_series`, which removes the
+    lens before the frame-widths conversion and therefore before anything here
+    fits a polynomial to the result. Undistorting afterwards would be a
+    different and wrong operation: the fit would have smoothed the distorted
+    trajectory, and its velocity and acceleration would describe that."""
     resolved = config or FilterConfig()
     pipeline = default_pipeline(resolved)
     selected = landmarks if landmarks is not None else tuple(Landmark)
@@ -281,7 +295,7 @@ def filter_sequence(
     started = time.perf_counter()
     filtered: dict[Landmark, FilteredLandmark] = {}
     for done, landmark in enumerate(selected, start=1):
-        series = landmark_series(sequence, landmark, space, slow_motion_factor)
+        series = landmark_series(sequence, landmark, space, slow_motion_factor, intrinsics)
         filtered[landmark] = filter_landmark(series, resolved, pipeline=pipeline)
         tracker.report("filtering", done, len(selected))
 
@@ -304,6 +318,7 @@ def filter_sequence(
         landmarks=filtered,
         geometry=sequence.geometry,
         slow_motion_factor=slow_motion_factor,
+        intrinsics=intrinsics,
         report=SequenceFilterReport(
             config=resolved,
             space=space,

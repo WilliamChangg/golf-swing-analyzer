@@ -46,6 +46,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from analyzer.contracts.calibration import CalibrationStatus
 from analyzer.contracts.phases import SwingEvent, SwingPhase
 from analyzer.contracts.pose import FrameGeometry
 
@@ -563,6 +564,22 @@ class MetricSet(BaseModel):
     )
     geometry: FrameGeometry
     frames: int
+    calibration: CalibrationStatus = Field(
+        default=CalibrationStatus.NONE,
+        description=(
+            "What was known about this camera's geometry when these metrics were "
+            "computed, and therefore what they are entitled to claim.\n\n"
+            "`none` means the landmarks still carry the lens's distortion, which "
+            "displaces a point near the frame edge by tens of pixels on an "
+            "ordinary phone and biases every angle and distance measured from it. "
+            "`intrinsics` means the lens was measured and removed, so the values "
+            "below are cleaner statements about the image plane -- **and are "
+            "still statements about the image plane**, because one camera cannot "
+            "see depth however well it is calibrated. `stereo` is what Phase 9 "
+            "triangulates with; no metric in this set requires it yet, and the "
+            "gate that enforces that is in `compute.py`."
+        ),
+    )
     slow_motion_factor: float = Field(
         default=1.0,
         gt=0.0,

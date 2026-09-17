@@ -2,6 +2,8 @@ import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
 import {
+  DEGENERATE_CALIBRATION,
+  GOOD_CALIBRATION,
   NO_SWING,
   POSE_RESULT,
   SWING_PHASES,
@@ -371,5 +373,82 @@ test.describe("two-camera synchronisation", () => {
     await expect(
       page.getByRole("button", { name: /Re-align on 0 picks/ }),
     ).toBeDisabled();
+  });
+});
+
+test.describe("camera calibration", () => {
+  /** Load a clip, then point the calibration panel at board footage. */
+  async function calibrate(page: Page, result: unknown) {
+    await loadClip(page, {
+      "plugin:dialog|open": { result: "/Users/example/data/calibration/faceon.mov" },
+      calibrate_camera: { result },
+    });
+    await page.getByRole("button", { name: /Choose board footage/ }).click();
+    await page.getByRole("button", { name: /Find the board/ }).click();
+  }
+
+  test("does not claim a calibration exists before one is measured", async ({
+    page,
+  }) => {
+    await loadClip(page);
+
+    await expect(page.getByText("Camera calibration")).toBeVisible();
+    await expect(page.getByText(/No board footage chosen yet/)).toBeVisible();
+    // The distinction the whole status type exists for, stated before anyone
+    // has run anything.
+    await expect(page.getByText(/not how far away anything was/)).toBeVisible();
+  });
+
+  test("reports what was measured, and what each number answers", async ({
+    page,
+  }) => {
+    await calibrate(page, GOOD_CALIBRATION);
+
+    await expect(page.getByText(/This calibration may be used/)).toBeVisible();
+    await expect(page.getByText("fx 1399.4, fy 1399.7 px")).toBeVisible();
+    await expect(page.getByText("0.237 px rms")).toBeVisible();
+    // The residual is labelled with what it actually measures, not left to be
+    // read as the verdict.
+    await expect(
+      page.getByText(/How well the model fits these views/),
+    ).toBeVisible();
+  });
+
+  test("gives the field of view, which is the one number a person can check", async ({
+    page,
+  }) => {
+    await calibrate(page, GOOD_CALIBRATION);
+
+    await expect(page.getByText("68.9° across")).toBeVisible();
+    await expect(page.getByText(/a phone.s main camera sees about 65/)).toBeVisible();
+  });
+
+  test("refuses a capture that fits better and determines less", async ({
+    page,
+  }) => {
+    await calibrate(page, DEGENERATE_CALIBRATION);
+
+    await expect(
+      page.getByText(/This calibration will not be used/),
+    ).toBeVisible();
+    // Better than the usable one, and refused anyway. This is the phase.
+    await expect(page.getByText("0.222 px rms")).toBeVisible();
+    await expect(
+      page.getByText(/cannot separate focal length from distance/),
+    ).toBeVisible();
+    // And the coverage number that caused it is on screen, not just the words.
+    await expect(page.getByText("2°", { exact: true })).toBeVisible();
+  });
+
+  test("draws where the board actually went, dropped views included", async ({
+    page,
+  }) => {
+    await calibrate(page, GOOD_CALIBRATION);
+
+    const map = page.getByRole("img", {
+      name: /2 view\(s\) used of 3 detected/,
+    });
+    await expect(map).toBeVisible();
+    await expect(map.locator("circle")).toHaveCount(3);
   });
 });

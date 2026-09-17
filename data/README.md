@@ -153,16 +153,108 @@ cannot — nothing in one file records its own factor.
    similar tempo that evidence is weak. Do not pair a face-on clip of one swing
    with a down-the-line clip of another and expect to be told.
 
-## Camera calibration (Phases 8-9)
+## Camera calibration (Phase 8)
 
-Metric-scale 3D reconstruction requires calibration. Print a **Charuco board**,
-mount it rigidly flat, and capture 15-20 frames per camera with the board at
-varied angles and distances filling different parts of the frame — corners
-included, since that is where lens distortion is strongest.
+Metric-scale 3D reconstruction requires calibration, and a calibration is only
+as good as the capture it was measured from. The instructions below are not
+style advice: each one is a thing the system checks and refuses on, and the
+thresholds come from `scripts/benchmark_calibration.py`.
 
-For stereo extrinsics, both cameras must see the board **simultaneously** in a
-set of frames.
+### The board
 
-Without this the system runs in `UNCALIBRATED` mode. That is a supported state,
-not a failure: it simply means no metric-scale claims are made, and the system
-will say so rather than producing a plausible-looking number.
+```bash
+uv run --project python analyzer calibrate board board.png --squares 7x5 --square-mm 35
+```
+
+Print it at **100% scale** — no "fit to page" — mount it on something rigid and
+flat, and then **measure one square with a ruler**. Pass what you measure, not
+what you asked for:
+
+```bash
+uv run --project python analyzer calibrate camera board.mov --role face_on --square-mm 34.6
+```
+
+Every metric-scale claim this system ever makes descends from that one measured
+length. A page silently scaled to 96% makes every future distance wrong by 4%,
+and nothing anywhere will look amiss. It is the one step of the process no
+software can check.
+
+Generate the board here rather than downloading one. A pattern from a website is
+a pattern whose dictionary, square count and marker layout are all guesses, and
+OpenCV changed the Charuco layout in 4.6 — a board from an older generator
+produces corners in the *wrong places* rather than no corners at all, which is
+much the worse failure.
+
+### Capturing a camera
+
+**Tilt the board. This is the one that is not obvious and the one that decides
+whether the calibration is worth anything.** A board held square to the camera
+cannot separate focal length from distance: a longer lens further away makes the
+same picture. Such a capture fits beautifully — a fifth of a pixel of
+reprojection error — and leaves the focal length wrong by up to 23%. Neither the
+residual nor the uncertainty the fit reports about itself will tell you. Aim for
+at least 20° of spread between your flattest and most oblique views; the system
+refuses below that.
+
+**Take the board to the corners of the frame.** Lens distortion is a function of
+radius and is nearly nothing in the middle, so a centred capture fits its
+distortion coefficients to almost no evidence and then applies them out at the
+edge, where the swing is. Half the board leaving the frame is fine — that is
+exactly what Charuco tolerates and a plain chessboard does not.
+
+**Vary the distance.** The calibration otherwise describes the lens at one
+working distance.
+
+| what to vary   | why                                       | the bound     |
+| -------------- | ----------------------------------------- | ------------- |
+| tilt           | separates focal length from distance      | ≥ 20° spread  |
+| position       | distortion is measurable only off-centre  | ≥ 35% of frame |
+| distance       | one distance measures one working distance | reported      |
+| number of views | 8 well-spread views reach 0.08% focal error | ≥ 8         |
+
+Twenty views buy 0.02% against eight views' 0.08%. Spread matters far more than
+count, which is why the system measures spread directly.
+
+**Calibrate at the setting you will film at.** A calibration belongs to a camera
+*and* a zoom, lens and capture resolution. Frame size is the only part of that a
+file records, and the system refuses a calibration applied to footage of a
+different size; zoom and lens changes leave no trace at all. Use `--notes` to
+record what the file cannot.
+
+### Capturing a stereo pair
+
+Both cameras must see the board at the same instant, and two phones do not share
+a clock. **Hold the board still at each position** and that stops mattering: the
+pairing error is the clock uncertainty multiplied by how fast the board was
+moving, so a still board makes it zero however badly the clocks are known.
+
+Measured, the requirement is remarkably light — **three frames** of stillness,
+which is a tenth of a second at 30 fps:
+
+| board             | pairing error | baseline error | rotation error |
+| ----------------- | ------------- | -------------- | -------------- |
+| held 1 s          | 0.00 px       | 0.104%         | 0.031°         |
+| held **3 frames** | 0.00 px       | 0.104%         | 0.031°         |
+| held 2 frames     | —             | refused        | —              |
+| never stops       | —             | refused        | —              |
+
+So: move the board to a new position, pause for a moment, move again. Do not
+wave it. A waved board produces images that are exactly as sharp and yields no
+usable pairs, which is why the system measures this instead of trusting it.
+
+Neither camera may move between the stereo capture and the swing — the
+extrinsics describe where they stood, and nothing detects that one was nudged.
+
+### Without a calibration
+
+The system runs uncalibrated, and that is a supported state rather than a
+failure: every measurement is reported as a statement about the image plane,
+which is what it is, and no metric-scale 3D claim is made. What it costs is the
+lens. An ordinary phone's main camera displaces a landmark near the frame edge
+by about 170 px on a 1920x1080 frame, and every angle, distance and speed
+measured above inherits that displacement with nothing in the numbers showing it.
+
+Calibrating one camera removes it. It does **not** make one camera see depth: a
+calibrated pixel is a direction, and how far along that direction anything sat is
+exactly what the projection destroyed. That needs two calibrated views of the
+same instant, which is Phase 9.

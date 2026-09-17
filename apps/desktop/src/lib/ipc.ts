@@ -13,6 +13,9 @@ import type {
   EnvironmentReport,
   PoseExtractionResult,
   ProgressUpdate,
+  CameraCalibration,
+  CameraRig,
+  CameraRole,
   SwingPhases,
   SyncModel,
   VideoMetadata,
@@ -27,6 +30,8 @@ const COMMANDS = {
   extractPoses: "extract_poses",
   detectPhases: "detect_phases",
   syncClips: "sync_clips",
+  calibrateCamera: "calibrate_camera",
+  getCalibration: "get_calibration",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -244,6 +249,55 @@ export function syncClips(
         target_frame: anchor.targetFrame,
       })) ?? null,
   });
+}
+
+/**
+ * Measure one camera's intrinsics from footage of a Charuco board.
+ *
+ * **`usable: false` is a success**, exactly as `aligned: false` is for
+ * `syncClips` and `detected: false` for `detectPhases`. It arrives with a
+ * `refusal` naming which bound the capture failed, and that is the useful part:
+ * the numbers say what to reshoot, which an error would not.
+ *
+ * `projectId` stores the result on that project's rig. Without it the
+ * calibration is computed and returned and nothing is written.
+ */
+export function calibrateCamera(
+  source: string,
+  options: {
+    role?: CameraRole;
+    projectId?: number;
+    squaresX?: number;
+    squaresY?: number;
+    squareLengthMm?: number;
+    stride?: number;
+    notes?: string;
+  } = {},
+): Promise<EngineResult<CameraCalibration>> {
+  return call<CameraCalibration>(COMMANDS.calibrateCamera, {
+    source,
+    role: options.role ?? "other",
+    projectId: options.projectId ?? null,
+    squaresX: options.squaresX ?? null,
+    squaresY: options.squaresY ?? null,
+    squareLengthMm: options.squareLengthMm ?? null,
+    stride: options.stride ?? null,
+    notes: options.notes ?? null,
+  });
+}
+
+/**
+ * What is known about a project's cameras, and therefore what it may claim.
+ *
+ * An uncalibrated project returns an empty rig whose `status` is `none`, rather
+ * than null. That keeps "uncalibrated" a value every caller handles the same
+ * way as any other status, instead of a null check each one writes separately
+ * and one of them forgets.
+ */
+export function getCalibration(
+  projectId: number,
+): Promise<EngineResult<CameraRig>> {
+  return call<CameraRig>(COMMANDS.getCalibration, { projectId });
 }
 
 /**

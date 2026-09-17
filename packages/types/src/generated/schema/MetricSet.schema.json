@@ -8,6 +8,16 @@
       "title": "BodySide",
       "type": "string"
     },
+    "CalibrationStatus": {
+      "description": "What this build may claim about the geometry of a recording.\n\nThe honesty gate of Phases 8 and 9, as a type. It is ordered, and\n`at_least` is how a consumer asks the question it actually has -- \"may I\ntriangulate\" -- rather than enumerating the values that permit it and\nforgetting one when a fourth is added.\n\nNONE\n    No calibration. Every measurement is a statement about the image plane,\n    which is what Phases 5 and 6 produce and label as such. The lens's\n    distortion is present in every landmark and unmeasured.\nINTRINSICS\n    One camera's focal lengths, optical centre and distortion are measured.\n    Landmarks can be undistorted, so projected measurements improve, and a\n    pixel becomes a known direction. **Still no depth, so still no\n    metric-scale 3D claim.**\nSTEREO\n    Both cameras are calibrated and their relative pose is measured, so two\n    views of one instant give an intersection rather than two directions.\n    This is what Phase 9 triangulates with.",
+      "enum": [
+        "none",
+        "intrinsics",
+        "stereo"
+      ],
+      "title": "CalibrationStatus",
+      "type": "string"
+    },
     "CameraView": {
       "description": "Where the camera stood relative to the player.\n\nThe single fact that decides what a projected measurement *means*. The same\nspine tilt is lateral side bend seen face-on and forward posture angle seen\ndown the line; the same hip displacement is a slide towards the target in one\nand a move towards the ball in the other. Nothing in the arithmetic\ndistinguishes them, so the view is measured and carried on every metric, and\nthe anatomical reading is stated per view rather than assumed.\n\nFACE_ON\n    Perpendicular to the target line, looking at the player. The shoulder\n    line lies across the frame, so rotation is measurable by foreshortening\n    and left and right are distinguishable.\nDOWN_THE_LINE\n    Along the target line. The shoulder line points towards the camera and\n    collapses, so rotation about the spine is not recoverable, and the\n    frame's horizontal axis runs towards and away from the ball.\n\n    **Which end of the target line is not determined.** A camera behind the\n    player and one in front of them foreshorten the shoulder line\n    identically, and nothing else here separates them. The measurable\n    consequences are the same either way, which is why one label covers\n    both; what it costs is the sign of anything measured along the frame's\n    horizontal axis, so those quantities are reported as image directions\n    rather than as \"towards the player\" or \"away from them\". The reference\n    clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.\nUNKNOWN\n    Oblique, or too little of the body tracked at address to tell. Not a\n    failure: an oblique camera genuinely supports some measurements and not\n    others, and saying so beats picking the nearer label.",
       "enum": [
@@ -534,6 +544,11 @@
     },
     "frames": {
       "type": "integer"
+    },
+    "calibration": {
+      "$ref": "#/$defs/CalibrationStatus",
+      "default": "none",
+      "description": "What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.\n\n`none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`."
     },
     "slow_motion_factor": {
       "default": 1.0,

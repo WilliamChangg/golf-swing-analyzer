@@ -172,3 +172,70 @@ pub async fn sync_clips(
         }
     })
 }
+
+/// Measure one camera's intrinsics from footage of a Charuco board.
+///
+/// Long-running: board detection runs over every sampled frame of a clip, so
+/// progress is forwarded the same way pose extraction's is.
+///
+/// A calibration whose `usable` is false is a **successful** result, exactly as
+/// `aligned: false` is for `sync_clips`. It arrives with a `refusal` naming
+/// which bound it failed, and those numbers are what tell the person holding
+/// the camera what to reshoot.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn calibrate_camera(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    source: String,
+    role: String,
+    project_id: Option<i64>,
+    squares_x: Option<u32>,
+    squares_y: Option<u32>,
+    square_length_mm: Option<f64>,
+    stride: Option<u32>,
+    notes: Option<String>,
+) -> Result<Value, EngineError> {
+    let mut board = json!({});
+    if let Some(value) = squares_x {
+        board["squares_x"] = json!(value);
+    }
+    if let Some(value) = squares_y {
+        board["squares_y"] = json!(value);
+    }
+    if let Some(value) = square_length_mm {
+        board["square_length_mm"] = json!(value);
+    }
+
+    let mut params = json!({
+        "source": source,
+        "role": role,
+        "board": board,
+        "notes": notes.unwrap_or_default(),
+    });
+    if let Some(value) = stride {
+        params["stride"] = json!(value);
+    }
+    if let Some(value) = project_id {
+        params["project_id"] = json!(value);
+    }
+
+    engine.request_with_notifications("calibrate_camera", params, &|method, params| {
+        if method == PROGRESS_NOTIFICATION {
+            let _ = app.emit(PROGRESS_EVENT, params.clone());
+        }
+    })
+}
+
+/// What is known about a project's cameras, and therefore what it may claim.
+///
+/// Returns an empty rig for an uncalibrated project rather than null: its
+/// `status` is then `none`, which is the correct answer to the question every
+/// caller is actually asking, and saves each of them writing that mapping.
+#[tauri::command]
+pub async fn get_calibration(
+    engine: State<'_, Engine>,
+    project_id: i64,
+) -> Result<Value, EngineError> {
+    engine.request("get_calibration", json!({ "project_id": project_id }))
+}

@@ -18,6 +18,8 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from analyzer.calibration.apply import undistort_normalized
+from analyzer.contracts.calibration import CameraIntrinsics
 from analyzer.contracts.pose import (
     Landmark,
     LandmarkPoint,
@@ -72,6 +74,7 @@ def landmark_series(
     landmark: Landmark,
     space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
     slow_motion_factor: float = 1.0,
+    intrinsics: CameraIntrinsics | None = None,
 ) -> LandmarkSeries:
     """Extract one landmark's trajectory, NaN where it was not detected.
 
@@ -85,6 +88,18 @@ def landmark_series(
     filter's own window are then in real seconds. It is applied here for the
     same reason the coordinate conversion is -- once, below everything, so that
     no layer above has to know about it or can forget it.
+
+    `intrinsics` removes the lens, and it is applied here for that same reason a
+    third time. Undistortion is a correction within the image plane, so it has
+    to happen **before** the frame-widths conversion and before the filter: a
+    lens displaces a landmark near the frame edge by tens of pixels, and every
+    angle, distance and speed measured above inherits that displacement. Being
+    below the filter, it also emerges correctly in the velocity and acceleration
+    without a second correction that has to be kept in step.
+
+    None leaves the coordinates as the estimator produced them, which is the
+    honest default: no calibration means the lens is unmeasured, not that it is
+    absent.
     """
     require_reachable(space)
     if not np.isfinite(slow_motion_factor) or slow_motion_factor <= 0.0:
@@ -116,10 +131,20 @@ def landmark_series(
     if space is LandmarkSpace.FRAME_WIDTHS:
         # NaN passes through the conversion unchanged, so an undetected frame
         # stays undetected rather than becoming a coordinate at the origin.
-        stacked = image_to_frame_widths(
-            np.stack((values["x"], values["y"], values["z"]), axis=-1), sequence.geometry
-        )
+        stacked = np.stack((values["x"], values["y"], values["z"]), axis=-1)
+        if intrinsics is not None:
+            # Before the frame-widths conversion: undistortion is defined in the
+            # image plane, in the pixels the calibration was measured in.
+            stacked = undistort_normalized(stacked, intrinsics, sequence.geometry)
+        stacked = image_to_frame_widths(stacked, sequence.geometry)
         values["x"], values["y"], values["z"] = (stacked[:, axis] for axis in range(3))
+    elif intrinsics is not None:
+        raise ValueError(
+            f"A calibration cannot be applied to {space.value} coordinates. Undistortion "
+            "is a correction within the image plane, so it is defined for IMAGE and "
+            "FRAME_WIDTHS; HIP_LOCAL is the estimator's own body-centred guess and carries "
+            "no lens."
+        )
 
     return LandmarkSeries(
         landmark=landmark,
@@ -137,9 +162,10 @@ def all_series(
     sequence: PoseSequence,
     space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
     slow_motion_factor: float = 1.0,
+    intrinsics: CameraIntrinsics | None = None,
 ) -> dict[Landmark, LandmarkSeries]:
     """Every landmark's trajectory, keyed by landmark."""
     return {
-        landmark: landmark_series(sequence, landmark, space, slow_motion_factor)
+        landmark: landmark_series(sequence, landmark, space, slow_motion_factor, intrinsics)
         for landmark in Landmark
     }

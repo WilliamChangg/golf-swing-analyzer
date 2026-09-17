@@ -1,0 +1,709 @@
+{
+  "$defs": {
+    "BoardFamily": {
+      "description": "Which ArUco dictionary the board's markers are drawn from.\n\nCarried rather than fixed because the board is a physical object that the\nuser printed, and a detector looking for the wrong dictionary finds nothing\nat all -- a failure that looks exactly like bad lighting.\n\nThe default is `DICT_5X5_100`: 5x5 markers stay legible at the size a\nCharuco square allows on an A4 sheet, and 100 of them is far more than a\nboard this size consumes, so ids never wrap.",
+      "enum": [
+        "DICT_4X4_50",
+        "DICT_4X4_100",
+        "DICT_5X5_100",
+        "DICT_5X5_250",
+        "DICT_6X6_250"
+      ],
+      "title": "BoardFamily",
+      "type": "string"
+    },
+    "BoardObservation": {
+      "description": "One frame in which the board was found.\n\nKept per frame rather than summarised because 8.4 draws them: the review UI\nshows where in the image each view landed, which is how a person sees that\ntheir board never reached a corner -- a fact no single number communicates\nas quickly as the picture of it does.",
+      "properties": {
+        "frame": {
+          "type": "integer"
+        },
+        "corners": {
+          "description": "Chessboard corners identified in this view.",
+          "type": "integer"
+        },
+        "reprojection_rms_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "This view's own RMS residual after the fit. None before a fit, and for a view the fit excluded."
+        },
+        "tilt_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How far off square to the camera this view sat."
+        },
+        "distance_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Board distance along the optical axis. Metric, because the board's own square size supplies the scale -- the first genuinely metric length in this engine."
+        },
+        "centroid_x": {
+          "description": "Mean corner position, in pixels.",
+          "type": "number"
+        },
+        "centroid_y": {
+          "type": "number"
+        },
+        "used": {
+          "default": true,
+          "description": "Whether this view entered the fit, or was dropped.",
+          "type": "boolean"
+        },
+        "dropped_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "frame",
+        "corners",
+        "centroid_x",
+        "centroid_y"
+      ],
+      "title": "BoardObservation",
+      "type": "object"
+    },
+    "BoardSpec": {
+      "description": "The physical board, as printed.\n\nCharuco rather than a plain chessboard, for two reasons that both matter on\nfootage taken by one person with no assistant. A chessboard must be seen\n**whole** or it yields nothing, so every view where a corner leaves the\nframe is wasted -- which is exactly the view that carries the distortion\ninformation. And its corners are interchangeable, so a rotationally\nsymmetric view is ambiguous. Charuco's markers identify each corner\nindividually, so a partial view contributes the corners it does show and the\ncorrespondence is never in doubt.\n\n`square_length_m` is what puts a metre into the system. Every metric-scale\nclaim Phase 9 makes descends from this one measured number, so it is the\nlength to measure on the printed sheet with a ruler rather than to take from\nthe file that was sent to the printer: printers scale to fit, and a page\nscaled to 96% makes every future distance wrong by 4% with nothing\nanywhere looking amiss.",
+      "properties": {
+        "squares_x": {
+          "description": "Chessboard squares across.",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "squares_y": {
+          "description": "Chessboard squares down.",
+          "minimum": 2,
+          "type": "integer"
+        },
+        "square_length_m": {
+          "description": "Side of one chessboard square, in metres, **measured on the printed sheet**. The scale of every metric claim descends from this number.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "marker_length_m": {
+          "description": "Side of one ArUco marker, in metres. Must be smaller than the square it sits in; around 0.75 of it leaves a white margin that the detector needs to find the marker's border.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "family": {
+          "$ref": "#/$defs/BoardFamily",
+          "default": "DICT_5X5_100"
+        },
+        "legacy_pattern": {
+          "default": false,
+          "description": "Whether the board was generated by OpenCV before 4.6, which laid the markers out differently. A board printed from an old generator and detected as a new one produces corners in the wrong places rather than no corners at all, which is the worse failure. False for any board this build generated.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "squares_x",
+        "squares_y",
+        "square_length_m",
+        "marker_length_m"
+      ],
+      "title": "BoardSpec",
+      "type": "object"
+    },
+    "CalibrationConfig": {
+      "additionalProperties": false,
+      "description": "Policy for calibration.\n\nThe bounds are **stated policy informed by measurement**, not measured\noptima: `scripts/benchmark_calibration.py` establishes the shape of each\nrelationship -- that focal uncertainty explodes as tilt range collapses,\nfor instance -- and where on that curve to refuse is a judgement about what\na wrong answer costs downstream. Where a number came from a sweep, the field\nsays so.",
+      "properties": {
+        "distortion_model": {
+          "$ref": "#/$defs/DistortionModel",
+          "default": "radial_tangential_4",
+          "description": "Which coefficients to fit. Four rather than OpenCV's five, on the measurement: with the board reaching the frame edge the fifth term buys almost nothing, and without it the fifth term is fitted to noise and does its damage at the corners where the swing is. `scripts/benchmark_calibration.py --sweep distortion` has the numbers, and a fisheye lens is the case for overriding this."
+        },
+        "min_views": {
+          "default": 8,
+          "description": "Board views required before a calibration is attempted. Three is the algebraic minimum for a planar target and is nowhere near enough in practice; the usual advice of 15-20 is about coverage rather than count, which `CoverageReport` measures directly. This is a floor below which the coverage numbers themselves stop meaning much.",
+          "minimum": 3,
+          "type": "integer"
+        },
+        "min_corners_per_view": {
+          "default": 6,
+          "description": "Corners a view must contribute to be used. Four is the minimum for a pose; six leaves something over, and a view showing fewer is usually the board leaving the frame rather than a useful oblique.",
+          "minimum": 4,
+          "type": "integer"
+        },
+        "min_image_fraction": {
+          "default": 0.35,
+          "description": "Fraction of the frame the board must have visited. Below it the lens is unmeasured over most of its area, and the distortion coefficients are extrapolating into the region the subject is filmed in.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "min_tilt_range_deg": {
+          "default": 20.0,
+          "description": "Spread of board tilts required. **The bound that catches the failure neither the residual nor the reported uncertainty can see.** With every view square to the sensor, focal length and distance are very nearly interchangeable, and the fit is free to pick badly while fitting beautifully.\n\nMeasured (`--sweep tilt`): at 0-2 degrees of spread the focal length comes out 6-10% wrong at an RMS of 0.21 px; at 20 degrees it is 0.10% wrong at an RMS of 0.25 px. Twenty is where the error collapses, and it is far more tilt than anyone holding a board produces by accident, which is the point.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "max_focal_uncertainty_ratio": {
+          "default": 0.02,
+          "description": "Standard deviation of the fitted focal length, as a fraction of it, above which the calibration is refused. Two percent of focal length is roughly two percent of every triangulated depth, which is a centimetre at half a metre and compounds through Phase 9.\n\nA backstop rather than the main instrument: it catches a fit that is visibly ill-conditioned and, as `fx_uncertainty` documents, misses the degenerate capture entirely. The coverage bounds are what catch that, and they are checked first.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_rms_reprojection_px": {
+          "default": 1.0,
+          "description": "Residual above which the fit is refused outright. A pixel is a loose bound -- a good calibration lands well under half of one -- and it is deliberately loose, because this bound catches gross failure (a mis-specified board, a wrong dictionary) rather than mediocrity, which the uncertainty bound above is the instrument for.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_focal_disagreement": {
+          "default": 0.05,
+          "description": "How far fx and fy may differ, as a fraction of their mean. Consumer sensors have square pixels, so a real disagreement is evidence of a bad fit rather than of an unusual camera.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_pairing_error_px": {
+          "default": 1.0,
+          "description": "Board displacement attributable to imperfect pairing, above which a stereo pair is dropped. One pixel, so that the sync error a pair contributes stays below the reprojection error it would otherwise be mistaken for. Holding the board still is what keeps pairs inside this; nothing else has to.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_pair_time_error_ms": {
+          "default": 50.0,
+          "description": "How far apart, on one clock, two frames of a pair may sit. A backstop for the bound above rather than the main instrument: a perfectly still board would satisfy the pixel test at any time error, and at some separation the assumption that nothing else in the scene moved stops being reasonable.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_stereo_pairs": {
+          "default": 6,
+          "description": "Paired board views required for stereo extrinsics. Fewer resolves the pose but leaves nothing over to check it with, and a stereo calibration with no spare degrees of freedom has a residual of zero by construction.",
+          "minimum": 3,
+          "type": "integer"
+        }
+      },
+      "title": "CalibrationConfig",
+      "type": "object"
+    },
+    "CalibrationQuality": {
+      "description": "How good a calibration is, in the three senses that differ.\n\nSee the module docstring. The short version: `rms_reprojection_px` is the\nfit, the parameter uncertainties on `CameraIntrinsics` are the answer, and\n`coverage` is the cause. A tool that reports only the first is reporting the\none of the three that a degenerate capture makes *better*.",
+      "properties": {
+        "rms_reprojection_px": {
+          "description": "Root-mean-square distance between each detected corner and where the fitted model puts it. How well the model fits the data it was given -- necessary, and on its own not evidence that the data determined the model.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "max_reprojection_px": {
+          "description": "Worst single corner residual. Separates a uniformly mediocre fit from a good one with a misdetected view in it, which call for different responses.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "per_view_rms_px": {
+          "description": "Residual per board view, in the order the views were used. Drawn by 8.4.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "coverage": {
+          "$ref": "#/$defs/CoverageReport"
+        },
+        "degrees_of_freedom": {
+          "description": "Corner observations times two, minus the parameters fitted. The same guard `SyncQuality.degrees_of_freedom` provides one layer down: a residual from a fit with nothing spare is not evidence.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rms_reprojection_px",
+        "max_reprojection_px",
+        "coverage",
+        "degrees_of_freedom"
+      ],
+      "title": "CalibrationQuality",
+      "type": "object"
+    },
+    "CameraCalibration": {
+      "description": "One camera's calibration: what was measured, from what, and how well.\n\n`usable` and `refusal` are the gate. A calibration that exists is not a\ncalibration that may be used, and the difference is decided here rather than\nby each consumer, so a consumer that forgets to check the coverage cannot\nsilently use a set of views that never determined a focal length.",
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "type": "integer"
+        },
+        "role": {
+          "$ref": "#/$defs/CameraRole"
+        },
+        "intrinsics": {
+          "$ref": "#/$defs/CameraIntrinsics"
+        },
+        "quality": {
+          "$ref": "#/$defs/CalibrationQuality"
+        },
+        "detection": {
+          "$ref": "#/$defs/DetectionReport"
+        },
+        "calibrated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "source": {
+          "description": "What the board views came from, for provenance.",
+          "type": "string"
+        },
+        "notes": {
+          "default": "",
+          "description": "Free text for the capture setting a video file cannot record: which lens, what zoom, whether stabilisation was off. The failure this field exists for is a correct calibration applied to footage shot at a different zoom, which nothing can detect.",
+          "type": "string"
+        },
+        "usable": {
+          "description": "Whether this calibration passed the bounds in `CalibrationConfig`.",
+          "type": "boolean"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why it did not, in words. Set exactly when `usable` is false."
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "role",
+        "intrinsics",
+        "quality",
+        "detection",
+        "calibrated_at",
+        "source",
+        "usable"
+      ],
+      "title": "CameraCalibration",
+      "type": "object"
+    },
+    "CameraIntrinsics": {
+      "description": "One camera's interior geometry, measured.\n\nStated as four scalars rather than a 3x3 matrix because that is what was\nfitted: the skew term of a general K is zero for any sensor manufactured in\nthe last forty years, and carrying a full matrix would invite a reader to\nbelieve this build had measured it. `matrix()` assembles the conventional\nform for the arithmetic that wants one.\n\nPixel coordinates here are **displayed** pixels, after Phase 1's rotation has\nbeen applied -- the same frame the landmarks are normalised against. A\ncalibration measured on the stored orientation and applied to the displayed\none has fx and fy interchanged, which is a plausible-looking calibration that\nis wrong everywhere.",
+      "properties": {
+        "fx": {
+          "description": "Focal length in pixels, horizontal.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "fy": {
+          "description": "Focal length in pixels, vertical.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "cx": {
+          "description": "Optical centre, horizontal, in pixels from the left.",
+          "type": "number"
+        },
+        "cy": {
+          "description": "Optical centre, vertical, in pixels from the top.",
+          "type": "number"
+        },
+        "distortion": {
+          "description": "Distortion coefficients in OpenCV's order (k1, k2, p1, p2[, k3]), as many as `model` declares.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "model": {
+          "$ref": "#/$defs/DistortionModel"
+        },
+        "image_width": {
+          "description": "Displayed frame width this was measured at.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "image_height": {
+          "description": "Displayed frame height this was measured at.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "fx_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Standard deviation of `fx`, in pixels, propagated from the fit's residuals through its Jacobian.\n\n**It does not catch a degenerate capture, which is what the design here expected of it.** Measured, it is smallest exactly where the answer is worst -- 0.012% on a capture whose focal length is wrong by 6%, against 0.31% on one that is right to 0.05% -- because the distortion coefficients absorb the degeneracy and leave a tightly determined wrong answer. A covariance computed from one set of views cannot see outside them. Reported because it is a real statement about the fit's conditioning, and not what `usable` rests on; `CoverageReport` is. None where the fit did not report one."
+        },
+        "fy_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cx_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cy_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "fx",
+        "fy",
+        "cx",
+        "cy",
+        "distortion",
+        "model",
+        "image_width",
+        "image_height"
+      ],
+      "title": "CameraIntrinsics",
+      "type": "object"
+    },
+    "CameraRole": {
+      "description": "Where a camera was put, as the user declared it.\n\nDeliberately the *declared* role, not the measured one. Phase 6's\n`CameraView` is measured from the shoulder line at address and is the\nauthority on what the footage contains; this is the authority on what the\nuser intended, and the interesting case is the two disagreeing.\n\nOTHER exists so a third camera, or a phone propped at an angle nobody would\ncall either name, can still be part of a project instead of forcing a\ndishonest label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "other"
+      ],
+      "title": "CameraRole",
+      "type": "string"
+    },
+    "CoverageReport": {
+      "description": "What the board views actually sampled, and therefore what they could fix.\n\nThe diagnostic half of a calibration. Each field detects a different\ndegeneracy, and every one of them is invisible in the reprojection residual\n-- a degenerate set fits *better*, because the model has less to disagree\nwith. See the module docstring for why each matters.",
+      "properties": {
+        "views": {
+          "description": "Board views that entered the fit.",
+          "type": "integer"
+        },
+        "corners": {
+          "description": "Chessboard corners summed over those views.",
+          "type": "integer"
+        },
+        "image_fraction": {
+          "description": "Fraction of the frame, on a coarse grid, containing at least one detected corner. The blunt measure of whether the lens was sampled where it bends.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "edge_fraction": {
+          "description": "Fraction of all detected corners lying in the outer fifth of the frame radius. Distortion is a function of radius and is nearly nothing at the centre, so this is the share of the evidence that carries any information about it at all.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "tilt_range_deg": {
+          "description": "Spread between the least and most tilted board view, in degrees off square to the camera. **The field that catches the worst case**: a board always held parallel to the sensor cannot separate focal length from distance, and produces an excellent residual around a focal length that is simply not determined.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "scale_range": {
+          "description": "Largest apparent board size over smallest, across views. 1.0 means every view was taken at one distance.",
+          "minimum": 1.0,
+          "type": "number"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "views",
+        "corners",
+        "image_fraction",
+        "edge_fraction",
+        "tilt_range_deg",
+        "scale_range",
+        "methodology"
+      ],
+      "title": "CoverageReport",
+      "type": "object"
+    },
+    "DetectionReport": {
+      "description": "What board detection found across a source, and what it discarded.\n\nEvery count is here rather than only the survivors, because the ratios are\nthe diagnostic. Frames scanned against frames with a board found says\nwhether the board was visible; found against used says whether the views\nwere good enough; and a large gap in either has a different fix -- reshoot\nwith the board in frame, or reshoot with it closer and steadier.",
+      "properties": {
+        "frames_scanned": {
+          "type": "integer"
+        },
+        "frames_with_board": {
+          "type": "integer"
+        },
+        "views_used": {
+          "type": "integer"
+        },
+        "corners_total": {
+          "type": "integer"
+        },
+        "board": {
+          "$ref": "#/$defs/BoardSpec"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/BoardObservation"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "frames_scanned",
+        "frames_with_board",
+        "views_used",
+        "corners_total",
+        "board"
+      ],
+      "title": "DetectionReport",
+      "type": "object"
+    },
+    "DistortionModel": {
+      "description": "Which lens-distortion coefficients were fitted.\n\nNamed and chosen rather than defaulted, because a coefficient that is not\ndetermined by the data does not sit harmlessly near zero -- it takes a value\nthat cancels some of the residual in the region the board happened to cover\nand then diverges outside it, which is the region a swing is filmed in.\n\nPINHOLE\n    No distortion. Correct only for a lens that has none, which no phone\n    wide-angle has; useful as a null model and as the thing a test can\n    recover exactly.\nRADIAL_TANGENTIAL_4\n    k1, k2, p1, p2. Two radial terms and the tangential pair that models a\n    lens not quite parallel to the sensor. The default here, on the\n    measurement in `scripts/benchmark_calibration.py`.\nRADIAL_TANGENTIAL_5\n    The above plus k3. OpenCV's own default, and a third radial term is\n    genuinely needed by a fisheye or an action camera -- but it is the term\n    that most readily absorbs noise when the board never reaches the corners,\n    and it does its damage exactly there.",
+      "enum": [
+        "pinhole",
+        "radial_tangential_4",
+        "radial_tangential_5"
+      ],
+      "title": "DistortionModel",
+      "type": "string"
+    },
+    "PairingReport": {
+      "description": "How the two cameras' board views were paired, and what that cost.\n\nThe measurement that lets an unsynchronised pair be stereo-calibrated at\nall. `worst_pairing_error_px` is the time map's uncertainty converted into\nthe unit it contaminates, by multiplying it by the board's observed image\nspeed: a still board makes it nearly zero however badly the clocks are\nknown, and a moving one makes it large however well they are. See the module\ndocstring.",
+      "properties": {
+        "pairs": {
+          "description": "Frame pairs that entered the stereo fit.",
+          "type": "integer"
+        },
+        "candidates": {
+          "description": "Pairs considered before the bounds below dropped any.",
+          "type": "integer"
+        },
+        "method": {
+          "description": "How frames were matched: 'time_map' or 'explicit'.",
+          "type": "string"
+        },
+        "median_time_error_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median distance between the two frames of a pair once mapped onto one clock. None for explicit pairs, where the caller asserted simultaneity and nothing here can check it."
+        },
+        "worst_pairing_error_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest board displacement, in pixels, attributable to the pairing being imperfect: the sync uncertainty there times the board's image speed there. Directly comparable with the reprojection error, because it is the same unit and it adds to it."
+        },
+        "median_board_speed_px_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How fast the board was moving in the image across the used pairs. The number the capture instruction acts on: hold it still and this goes to zero, and with it the whole cost of not having a genlock."
+        },
+        "dropped": {
+          "description": "Why each rejected candidate was rejected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "pairs",
+        "candidates",
+        "method"
+      ],
+      "title": "PairingReport",
+      "type": "object"
+    },
+    "StereoCalibration": {
+      "description": "Where the second camera stands relative to the first, measured.\n\nStated as the rotation and translation taking a point from the reference\ncamera's frame into the target's. The baseline is reported separately\nbecause it is the one number in here a person can check with a tape measure,\nand a stereo calibration whose baseline is wrong by a factor of two is\nusually a board whose `square_length_m` was taken from the file rather than\nthe print.",
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "type": "integer"
+        },
+        "reference_role": {
+          "$ref": "#/$defs/CameraRole"
+        },
+        "target_role": {
+          "$ref": "#/$defs/CameraRole"
+        },
+        "rotation": {
+          "description": "3x3 rotation, reference frame to target.",
+          "items": {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "translation_m": {
+          "description": "3-vector, in metres, in the target's frame.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "baseline_m": {
+          "description": "Distance between the two optical centres. Checkable with a tape.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "convergence_deg": {
+          "description": "Angle between the two optical axes. Near zero is a parallel rig; a face-on and a down-the-line camera are near 90, which is the best possible geometry for triangulation and the worst for finding anything visible in both.",
+          "type": "number"
+        },
+        "quality": {
+          "$ref": "#/$defs/CalibrationQuality"
+        },
+        "pairing": {
+          "$ref": "#/$defs/PairingReport"
+        },
+        "calibrated_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "usable": {
+          "type": "boolean"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reference_role",
+        "target_role",
+        "rotation",
+        "translation_m",
+        "baseline_m",
+        "convergence_deg",
+        "quality",
+        "pairing",
+        "calibrated_at",
+        "usable"
+      ],
+      "title": "StereoCalibration",
+      "type": "object"
+    }
+  },
+  "description": "Everything known about the geometry of one project's cameras.\n\nStored whole, one per project, for the reason `ProjectSync` is stored whole:\nit is a nested document read entire and never queried by part, and the\nPydantic model is already the authoritative definition of its shape.\n\nKeeping both cameras and their relation in one document rather than three\nrows is what makes `status` computable without a join, and `status` is the\nthing every consumer actually asks for.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "cameras": {
+      "additionalProperties": {
+        "$ref": "#/$defs/CameraCalibration"
+      },
+      "propertyNames": {
+        "$ref": "#/$defs/CameraRole"
+      },
+      "type": "object"
+    },
+    "stereo": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/StereoCalibration"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "config": {
+      "$ref": "#/$defs/CalibrationConfig"
+    }
+  },
+  "title": "CameraRig",
+  "type": "object"
+}

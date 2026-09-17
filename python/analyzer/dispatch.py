@@ -17,11 +17,12 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
+from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
 from analyzer.contracts.pose import LandmarkSpace
-from analyzer.contracts.projects import CameraRole
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
@@ -30,6 +31,7 @@ from analyzer.paths import cache_dir
 from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
+    from analyzer.contracts.calibration import CalibrationStatus
     from analyzer.contracts.projects import Project, ProjectClip
     from analyzer.sync import SyncInput
 
@@ -315,6 +317,22 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
         default_factory=MetricConfig,
         description="When a measurement is too ill-conditioned to report at all.",
     )
+    project_id: int | None = Field(
+        default=None,
+        description=(
+            "Apply this project's camera calibration, if the clip belongs to it "
+            "and a usable one exists for the camera that filmed it.\n\n"
+            "The clip is matched **by content**, which is how a project "
+            "identifies its clips everywhere else: a file that has been moved or "
+            "renamed still matches, and a different recording under the same "
+            "name does not. What the match supplies is the clip's declared role, "
+            "which is the only thing that says which of the project's cameras "
+            "this footage came out of.\n\n"
+            "None measures the clip uncalibrated, which is the ordinary case and "
+            "a supported one: the metrics are then reported as what they are, "
+            "carrying whatever distortion the lens has."
+        ),
+    )
     slow_motion_factor: float = Field(
         default=1.0,
         gt=0.0,
@@ -356,18 +374,75 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
+    intrinsics, status = _calibration_for(parsed.project_id, sequence)
+
     filtered = filter_sequence(
         sequence,
         parsed.filter,
         space=LandmarkSpace.FRAME_WIDTHS,
         slow_motion_factor=parsed.slow_motion_factor,
+        intrinsics=intrinsics,
         reporter=reporter,
     )
     try:
         detected = detect_phases(filtered, parsed.phases)
-        return compute_metrics(filtered, detected, parsed.metrics)
+        return compute_metrics(filtered, detected, parsed.metrics, status)
     except (SignalError, BodyError) as exc:
         raise _unsupported_input(exc, None) from exc
+
+
+def _calibration_for(project_id: int | None, sequence: Any) -> tuple[Any, CalibrationStatus]:
+    """The calibration to measure this clip with, and what it entitles a claim to.
+
+    Returns `(None, NONE)` for an uncalibrated project, a clip that is not in the
+    project, or a calibration measured at a different frame size. Each of those
+    is a reason the lens is unknown *for this footage*, and they are not
+    distinguished here because the consequence is identical: the metrics are
+    reported as image-plane measurements carrying an unmeasured distortion, which
+    is what they would have been anyway. `MetricSet.warnings` says so.
+    """
+    from analyzer.contracts.calibration import CalibrationStatus
+
+    if project_id is None:
+        return None, CalibrationStatus.NONE
+
+    from analyzer.projects import ProjectError, ProjectStore
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    if project.rig is None:
+        return None, CalibrationStatus.NONE
+
+    # By content, not by path: that is how a project identifies its clips
+    # everywhere else, and it is what survives the file being moved.
+    clip = next(
+        (
+            entry
+            for entry in project.clips
+            if entry.content_key.digest == sequence.video_content_key.digest
+        ),
+        None,
+    )
+    if clip is None:
+        raise _unsupported_input(
+            ValueError(
+                f"This footage is not a clip of project {project_id}, so there is no "
+                "record of which camera filmed it."
+            ),
+            "Add it with `analyzer project add-clip`, naming the camera role.",
+        )
+
+    geometry = sequence.geometry
+    status = project.rig.status_for_frame(clip.role, geometry.width, geometry.height)
+    if status is CalibrationStatus.NONE:
+        return None, status
+
+    camera = project.rig.usable_camera(clip.role)
+    return (camera.intrinsics if camera is not None else None), status
 
 
 class SyncClipParams(BaseModel, extra="forbid"):
@@ -816,6 +891,332 @@ def _choose_pair(
     return reference, only_other(reference.id)
 
 
+# --- calibration (Phase 8) ------------------------------------------------
+
+
+class BoardParams(BaseModel, extra="forbid"):
+    """The printed board, as the caller measured it.
+
+    Defaults describe the board `scripts/make_charuco_board.py` generates at its
+    own defaults, so the common path needs no parameters. `square_length_mm` is
+    the one that must be checked against the sheet with a ruler: printers scale
+    to fit, and every metric claim the system ever makes descends from it.
+    """
+
+    squares_x: int = Field(default=7, ge=2)
+    squares_y: int = Field(default=5, ge=2)
+    square_length_mm: float = Field(default=35.0, gt=0.0)
+    marker_length_mm: float | None = Field(
+        default=None,
+        description="Defaults to 0.75 of the square, which is the ratio the generator uses.",
+    )
+    family: str = Field(default="DICT_5X5_100")
+    legacy_pattern: bool = False
+
+    def to_spec(self) -> BoardSpec:
+        marker = self.marker_length_mm
+        return BoardSpec(
+            squares_x=self.squares_x,
+            squares_y=self.squares_y,
+            square_length_m=self.square_length_mm / 1000.0,
+            marker_length_m=(marker if marker is not None else 0.75 * self.square_length_mm)
+            / 1000.0,
+            family=BoardFamily(self.family),
+            legacy_pattern=self.legacy_pattern,
+        )
+
+
+class CalibrateCameraParams(BaseModel, extra="forbid"):
+    """Parameters for `calibrate_camera`."""
+
+    source: str = Field(description="A video of the board, or a directory of stills.")
+    role: CameraRole = CameraRole.OTHER
+    board: BoardParams = Field(default_factory=BoardParams)
+    stride: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "Frames to skip between detections, for a video source. The board is "
+            "not in a meaningfully different place in two adjacent frames, and "
+            "detection is the cost."
+        ),
+    )
+    project_id: int | None = Field(
+        default=None,
+        description="Store the result on this project's rig. None calibrates without saving.",
+    )
+    notes: str = Field(default="", description="The capture setting a video file cannot record.")
+    calibration: CalibrationConfig | None = None
+
+
+class CalibrateStereoParams(BaseModel, extra="forbid"):
+    """Parameters for `calibrate_stereo`.
+
+    Both clips must already be calibrated individually -- the intrinsics are held
+    fixed by the stereo fit -- so this reads them from the project's rig rather
+    than taking them as parameters. A project whose two cameras are not both
+    calibrated is refused, by name.
+    """
+
+    project_id: int
+    reference_source: str = Field(description="The reference camera's board footage.")
+    target_source: str = Field(description="The target camera's board footage.")
+    reference_role: CameraRole
+    target_role: CameraRole
+    board: BoardParams = Field(default_factory=BoardParams)
+    stride: int = Field(default=5, ge=1)
+    offset_s: float | None = Field(
+        default=None,
+        description=(
+            "How far ahead of the reference clock the target clock runs, during "
+            "the board capture. None takes it from the project's stored "
+            "alignment, which is what Phase 7 produced; supplying it here is for "
+            "a board capture that is not the swing the alignment was fitted to."
+        ),
+    )
+    offset_uncertainty_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        description=(
+            "How well that offset is known. It is multiplied by the board's "
+            "measured image speed to give the pairing error in pixels, which is "
+            "what decides whether a pair is usable."
+        ),
+    )
+    calibration: CalibrationConfig | None = None
+
+
+def _calibration_error(exc: Exception) -> EngineError:
+    return _unsupported_input(exc, getattr(exc, "remediation", None))
+
+
+def _detect_board(
+    source: Path,
+    spec: BoardSpec,
+    stride: int,
+    reporter: ProgressReporter,
+    *,
+    select: bool = True,
+) -> tuple[list[Any], Any]:
+    """Find the board in a video or a directory of stills, whichever the path is.
+
+    `select` is False for the stereo path, which needs every detection: it pairs
+    frames by time and measures the board's speed from the frames either side of
+    each pair, and thinning the list first destroys both. Distinctness is then
+    selected on the pairs instead.
+    """
+    from analyzer.calibration.detect import detect_in_directory, detect_in_video
+
+    if source.is_dir():
+        return detect_in_directory(source, spec, reporter=reporter, select=select)
+    return detect_in_video(source, spec, stride=stride, reporter=reporter, select=select)
+
+
+def _calibrate_camera(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Measure one camera's intrinsics from footage of a Charuco board."""
+    parsed = CalibrateCameraParams.model_validate(params)
+
+    from analyzer.calibration.board import BoardError
+    from analyzer.calibration.intrinsics import CalibrationError, calibrate_intrinsics
+
+    source = Path(parsed.source)
+    if not source.exists():
+        raise _unsupported_input(
+            FileNotFoundError(f"{source} does not exist."),
+            "Point --source at the board video, or at a directory of board photographs.",
+        )
+
+    try:
+        spec = parsed.board.to_spec()
+        views, report = _detect_board(source, spec, parsed.stride, reporter)
+    except BoardError as exc:
+        raise _calibration_error(exc) from exc
+
+    try:
+        calibration = calibrate_intrinsics(
+            views,
+            spec,
+            role=parsed.role,
+            source=str(source),
+            detection=report,
+            config=parsed.calibration,
+            notes=parsed.notes,
+        )
+    except CalibrationError as exc:
+        raise _calibration_error(exc) from exc
+
+    if parsed.project_id is None:
+        return calibration
+
+    from analyzer.contracts.calibration import CameraRig
+    from analyzer.projects import ProjectError, ProjectStore
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+            rig = project.rig or CameraRig(config=parsed.calibration or CameraRig().config)
+            cameras = dict(rig.cameras)
+            cameras[parsed.role] = calibration
+            # Replacing a camera invalidates extrinsics fitted against the old
+            # one: the stereo pose was measured relative to intrinsics that no
+            # longer describe this camera, and keeping it would silently mix two
+            # calibrations of the same rig.
+            updated = rig.model_copy(
+                update={
+                    "cameras": cameras,
+                    "stereo": (
+                        None
+                        if rig.stereo is not None
+                        and parsed.role in (rig.stereo.reference_role, rig.stereo.target_role)
+                        else rig.stereo
+                    ),
+                }
+            )
+            store.save_rig(parsed.project_id, updated)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    return calibration
+
+
+def _calibrate_stereo(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Measure where two already-calibrated cameras stand relative to each other."""
+    parsed = CalibrateStereoParams.model_validate(params)
+
+    from analyzer.calibration.board import BoardError
+    from analyzer.calibration.stereo import StereoError, calibrate_stereo, pair_by_time_map
+    from analyzer.contracts.sync import TimeMap as SyncTimeMap
+    from analyzer.projects import ProjectError, ProjectStore
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    rig = project.rig
+    missing = [
+        role.value
+        for role in (parsed.reference_role, parsed.target_role)
+        if rig is None or rig.usable_camera(role) is None
+    ]
+    if missing or rig is None:
+        raise _unsupported_input(
+            ValueError(
+                f"Project {parsed.project_id} has no usable calibration for: "
+                f"{', '.join(missing) or 'either camera'}."
+            ),
+            (
+                "Calibrate each camera on its own first. Stereo extrinsics hold the "
+                "intrinsics fixed, so both must already be measured."
+            ),
+        )
+
+    reference_camera = rig.usable_camera(parsed.reference_role)
+    target_camera = rig.usable_camera(parsed.target_role)
+    assert reference_camera is not None and target_camera is not None  # noqa: S101
+
+    spec = parsed.board.to_spec()
+    try:
+        reference_views, _ = _detect_board(
+            Path(parsed.reference_source), spec, parsed.stride, reporter, select=False
+        )
+        target_views, _ = _detect_board(
+            Path(parsed.target_source), spec, parsed.stride, reporter, select=False
+        )
+    except BoardError as exc:
+        raise _calibration_error(exc) from exc
+
+    offset_s = parsed.offset_s
+    uncertainty_s = parsed.offset_uncertainty_s
+    if offset_s is None:
+        stored = next(
+            (
+                entry
+                for entry in project.syncs
+                if entry.model.aligned and entry.model.time_map is not None
+            ),
+            None,
+        )
+        if stored is None or stored.model.time_map is None:
+            raise _unsupported_input(
+                ValueError("No offset was supplied and this project has no stored alignment."),
+                (
+                    "Run `analyzer project sync` first, or pass --offset with how far ahead "
+                    "the target camera's clock ran during the board capture."
+                ),
+            )
+        offset_s = stored.model.time_map.offset_s
+        uncertainty_s = stored.model.time_map.offset_uncertainty_s or uncertainty_s
+
+    config = parsed.calibration or rig.config
+    time_map = SyncTimeMap(
+        offset_s=offset_s,
+        rate=1.0,
+        rate_estimated=False,
+        pivot_s=0.0,
+        offset_uncertainty_s=uncertainty_s,
+        support_start_s=0.0,
+        support_end_s=0.0,
+    )
+    pairs, dropped = pair_by_time_map(reference_views, target_views, time_map, config)
+
+    try:
+        stereo = calibrate_stereo(
+            pairs,
+            spec,
+            reference_camera.intrinsics,
+            target_camera.intrinsics,
+            reference_role=parsed.reference_role,
+            target_role=parsed.target_role,
+            dropped=dropped,
+            candidates=len(reference_views),
+            config=config,
+        )
+    except StereoError as exc:
+        raise _calibration_error(exc) from exc
+
+    try:
+        with ProjectStore() as store:
+            store.save_rig(parsed.project_id, rig.model_copy(update={"stereo": stereo}))
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    return stereo
+
+
+def _get_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    """A project's camera rig: what is known about its cameras' geometry."""
+    parsed = ProjectParams.model_validate(params)
+
+    from analyzer.contracts.calibration import CameraRig
+    from analyzer.projects import ProjectError, ProjectStore
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    # An uncalibrated project returns an empty rig rather than nothing. The
+    # status of an empty rig is `none`, which is the correct answer to "what may
+    # I claim"; returning null would make every caller write that mapping again.
+    return project.rig or CameraRig()
+
+
+def _clear_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    """Forget a project's calibration. The footage is untouched."""
+    parsed = ProjectParams.model_validate(params)
+
+    from analyzer.projects import ProjectError, ProjectStore
+
+    try:
+        with ProjectStore() as store:
+            return store.clear_rig(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
     "probe_video": _probe_video,
@@ -832,6 +1233,10 @@ METHODS: dict[str, Method] = {
     "remove_clip": _remove_clip,
     "relocate_clip": _relocate_clip,
     "sync_project": _sync_project,
+    "calibrate_camera": _calibrate_camera,
+    "calibrate_stereo": _calibrate_stereo,
+    "get_calibration": _get_calibration,
+    "clear_calibration": _clear_calibration,
 }
 
 

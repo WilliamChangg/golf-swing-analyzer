@@ -97,6 +97,12 @@ export type SwingPhase = "address" | "backswing" | "downswing" | "follow_through
  */
 export type CameraView = "face_on" | "down_the_line" | "unknown";
 export type BodySide = "left" | "right";
+/**
+ * What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.
+ *
+ * `none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`.
+ */
+export type CalibrationStatus = "none" | "intrinsics" | "stereo";
 
 /**
  * Everything the biomechanics engine concluded about one clip.
@@ -121,6 +127,7 @@ export interface MetricSet {
   torso_length: number;
   geometry: FrameGeometry;
   frames: number;
+  calibration?: CalibrationStatus;
   /**
    * How many times slower than real time the clip plays, as supplied by the caller. 1.0 is an ordinary recording. Timestamps here are **real seconds**, already divided by it, so they no longer index into the video file -- frame numbers do. Nothing in a conformed slow-motion clip records this, so it cannot be measured and is not guessed.
    */

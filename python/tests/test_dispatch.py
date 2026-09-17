@@ -44,6 +44,16 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "remove_clip": {"project_id": 1, "clip_id": 1},
     "relocate_clip": {"project_id": 1, "clip_id": 1, "path": str(CFR_30FPS)},
     "sync_project": {"project_id": 1},
+    "calibrate_camera": {"source": "board.mov"},
+    "calibrate_stereo": {
+        "project_id": 1,
+        "reference_source": "a.mov",
+        "target_source": "b.mov",
+        "reference_role": "face_on",
+        "target_role": "down_the_line",
+    },
+    "get_calibration": {"project_id": 1},
+    "clear_calibration": {"project_id": 1},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -54,6 +64,12 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
 # into `tmp_path`. Without that this table would create projects in the
 # developer's real data directory on every run.
 _FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
+
+# `calibrate_camera` and `calibrate_stereo` are absent from the fast set and from
+# the slow one: both need board footage, which this repository does not contain,
+# and a stub would exercise the dispatch wiring against a fixture rather than
+# against the engine. `tests/test_calibration.py` covers the path they call into,
+# from rendered board views, which is the stronger test of the two.
 
 
 class TestCall:

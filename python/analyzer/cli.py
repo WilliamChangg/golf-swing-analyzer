@@ -26,6 +26,15 @@ from rich.progress import (
 from rich.table import Table
 
 from analyzer import __version__
+from analyzer.calibration.apply import distortion_displacement
+from analyzer.contracts.calibration import (
+    BoardFamily,
+    BoardSpec,
+    CalibrationQuality,
+    CameraCalibration,
+    CameraRig,
+    StereoCalibration,
+)
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.metrics import (
@@ -618,6 +627,16 @@ def _render_metrics(result: MetricSet) -> None:
         f"(aspect {result.geometry.aspect_ratio:.4f})",
     )
     summary.add_row("torso length", f"{result.torso_length:.3f} frame widths")
+    # Stated on every result, not only when something was refused: a reader who
+    # sees no refusals must not conclude the camera geometry was known.
+    summary.add_row(
+        "calibration",
+        {
+            "none": "[yellow]none[/yellow] — these carry the lens's unmeasured distortion",
+            "intrinsics": "[green]intrinsics[/green] — lens removed; still image-plane only",
+            "stereo": "[green]stereo[/green] — triangulation possible (Phase 9)",
+        }[result.calibration.value],
+    )
 
     view = result.view
     if view is not None:
@@ -722,6 +741,13 @@ def metrics(
             help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
         ),
     ] = 1.0,
+    project: Annotated[
+        int | None,
+        typer.Option(
+            "--project",
+            help="Apply this project's camera calibration. The clip must be one of its clips.",
+        ),
+    ] = None,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
     ] = False,
@@ -740,6 +766,8 @@ def metrics(
     }
     if smoothing:
         params["filter"] = {"smoothing": smoothing}
+    if project is not None:
+        params["project_id"] = project
 
     try:
         result = call("compute_metrics", params)
@@ -1308,6 +1336,416 @@ def extract(
 
 # Last in the file on purpose. Typer registers a command when its decorator
 # runs, so anything defined below this block is absent when the module is
+
+
+def _run_with_progress(
+    method: str, params: dict[str, object], description: str, *, quiet: bool = False
+) -> BaseModel:
+    """Call a long method, driving a terminal bar from the same reporter seam the app uses.
+
+    Factored out here because board detection is the third long method in this
+    CLI and the bar wiring was already written twice. The error handling is part
+    of it: a failure has to stop the bar before printing, or Rich leaves the
+    partly-drawn bar sitting over the message.
+    """
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+        # Redirected to stderr so `--json` output stays a clean pipe.
+        disable=quiet,
+    ) as progress:
+        bar = progress.add_task(description, total=None)
+
+        def on_update(update: ProgressUpdate) -> None:
+            progress.update(bar, completed=update.current, total=update.total)
+
+        try:
+            return call(method, params, CallbackReporter(on_update))
+        except EngineError as exc:
+            progress.stop()
+            console.print(f"[red]{exc}[/red]")
+            remediation = (exc.data or {}).get("remediation")
+            if remediation:
+                console.print(f"[dim]fix: {remediation}[/dim]")
+            raise typer.Exit(code=1) from exc
+
+
+calibrate = typer.Typer(
+    name="calibrate",
+    help="Measure a camera's geometry, so the system knows what a pixel means.",
+    no_args_is_help=True,
+)
+app.add_typer(calibrate)
+
+
+def _render_coverage(quality: CalibrationQuality) -> Table:
+    """The diagnostic half, which is the half that decides whether to trust the fit."""
+    table = Table(title="Coverage", title_justify="left", expand=True)
+    table.add_column("What the board views sampled", no_wrap=True)
+    table.add_column("Value", overflow="fold")
+
+    found = quality.coverage
+    table.add_row("views used", str(found.views))
+    table.add_row("corners", str(found.corners))
+    table.add_row("frame area visited", f"{found.image_fraction:.0%}")
+    table.add_row("corners near the edge", f"{found.edge_fraction:.0%}")
+    table.add_row("tilt spread", f"{found.tilt_range_deg:.0f} deg")
+    table.add_row("apparent size spread", f"{found.scale_range:.2f}x")
+    table.add_row("spare degrees of freedom", str(quality.degrees_of_freedom))
+    return table
+
+
+def _render_camera_calibration(result: CameraCalibration) -> None:
+    summary = Table(title="Camera calibration", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    found = result.intrinsics
+    verdict = "[green]USABLE[/green]" if result.usable else "[red]REFUSED[/red]"
+    summary.add_row("usable", verdict)
+    summary.add_row("role", result.role.value)
+    summary.add_row("frame size", f"{found.image_width}x{found.image_height}")
+    summary.add_row("focal length", f"fx {found.fx:.1f} px, fy {found.fy:.1f} px")
+    summary.add_row("optical centre", f"({found.cx:.1f}, {found.cy:.1f}) px")
+    summary.add_row(
+        "field of view",
+        f"{found.horizontal_fov_deg:.1f} deg across, {found.vertical_fov_deg:.1f} deg down"
+        "  [dim](check this against the lens)[/dim]",
+    )
+    summary.add_row("distortion model", found.model.value)
+    summary.add_row(
+        "distortion", ", ".join(f"{value:+.4f}" for value in found.distortion) or "none"
+    )
+
+    # The three numbers that answer three different questions, in the order the
+    # module docstring puts them: the fit, the answer, and then the cause.
+    quality = result.quality
+    summary.add_row(
+        "reprojection error",
+        f"{quality.rms_reprojection_px:.3f} px rms, {quality.max_reprojection_px:.3f} px worst "
+        "[dim](how well the model fits these views)[/dim]",
+    )
+    if found.fx_uncertainty is not None:
+        ratio = found.fx_uncertainty / found.fx
+        style = "green" if ratio <= 0.02 else "yellow" if ratio <= 0.05 else "red"
+        summary.add_row(
+            "focal uncertainty",
+            f"[{style}]{found.fx_uncertainty:.2f} px ({ratio:.2%})[/{style}] "
+            "[dim](whether these views determined it)[/dim]",
+        )
+    else:
+        summary.add_row("focal uncertainty", "[dim]not reported[/dim]")
+
+    edge, worst = distortion_displacement(found)
+    summary.add_row(
+        "this lens moves a pixel by",
+        f"{edge:.1f} px at the frame edge, {worst:.1f} px at worst",
+    )
+    if result.notes:
+        summary.add_row("notes", result.notes)
+    console.print(summary)
+    console.print(_render_coverage(quality))
+
+    detection = result.detection
+    console.print(
+        f"[dim]Scanned {detection.frames_scanned} frame(s); board found in "
+        f"{detection.frames_with_board}; {detection.views_used} distinct views kept.[/dim]"
+    )
+    for warning in [*detection.warnings, *result.warnings]:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _render_stereo(result: StereoCalibration) -> None:
+    summary = Table(title="Stereo extrinsics", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]USABLE[/green]" if result.usable else "[red]REFUSED[/red]"
+    summary.add_row("usable", verdict)
+    summary.add_row("cameras", f"{result.reference_role.value} -> {result.target_role.value}")
+    summary.add_row(
+        "baseline",
+        f"{result.baseline_m:.3f} m  [dim](check this with a tape measure)[/dim]",
+    )
+    summary.add_row("convergence", f"{result.convergence_deg:.1f} deg between the optical axes")
+    summary.add_row(
+        "reprojection error",
+        f"{result.quality.rms_reprojection_px:.3f} px rms "
+        "[dim](a point located by one camera, seen by the other)[/dim]",
+    )
+
+    pairing = result.pairing
+    summary.add_row("paired views", f"{pairing.pairs} of {pairing.candidates} candidates")
+    if pairing.median_time_error_ms is not None:
+        summary.add_row("pairing, in time", f"{pairing.median_time_error_ms:.1f} ms median")
+    if pairing.median_board_speed_px_s is not None:
+        summary.add_row("board speed", f"{pairing.median_board_speed_px_s:.0f} px/s median")
+    if pairing.worst_pairing_error_px is not None:
+        summary.add_row(
+            "pairing, in pixels",
+            f"{pairing.worst_pairing_error_px:.2f} px worst "
+            "[dim](sync uncertainty x board speed)[/dim]",
+        )
+    console.print(summary)
+    console.print(_render_coverage(result.quality))
+
+    for entry in pairing.dropped:
+        console.print(f"[dim]dropped: {entry}[/dim]")
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _board_params(
+    squares: str, square_mm: float, marker_mm: float | None, family: str, legacy: bool
+) -> dict[str, object]:
+    width, _, height = squares.partition("x")
+    if not height:
+        raise typer.BadParameter("Give the board as WxH, for example 7x5.", param_hint="--squares")
+    return {
+        "squares_x": int(width),
+        "squares_y": int(height),
+        "square_length_mm": square_mm,
+        "marker_length_mm": marker_mm,
+        "family": family,
+        "legacy_pattern": legacy,
+    }
+
+
+@calibrate.command(name="board")
+def calibrate_board(
+    output: Annotated[Path, typer.Argument(help="Where to write the printable board image.")],
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[
+        float, typer.Option("--square-mm", help="Intended printed square size, in millimetres.")
+    ] = 35.0,
+    family: Annotated[str, typer.Option("--family", help="ArUco dictionary.")] = "DICT_5X5_100",
+    dpi: Annotated[float, typer.Option("--dpi", help="Rendering resolution.")] = 600.0,
+) -> None:
+    """Generate a Charuco board to print.
+
+    Generated here rather than downloaded, so the board that is printed and the
+    board that is looked for are the same object by construction.
+    """
+    import cv2
+
+    from analyzer.calibration.board import generate_board_image
+
+    spec = BoardSpec(
+        squares_x=int(squares.partition("x")[0]),
+        squares_y=int(squares.partition("x")[2]),
+        square_length_m=square_mm / 1000.0,
+        marker_length_m=0.75 * square_mm / 1000.0,
+        family=BoardFamily(family),
+    )
+    image = generate_board_image(spec, pixels_per_metre=dpi / 0.0254)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(output), image):
+        console.print(f"[red]Could not write {output}.[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Wrote [bold]{output}[/bold] ({image.shape[1]}x{image.shape[0]} px).")
+    console.print(
+        Panel(
+            f"Print this at 100% scale -- no 'fit to page'. Then [bold]measure one square "
+            f"with a ruler[/bold] and pass what you measure as --square-mm, not "
+            f"{square_mm:.0f}.\n\n"
+            "Every metric-scale claim this system ever makes descends from that one "
+            "measured length, and a page silently scaled to 96% makes every future "
+            "distance wrong by 4% with nothing anywhere looking amiss.\n\n"
+            "Mount it on something rigid and flat. The method assumes the board is a "
+            "plane, and a sheet held in one hand is not.",
+            title="Before you use it",
+            border_style="yellow",
+        )
+    )
+
+
+@calibrate.command(name="camera")
+def calibrate_camera_command(
+    source: Annotated[
+        Path, typer.Argument(help="A video of the board, or a directory of board photographs.")
+    ],
+    role: Annotated[
+        str, typer.Option("--role", help="Which camera: face_on, down_the_line or other.")
+    ] = "other",
+    project: Annotated[
+        int | None, typer.Option("--project", help="Store the result on this project's rig.")
+    ] = None,
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[
+        float,
+        typer.Option("--square-mm", help="Square size measured on the printed sheet, in mm."),
+    ] = 35.0,
+    marker_mm: Annotated[
+        float | None, typer.Option("--marker-mm", help="Marker size. Defaults to 0.75 of a square.")
+    ] = None,
+    family: Annotated[str, typer.Option("--family", help="ArUco dictionary.")] = "DICT_5X5_100",
+    legacy: Annotated[
+        bool, typer.Option("--legacy-pattern", help="The board came from OpenCV before 4.6.")
+    ] = False,
+    stride: Annotated[int, typer.Option("--stride", help="Frames to skip, for a video.")] = 5,
+    model: Annotated[
+        str | None,
+        typer.Option("--distortion", help="pinhole, radial_tangential_4 or radial_tangential_5."),
+    ] = None,
+    notes: Annotated[
+        str,
+        typer.Option("--notes", help="Lens, zoom, stabilisation -- what the file cannot record."),
+    ] = "",
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """Measure one camera's intrinsics from footage of a Charuco board."""
+    params: dict[str, object] = {
+        "source": str(source),
+        "role": role,
+        "board": _board_params(squares, square_mm, marker_mm, family, legacy),
+        "stride": stride,
+        "notes": notes,
+    }
+    if project is not None:
+        params["project_id"] = project
+    if model is not None:
+        params["calibration"] = {"distortion_model": model}
+
+    result = _run_with_progress("calibrate_camera", params, "Detecting the board", quiet=as_json)
+    assert isinstance(result, CameraCalibration)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+    else:
+        _render_camera_calibration(result)
+
+    # Non-zero when the calibration should not be used, so a script driving this
+    # learns that rather than reading a refused calibration as a usable one.
+    if not result.usable:
+        raise typer.Exit(code=1)
+
+
+@calibrate.command(name="stereo")
+def calibrate_stereo_command(
+    project: Annotated[int, typer.Argument(help="The project whose cameras these are.")],
+    reference: Annotated[Path, typer.Argument(help="The reference camera's board footage.")],
+    target: Annotated[Path, typer.Argument(help="The target camera's board footage.")],
+    reference_role: Annotated[
+        str, typer.Option("--reference-role", help="Which camera the reference footage is.")
+    ] = "face_on",
+    target_role: Annotated[
+        str, typer.Option("--target-role", help="Which camera the target footage is.")
+    ] = "down_the_line",
+    offset: Annotated[
+        float | None,
+        typer.Option("--offset", help="Target clock minus reference clock, in seconds."),
+    ] = None,
+    offset_uncertainty: Annotated[
+        float,
+        typer.Option("--offset-uncertainty", help="How well that offset is known, in seconds."),
+    ] = 0.0,
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[float, typer.Option("--square-mm", help="Square size, in mm.")] = 35.0,
+    marker_mm: Annotated[float | None, typer.Option("--marker-mm")] = None,
+    family: Annotated[str, typer.Option("--family")] = "DICT_5X5_100",
+    legacy: Annotated[bool, typer.Option("--legacy-pattern")] = False,
+    stride: Annotated[int, typer.Option("--stride", help="Frames to skip, for a video.")] = 5,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """Measure where two already-calibrated cameras stand relative to each other.
+
+    Both cameras must be calibrated first: the stereo fit holds the intrinsics
+    fixed rather than re-fitting them, because they are the better-determined
+    quantity and a joint fit would trade focal length against baseline.
+    """
+    params: dict[str, object] = {
+        "project_id": project,
+        "reference_source": str(reference),
+        "target_source": str(target),
+        "reference_role": reference_role,
+        "target_role": target_role,
+        "board": _board_params(squares, square_mm, marker_mm, family, legacy),
+        "stride": stride,
+        "offset_uncertainty_s": offset_uncertainty,
+    }
+    if offset is not None:
+        params["offset_s"] = offset
+
+    result = _run_with_progress("calibrate_stereo", params, "Detecting the board", quiet=as_json)
+    assert isinstance(result, StereoCalibration)  # noqa: S101
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+    else:
+        _render_stereo(result)
+
+    if not result.usable:
+        raise typer.Exit(code=1)
+
+
+@calibrate.command(name="show")
+def calibrate_show(
+    project: Annotated[int, typer.Argument(help="Which project's rig to report.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """What is known about a project's cameras, and what that permits."""
+    try:
+        result = call("get_calibration", {"project_id": project})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, CameraRig)  # noqa: S101
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    status = result.status()
+    style = {"none": "red", "intrinsics": "yellow", "stereo": "green"}[status.value]
+    console.print(
+        Panel(
+            f"[{style}]{status.value.upper()}[/{style}] -- "
+            + {
+                "none": "no camera geometry is known, so every measurement is a statement "
+                "about the image plane and carries the lens's unmeasured distortion.",
+                "intrinsics": "the lens is measured and can be removed from the landmarks. "
+                "Still no depth: a calibrated camera knows which direction a pixel came "
+                "from, not how far away it was.",
+                "stereo": "both cameras and their relative pose are known, so two views of "
+                "one instant can be triangulated. Phase 9 is what does that.",
+            }[status.value],
+            title="What this project may claim",
+            border_style=style,
+        )
+    )
+
+    for _role, entry in sorted(result.cameras.items(), key=lambda item: item[0].value):
+        console.print()
+        _render_camera_calibration(entry)
+    if result.stereo is not None:
+        console.print()
+        _render_stereo(result.stereo)
+
+
+@calibrate.command(name="clear")
+def calibrate_clear(
+    project: Annotated[int, typer.Argument(help="Which project to forget the calibration of.")],
+) -> None:
+    """Forget a project's calibration. The footage is untouched."""
+    try:
+        call("clear_calibration", {"project_id": project})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Project {project} is now uncalibrated.")
+
+
 # executed as `python -m analyzer.cli` -- the commands exist under the installed
 # `analyzer` entry point, which imports the module fully first, and silently do
 # not under the module form. Keeping the two entry points equivalent means this

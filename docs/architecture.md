@@ -110,6 +110,7 @@ pose/           landmark estimation, storage, per-landmark series
 filtering/      smoothing, gap policy, derivatives
 phases/         swing event detection
 sync/           relating two cameras' clocks to each other
+calibration/    what a pixel means: the lens, and where the cameras stand
 biomechanics/   measured metrics, with units, confidence and methodology
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
@@ -131,6 +132,13 @@ derived artifact under `cache_dir()` that exists to save time; a project records
 a _decision_ — these two clips are one swing, filmed from here and from there —
 which nothing can recover from the files once it is lost. It therefore lives
 under `data_dir()`, which backup tools do not skip.
+
+`calibration` sits beside `coordinates` rather than above it, and is optional
+in the same way `sync` is: nothing below it requires a calibration, and
+everything above it is better with one. It is general computer vision — a
+Charuco board and a lens model know nothing about golf — and it is the only
+package whose output is a statement about the physical world rather than about a
+picture of it.
 
 `coordinates` sits below everything and owns the one conversion the whole system
 depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
@@ -395,6 +403,73 @@ in this project the residual is 40x the floor and the confidence is 0.10, which
 is the correct reading of two different swings — and the honest limit of what a
 pair of uncalibrated recordings can be asked.
 
+## Camera calibration
+
+The first layer that turns a picture back into a statement about space, and the
+one whose central finding is a negative.
+
+**The number every calibration tool prints is blind to the failure that
+matters.** RMS reprojection error says how well the model fits the board views it
+was given. A board held square to the camera at one distance cannot separate
+focal length from distance — a longer lens further away makes the same picture —
+so such a capture determines almost nothing, and fits beautifully, because the
+views it fits are exactly the views it was free to fit. Measured, the residual
+stays at 0.21–0.27 px across a range over which the focal length error moves from
+0.05% to 23%.
+
+**The principled-looking replacement fails backwards.** OpenCV returns a standard
+deviation for every intrinsic, propagated through the fit's Jacobian, and the
+design here assumed that would catch it. It is *smallest* where the answer is
+worst — 0.012% on a capture wrong by 6% — because the distortion coefficients
+absorb the degeneracy and leave a tightly determined wrong answer. A covariance
+computed from one set of views cannot see outside them.
+
+So three numbers are reported and each is labelled with the question it answers:
+
+```
+rms_reprojection_px   how well the model fits the data          the fit
+fx_uncertainty        what the fit says about its own spread    a check
+CoverageReport        what the views could possibly determine   the gate
+```
+
+`usable` rests on the third. [ADR-0012](decisions/ADR-0012-calibration-coverage.md).
+
+**A calibrated camera is not a 3D camera**, and `CalibrationStatus` has three
+values rather than two so that nothing can read it as one. `INTRINSICS` means the
+lens can be removed from a landmark — worth 171 px at the frame edge on an
+ordinary phone, inherited by every angle and distance measured above it — and
+means a pixel is a known *direction*. It is not a position: the distance along
+that direction is exactly what the projection destroyed. `apply.bearings` returns
+unit vectors for that reason, and there is deliberately no function here that
+returns a 3D point. Two of those rays meet, and that is Phase 9.
+
+```
+board footage
+  └─ detect        Charuco corners, per frame
+      └─ select    views that differ from the ones already kept
+          └─ fit   intrinsics, held to a named distortion model
+              └─ judge   coverage decides; the residual catches gross failure
+```
+
+**Stereo extrinsics do not need a genlock, and the reason is measured.** Two
+cameras must see the board at the same instant, and two phones do not share a
+clock. What actually matters is that nothing moved between the two frames — so
+the pairing error is converted into the unit it contaminates by multiplying
+Phase 7's `TimeMap.uncertainty_at` by the board's observed image speed there,
+giving a displacement in **pixels** directly comparable with the reprojection
+error. A still board makes that term zero however badly the clocks are known.
+
+Measured, three frames of stillness is the whole requirement: a tenth of a second
+at 30 fps recovers the baseline to 0.10% and the rotation to 0.03°, and a board
+that never stops yields no usable pairs at all. The images are equally sharp
+either way, which is why the system measures this rather than advising it.
+
+The one failure a clock cannot catch is aliasing — board stations a second apart
+with an offset wrong by exactly a second pair each frame with its neighbour,
+simultaneous to the millisecond and showing the board in two different places.
+The fit's residual catches that, so stereo *does* gate on reprojection error:
+there it is measuring a correspondence rather than a model's fit to its own data.
+
 ## Projects
 
 The first state in this engine that cannot be recomputed, and the reason
@@ -456,8 +531,11 @@ frame to settle rotation rather than trusting a property, and why the decode
 benchmark measures both backends rather than assuming the hardware one wins.
 
 This generalises further: the system never reports a capability it has not
-measured. Later phases extend the same rule to calibration status gating
-metric-scale 3D claims, and to detector confidence gating club/ball output.
+measured. Phase 8 extends it to calibration, where the rule needed sharpening:
+a capability must be gated on evidence about the *capture*, not on the estimator's
+opinion of its own fit. Both of the numbers a calibration reports about itself
+pass a capture whose focal length is wrong by tens of percent. Later phases apply
+the same rule to detector confidence gating club and ball output.
 
 ## Baseline measurements
 
@@ -568,10 +646,10 @@ cached, for the same measured reason as Phase 3.
 
 | Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
 | ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (699)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage |
+| Contracts, probes, dispatch, protocol | pytest (758)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration |
 | Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
-| IPC wrappers, component rendering     | Vitest (91)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking                                                                       |
-| UI flows                              | Playwright (29) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment                                                                                                                 |
+| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                       |
+| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                 |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

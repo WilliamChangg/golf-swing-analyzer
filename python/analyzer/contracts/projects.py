@@ -35,35 +35,30 @@ role was never recorded.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from analyzer.contracts.cache import ContentKey
+from analyzer.contracts.calibration import CameraRig
+from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.sync import SyncModel
+
+__all__ = [
+    "PROJECTS_SCHEMA_VERSION",
+    "CameraRole",
+    "Project",
+    "ProjectClip",
+    "ProjectList",
+    "ProjectSync",
+]
 
 # Bump on any change to the stored shape. The store compares this against
 # SQLite's `user_version` and refuses a database it does not understand, rather
 # than reading old rows into new fields.
-PROJECTS_SCHEMA_VERSION = 1
-
-
-class CameraRole(StrEnum):
-    """Where a camera was put, as the user declared it.
-
-    Deliberately the *declared* role, not the measured one. Phase 6's
-    `CameraView` is measured from the shoulder line at address and is the
-    authority on what the footage contains; this is the authority on what the
-    user intended, and the interesting case is the two disagreeing.
-
-    OTHER exists so a third camera, or a phone propped at an angle nobody would
-    call either name, can still be part of a project instead of forcing a
-    dishonest label.
-    """
-
-    FACE_ON = "face_on"
-    DOWN_THE_LINE = "down_the_line"
-    OTHER = "other"
+PROJECTS_SCHEMA_VERSION = 2
+# 1 -> 2: Phase 8 added the `rigs` table, holding one `CameraRig` per project.
+# Migrated rather than refused, because a project is the one thing in this engine
+# that cannot be recomputed from the files.
 
 
 class ProjectClip(BaseModel):
@@ -123,6 +118,19 @@ class Project(BaseModel):
     created_at: datetime
     clips: list[ProjectClip] = Field(default_factory=list)
     syncs: list[ProjectSync] = Field(default_factory=list)
+    rig: CameraRig | None = Field(
+        default=None,
+        description=(
+            "What is known about this project's cameras: their intrinsics, and "
+            "their relative pose where it has been measured. None until a "
+            "calibration is stored, which is the ordinary state -- an "
+            "uncalibrated project is fully supported and simply makes no "
+            "metric-scale claims.\n\n"
+            "One rig per project rather than one per clip, because extrinsics "
+            "relate two cameras and belong to neither. It is read whole and "
+            "never queried by part, which is why it is stored as a document."
+        ),
+    )
     warnings: list[str] = Field(
         default_factory=list,
         description=(
