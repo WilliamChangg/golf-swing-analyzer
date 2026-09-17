@@ -111,6 +111,9 @@ class SwingSignals:
     shoulder_angle_deg: NDArray[np.float64]
     hip_angle_deg: NDArray[np.float64]
     torso_length: float
+    slow_motion_factor: float = 1.0
+    """The time base `t` is already expressed in. Carried so that anything
+    reporting a duration can say what clock it is on."""
 
     def __len__(self) -> int:
         return int(self.t.size)
@@ -316,6 +319,7 @@ def swing_signals(filtered: FilteredSequence) -> SwingSignals:
 
     return SwingSignals(
         t=filtered.t,
+        slow_motion_factor=filtered.slow_motion_factor,
         hand=hand,
         speed=speed,
         height=height,

@@ -15,6 +15,56 @@ data/
   fixtures/            small synthetic clips for tests
 ```
 
+## Slow-motion footage
+
+Nothing in a conformed slow-motion file records that it is slow motion. A clip
+captured at 240 fps and written out at 30 fps has honest timestamps at 1/30 s
+apart and a swing that takes eight times too long, and no metadata separates it
+from a genuinely slow movement.
+
+Every duration rule in this engine is stated in **real** seconds, so such a clip
+is refused until the factor is supplied:
+
+```bash
+uv run --project python analyzer metrics clip.mp4 --slow-motion 8
+```
+
+The detector says so rather than leaving it at "no swing detected": when a
+motion has a swing's shape but every phase is long in the same proportion, it
+reports the smallest factor that would bring the durations inside the bounds.
+
+**The factor is not a relabelling of the clock.** The smoothing window is in real
+seconds too, so the factor decides how many frames it holds, and that changes
+where events land. Getting it right matters; guessing it badly is visible in the
+results. Phone slow motion is usually 4x or 8x, from a 120 or 240 fps capture.
+
+Supplying it correctly is a gain rather than a concession: a slow-motion clip is
+a high-speed capture, so the events resolve better than on any ordinary 30 fps
+recording. On the reference footage every event scores a resolution factor of
+1.00, which no 30 fps clip in this project manages.
+
+## Reference footage
+
+Not committed, and not ground truth — no one has motion-captured any of these.
+They are a stress test, and they earn their keep by disagreeing with the engine.
+
+| Clip                          | View          | Notes                                    |
+| ----------------------------- | ------------- | ---------------------------------------- |
+| `face-on/PW_face-on.mp4`      | face-on       | 68 frames, 30 fps, real time             |
+| `dtl/iron_dtl.mp4`            | down the line | 96 frames, 30 fps; filmed from the front |
+| `dtl/driver_swing_aug19_2026` | down the line | 24 fps; refused, motion blur             |
+| `face-on/rory_face_on.mp4`    | face-on       | tour pro, ~7x slow motion, from behind   |
+| `dtl/rory_dtl.mp4`            | down the line | tour pro, ~5x slow motion                |
+
+The tour-pro clips found two defects the amateur footage could not, because they
+contain a full turn and a slow-motion clock. Both are recorded in
+[../docs/decisions/ADR-0010-projected-biomechanics.md](../docs/decisions/ADR-0010-projected-biomechanics.md).
+
+`face-on/rory_face_on.mp4` also carries the only **observed** impact in the
+project: the ball is on the tee at frame 360 and gone at frame 361. Phase 4's
+kinematic estimate is the only thing in the pipeline that can be checked against
+a real event, and that check is recorded in the ADR.
+
 ## Capture protocol
 
 Analysis quality is bounded by capture quality, and most of what limits it is

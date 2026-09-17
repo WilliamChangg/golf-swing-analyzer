@@ -60,6 +60,7 @@ def _empty(
         torso_length=torso_length,
         geometry=filtered.geometry,
         frames=int(filtered.t.size),
+        slow_motion_factor=filtered.slow_motion_factor,
         config=config,
         warnings=[reason],
     )
@@ -213,6 +214,7 @@ def compute_metrics(
         torso_length=body.torso_length,
         geometry=filtered.geometry,
         frames=len(body),
+        slow_motion_factor=filtered.slow_motion_factor,
         config=resolved,
     )
     result.warnings = _view_warnings(result)

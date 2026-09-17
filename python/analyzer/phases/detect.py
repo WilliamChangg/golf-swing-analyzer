@@ -177,6 +177,7 @@ def _empty_result(signals: SwingSignals, config: PhaseConfig, warnings: list[str
         detected=False,
         hand=_hand_info(signals),
         frames=len(signals),
+        slow_motion_factor=signals.slow_motion_factor,
         config=config,
         warnings=warnings,
     )
@@ -364,6 +365,7 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
             [
                 f"No swing detected. The strongest motion in this clip has {fault}. "
                 "Those are not a swing's proportions, so no events are reported.",
+                *_slow_motion_warning(signals, resolved, backswing_s, downswing_s),
                 *_tracking_gap_warnings(signals, resolved),
             ],
         )
@@ -380,9 +382,53 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
         phases=_build_phases(signals, events, takeaway, top, impact, finish),
         hand=_hand_info(signals),
         frames=len(signals),
+        slow_motion_factor=signals.slow_motion_factor,
         config=resolved,
         warnings=warnings,
     )
+
+
+def _slow_motion_warning(
+    signals: SwingSignals, config: PhaseConfig, backswing_s: float, downswing_s: float
+) -> list[str]:
+    """Say so when a motion has a swing's shape but not a swing's timing.
+
+    Every rule about duration in this module is stated in **real** seconds, and
+    reads them off the container's presentation timestamps. That is right for an
+    ordinary recording and wrong for a slow-motion one, where the clock runs at
+    the playback rate and every phase comes out stretched by the same factor.
+
+    Nothing in a conformed slow-motion file records that factor, so it cannot be
+    measured here and is not guessed. What *can* be said is that the shape checks
+    passed -- the hands travelled a swing's distance, in a swing's pattern -- and
+    only the durations failed, all of them long. That is the signature, and
+    reporting it with the smallest factor that would bring the clip inside the
+    bounds turns "no swing detected" into something the person holding the camera
+    can act on.
+
+    Only ever a suggestion. The factor named is a lower bound derived from the
+    configured limit, not an estimate of the clip's real speed, and no metric is
+    computed from it.
+    """
+    if signals.slow_motion_factor != 1.0:
+        # Already being reinterpreted; a second suggestion would be noise.
+        return []
+    if downswing_s <= config.max_downswing_s and backswing_s >= config.min_backswing_s:
+        return []
+    if downswing_s <= config.max_downswing_s:
+        # Too *short*, which slowing the clock down cannot explain.
+        return []
+
+    minimum = downswing_s / config.max_downswing_s
+    return [
+        f"The motion has a swing's shape but not a swing's timing: every phase is long, "
+        f"in the same proportion. If this is slow-motion footage, re-run it with a "
+        f"slow-motion factor of at least {minimum:.1f} and the durations fall inside the "
+        "bounds. Phone slow motion is usually 4x or 8x, from a 120 or 240 fps capture "
+        "conformed to 30. Nothing in the file records which, so the factor has to be "
+        "supplied rather than measured, and it does change the result: it sets how many "
+        "samples the smoothing window holds."
+    ]
 
 
 def _tracking_gap_warnings(signals: SwingSignals, config: PhaseConfig) -> list[str]:

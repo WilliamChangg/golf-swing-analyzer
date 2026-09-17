@@ -106,6 +106,7 @@ class FilteredSequence:
     t: NDArray[np.float64]
     landmarks: dict[Landmark, FilteredLandmark]
     geometry: FrameGeometry
+    slow_motion_factor: float
     report: SequenceFilterReport
 
     def __getitem__(self, landmark: Landmark) -> FilteredLandmark:
@@ -264,6 +265,7 @@ def filter_sequence(
     config: FilterConfig | None = None,
     *,
     space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
+    slow_motion_factor: float = 1.0,
     landmarks: tuple[Landmark, ...] | None = None,
     reporter: ProgressReporter | None = None,
     request_id: int | str | None = None,
@@ -279,7 +281,7 @@ def filter_sequence(
     started = time.perf_counter()
     filtered: dict[Landmark, FilteredLandmark] = {}
     for done, landmark in enumerate(selected, start=1):
-        series = landmark_series(sequence, landmark, space)
+        series = landmark_series(sequence, landmark, space, slow_motion_factor)
         filtered[landmark] = filter_landmark(series, resolved, pipeline=pipeline)
         tracker.report("filtering", done, len(selected))
 
@@ -288,7 +290,10 @@ def filter_sequence(
     timestamps = (
         next(iter(filtered.values())).t
         if filtered
-        else np.array([frame.timestamp_s for frame in sequence.frames], dtype=np.float64)
+        else np.array(
+            [frame.timestamp_s / slow_motion_factor for frame in sequence.frames],
+            dtype=np.float64,
+        )
     )
 
     tracker.report("done", len(selected), len(selected))
@@ -298,9 +303,11 @@ def filter_sequence(
         t=timestamps,
         landmarks=filtered,
         geometry=sequence.geometry,
+        slow_motion_factor=slow_motion_factor,
         report=SequenceFilterReport(
             config=resolved,
             space=space,
+            slow_motion_factor=slow_motion_factor,
             samples=len(sequence.frames),
             landmarks=reports,
             elapsed_s=elapsed,

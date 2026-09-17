@@ -151,6 +151,60 @@ def segments(body: Body, anchors: Anchors, config: MetricConfig) -> tuple[Segmen
     )
 
 
+def turn_uncertainty_deg(
+    body: Body, segment: Segment, frame: int, config: MetricConfig
+) -> float | None:
+    """How many degrees the reported turn could be out, measured from the clip.
+
+    The body rotates smoothly, so within a few hundredths of a second the
+    projected span of a body line should barely change. Where it jumps instead,
+    the estimator is guessing a landmark it cannot see -- which is what happens
+    to the far shoulder once a player turns far enough -- and the jumping is
+    measurable even though the guess is not.
+
+    The spread is taken as a median absolute deviation, scaled to a standard
+    deviation, so one bad frame widens it rather than defining it. It is then
+    propagated through the arccos that produced the angle:
+
+        d(theta)/d(span) = 1 / (L sin theta)   =>   sigma_theta = sigma_span / (L sin theta)
+
+    which is the same 1/sin(theta) conditioning the `method` factor already
+    carries, now in degrees and multiplied by something measured.
+
+    Returns None when the window holds too few frames to tell a jumping landmark
+    from a turning body. A 30 fps recording is in that position; slow-motion
+    footage, once its clock is corrected, is emphatically not.
+
+    **This is why it exists.** MediaPipe reports a visibility of 1.00 for both
+    shoulders on a swing where its own span estimate varies by a factor of four
+    across a near-static pose. The model is confident about a landmark it is
+    inferring, so no confidence the estimator supplies can catch this, and it has
+    to be measured from the geometry instead.
+    """
+    reference = segment.reference
+    if reference is None or not np.isfinite(segment.turn_deg[frame]):
+        return None
+
+    near = np.abs(body.t - body.t[frame]) <= config.stability_window_s
+    spans = segment.span[near]
+    spans = spans[np.isfinite(spans)]
+    if spans.size < config.min_stability_frames:
+        return None
+
+    baseline = reference.span * body.torso_length
+    if not np.isfinite(baseline) or baseline <= 0.0:
+        return None
+
+    spread = float(np.median(np.abs(spans - np.median(spans)))) * 1.4826
+    sine = abs(np.sin(np.radians(float(segment.turn_deg[frame]))))
+    if sine <= 1e-6:
+        # A turn of zero is where the arccos is at its least sharp; the
+        # uncertainty is unbounded rather than large, and saying "unknown" is
+        # more honest than printing the number that falls out.
+        return None
+    return float(np.degrees((spread / baseline) / sine))
+
+
 def _reference_problem(segment: Segment, config: MetricConfig) -> str | None:
     """Why this segment's turn cannot be measured, or None if it can."""
     reference = segment.reference
@@ -241,6 +295,27 @@ def metrics(
             continue
         assert segment.reference is not None  # noqa: S101 - implied by problem being None
         for anchor in turned:
+            uncertainty = turn_uncertainty_deg(body, segment, anchor.frames[0], config)
+            if uncertainty is not None and uncertainty > config.max_rotation_uncertainty_deg:
+                refused.append(
+                    RefusedMetric(
+                        name=name,
+                        event=anchor.event,
+                        reason=(
+                            f"The projected {segment.label} span moves enough within "
+                            f"{config.stability_window_s:g} s of this instant to put the "
+                            f"turn {uncertainty:.0f} degrees either way, over the "
+                            f"{config.max_rotation_uncertainty_deg:g} allowed. A body "
+                            "turns smoothly, so a span that jumps over a few hundredths "
+                            "of a second is the estimator guessing a shoulder it cannot "
+                            "see -- which is what a full turn does to the far one. Note "
+                            "the estimator reports full visibility for it regardless, so "
+                            "this is measured from the geometry rather than taken from "
+                            "the model's own confidence."
+                        ),
+                    )
+                )
+                continue
             found = measure_series(
                 name,
                 segment.turn_deg,
@@ -249,6 +324,7 @@ def metrics(
                 visibility=body.visibility,
                 landmarks=segment.landmarks,
                 method=segment.method,
+                uncertainty=uncertainty,
                 methodology=(
                     f"arccos of the projected {segment.label} span divided by the "
                     f"{segment.reference.span:.2f} torso lengths it spanned at address, "
@@ -278,6 +354,18 @@ def metrics(
     # determined than its worse-determined term.
     method = np.fmin(shoulders.method, hips.method)
     for anchor in turned:
+        # A difference of two independent estimates, so the uncertainties add in
+        # quadrature -- and only where both were quantified, since a sum with an
+        # unknown term is unknown rather than equal to the known one.
+        parts = [
+            turn_uncertainty_deg(body, segment, anchor.frames[0], config)
+            for segment in (shoulders, hips)
+        ]
+        uncertainty = (
+            float(np.hypot(parts[0], parts[1]))
+            if parts[0] is not None and parts[1] is not None
+            else None
+        )
         found = measure_series(
             MetricName.X_FACTOR,
             separation,
@@ -286,6 +374,7 @@ def metrics(
             visibility=body.visibility,
             landmarks=(*_SHOULDERS, *_HIPS),
             method=method,
+            uncertainty=uncertainty,
             methodology=(
                 "Shoulder turn minus pelvis turn, both measured by foreshortening "
                 "against their address widths. Both terms are magnitudes, so this says "

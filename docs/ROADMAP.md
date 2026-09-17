@@ -624,6 +624,65 @@ and left alone**: the worst margin across the reference clips is 2.14 against
   frame arriving there already points up. No event moved: nothing in detection
   reads those angles.
 
+## Post-Phase 6 — what tour-pro footage found ✅
+
+`python/analyzer/biomechanics/view.py` · `rotation.py` · `pose/series.py`
+
+Two reference clips of a tour professional were added after Phase 6. Both
+contain a fuller turn than any earlier footage and both are slow motion, and
+between them they falsified two things the project had already documented as
+settled. Details in the amendment to
+[ADR-0010](decisions/ADR-0010-projected-biomechanics.md).
+
+- [x] **Slow motion is declarable** — `--slow-motion` / `slow_motion_factor`,
+      applied to the timestamps once, below the filter, so every duration, speed
+      and window lands on a real clock. Reported on the three contracts that
+      carry durations, because the timestamps afterwards are real seconds and no
+      longer index the video
+- [x] **The detector says when a clip looks like slow motion** — a swing's shape
+      with every phase long in the same proportion, and the smallest factor that
+      would fit
+- [x] **Rotation carries a measured uncertainty** — `Metric.uncertainty`, in
+      degrees, from the projected span's stability over a real-time window,
+      propagated through the arccos. Refused above a bound, and reported as
+      unknown where too few frames exist to measure it
+- [x] **Tests** — 18 added (all pytest)
+
+**Measured.** MediaPipe reports a visibility of **1.00** for both shoulders on a
+swing where its own span estimate varies between 0.27 and 0.68 of the address
+width across 27 frames of near-static pose — an implied turn of 47 to 74 degrees.
+No confidence the estimator supplies can catch that, which is why stability is
+now measured from the geometry.
+
+`data/face-on/rory_face_on.mp4` at a factor of 7:
+
+| Metric              | Value       | Note                                  |
+| ------------------- | ----------- | ------------------------------------- |
+| Shoulder turn (top) | +53.0 ± 5°  | the most trustworthy of the rotations |
+| Pelvis turn (top)   | +27.9 ± 15° | at the refusal bound                  |
+| X-factor (top)      | +25.2 ± 16° | nearly worthless, and now says so     |
+| Tempo               | 1.83 : 1    | ratio, but see the caveat below       |
+
+Every event resolves at 1.00 once the clock is right, which no 30 fps clip in
+this project manages: slow motion is a high-speed capture.
+
+**The first observed impact in the project.** The ball is on the tee at frame
+360 and gone at 361. Peak hand speed — Phase 4's primary estimate — lands 17 to
+40 frames away depending on the assumed factor; the lowest point of the hand arc,
+carried only as corroboration, lands within 4 and is stable across it. **Phase 11
+should evaluate swapping them before adding anything.** One clip is not enough to
+change it now.
+
+**Open, and not resolved here:**
+
+- The two tour clips give apparent tempos of 1.83 and 1.3 against the ~3:1 a
+  tour swing is known for. A uniform slow-motion factor cannot change a ratio,
+  so either the clips are speed-ramped — plausible for social-media reposts — or
+  the takeaway is misplaced on slowed footage. Not determined; until it is,
+  treat those clips as geometry-only.
+- The factor itself is supplied, not measured, and it moves events. Nothing in
+  the video can recover it.
+
 ## Phase 7 — Two-camera synchronisation ⬜
 
 - [ ] 7.1 Two-video project model (SQLite)

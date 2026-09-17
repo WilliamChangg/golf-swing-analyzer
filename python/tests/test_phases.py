@@ -601,3 +601,89 @@ class TestConfigValidation:
     def test_rejects_an_unknown_field(self) -> None:
         with pytest.raises(ValueError):
             PhaseConfig(min_backswing=0.2)
+
+
+class TestSlowMotion:
+    """Duration rules are stated in real seconds; slow-motion footage is not.
+
+    Nothing in a conformed slow-motion file records its playback rate, so the
+    factor is supplied rather than measured. These pin what supplying it does,
+    and what the detector says when it is missing.
+
+    The fixture is built the way real slow motion is made: the swing is captured
+    at `factor` times the frame rate and the timestamps are then written as
+    though it were an ordinary recording. That is more frames covering more
+    apparent seconds -- not the same frames spread further apart, which is a
+    different thing and one no camera produces.
+    """
+
+    @staticmethod
+    def _slowed(factor: float) -> PoseSequence:
+        real = np.arange(0.0, DURATION_S, 1.0 / (FPS * factor))
+        x, y = _hand_path(real)
+        return _sequence(x, y, real * factor)
+
+    def _detect_at(self, slowed_by: float, factor: float):
+        filtered = filter_sequence(
+            self._slowed(slowed_by), FilterConfig(), slow_motion_factor=factor
+        )
+        return detect_phases(filtered)
+
+    def test_a_slowed_clip_is_refused_without_the_factor(self) -> None:
+        result = _detect(self._slowed(6.0))
+        assert not result.detected
+
+    def test_the_refusal_says_it_looks_like_slow_motion(self) -> None:
+        """Rather than leaving "no swing detected" as the whole story."""
+        result = _detect(self._slowed(6.0))
+        assert any("slow-motion" in warning for warning in result.warnings)
+
+    def test_the_suggested_factor_is_enough_to_bring_it_inside_the_bounds(self) -> None:
+        result = _detect(self._slowed(6.0))
+        warning = next(w for w in result.warnings if "slow-motion" in w)
+        suggested = float(warning.split("at least ")[1].split(" ")[0])
+        assert 1.0 < suggested <= 6.0
+        assert self._detect_at(6.0, suggested * 1.05).detected
+
+    def test_supplying_the_right_factor_recovers_the_original_timings(self) -> None:
+        """The whole point: the same events, at the same instants of real time."""
+        original = _detect(_swing())
+        recovered = self._detect_at(6.0, 6.0)
+
+        assert recovered.detected
+        for event in SwingEvent:
+            before, after = original.event(event), recovered.event(event)
+            assert after.timestamp_s == pytest.approx(before.timestamp_s, abs=TOLERANCE_S)
+
+    def test_a_slowed_clip_resolves_its_events_better_than_the_original(self) -> None:
+        """Slow motion is a high-speed capture, so the window holds more samples.
+
+        Once the clock is right this is the payoff rather than a problem: the
+        resolution factor that a 30 fps recording cannot satisfy is comfortable
+        here, because the same real tenth of a second contains `factor` times as
+        many frames.
+        """
+        recovered = self._detect_at(6.0, 6.0)
+        assert recovered.event(SwingEvent.IMPACT).confidence.resolution == 1.0
+
+    def test_the_factor_is_reported_so_a_duration_can_be_read(self) -> None:
+        """Timestamps are real seconds afterwards, and no longer index the video."""
+        assert self._detect_at(6.0, 6.0).slow_motion_factor == 6.0
+        assert _detect(_swing()).slow_motion_factor == 1.0
+
+    def test_a_real_slow_descent_is_not_called_slow_motion(self) -> None:
+        """Someone lowering a club fails the same bound and is not a playback problem.
+
+        The signature is that *every* phase is long in the same proportion. A
+        genuinely slow descent has an ordinary backswing in front of it, so the
+        suggestion would be wrong and is not made.
+        """
+        t = np.arange(0.0, DURATION_S * 3, 1.0 / FPS)
+        x, y = _hand_path(np.where(t <= TOP_S, t, TOP_S + (t - TOP_S) / 5.0))
+        result = _detect(_sequence(x, y, t))
+        assert not result.detected
+        assert not any("slow-motion" in warning for warning in result.warnings)
+
+    def test_a_non_positive_factor_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            filter_sequence(_swing(), FilterConfig(), slow_motion_factor=0.0)

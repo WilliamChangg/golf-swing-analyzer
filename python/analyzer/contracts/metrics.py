@@ -320,6 +320,19 @@ class Metric(BaseModel):
             "is not."
         )
     )
+    uncertainty: float | None = Field(
+        default=None,
+        description=(
+            "Measured uncertainty in the value, in the metric's own unit, where "
+            "the method admits one. None means it was not quantified -- which is "
+            "not a claim that the value is exact.\n\n"
+            "Reported separately rather than folded into `confidence` on purpose. "
+            "The three confidence factors are dimensionless and multiply; an "
+            "uncertainty has a unit and a meaning, and 'shoulder turn 53 degrees, "
+            "give or take 6' tells a reader something no score between 0 and 1 "
+            "can. Mapping it into one would need a scale nobody has measured."
+        ),
+    )
     confidence: MetricConfidence
     methodology: str = Field(description="How this number was produced, in words. Never omitted.")
 
@@ -471,6 +484,39 @@ class MetricConfig(BaseModel, extra="forbid"):
             "have recorded, and it supports some measurements and not others."
         ),
     )
+    stability_window_s: float = Field(
+        default=0.06,
+        gt=0.0,
+        description=(
+            "Half-width, in **real** seconds, of the window a rotation's stability "
+            "is measured over. The body turns smoothly, so a shoulder line that "
+            "jumps about within a window this short is the estimator guessing an "
+            "occluded landmark rather than the player moving. Real seconds, so a "
+            "slow-motion clip supplies proportionally more frames rather than a "
+            "proportionally longer look at the swing."
+        ),
+    )
+    min_stability_frames: int = Field(
+        default=5,
+        ge=3,
+        description=(
+            "Frames the stability window must contain before an uncertainty is "
+            "quantified at all. A 30 fps recording supplies three, which is too "
+            "few to separate a jumping landmark from a turning body -- so the "
+            "uncertainty is reported as unknown rather than as a small number "
+            "computed from almost nothing."
+        ),
+    )
+    max_rotation_uncertainty_deg: float = Field(
+        default=15.0,
+        gt=0.0,
+        description=(
+            "Uncertainty above which a foreshortening rotation is refused rather "
+            "than reported. Stated policy, not a measured optimum: it is roughly "
+            "the point past which the number stops distinguishing a full turn "
+            "from a half one, which is the distinction it exists to make."
+        ),
+    )
     max_reference_excess: float = Field(
         default=1.25,
         gt=1.0,
@@ -517,6 +563,17 @@ class MetricSet(BaseModel):
     )
     geometry: FrameGeometry
     frames: int
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays, as supplied by "
+            "the caller. 1.0 is an ordinary recording. Timestamps here are **real "
+            "seconds**, already divided by it, so they no longer index into the "
+            "video file -- frame numbers do. Nothing in a conformed slow-motion "
+            "clip records this, so it cannot be measured and is not guessed."
+        ),
+    )
     config: MetricConfig
     warnings: list[str] = Field(default_factory=list)
 

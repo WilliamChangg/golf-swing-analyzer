@@ -517,6 +517,7 @@ def build_metric(
     observation: float,
     method: float,
     methodology: str,
+    uncertainty: float | None = None,
 ) -> Metric:
     """Assemble a `Metric` from its declaration and one measurement.
 
@@ -543,6 +544,7 @@ def build_metric(
         event=anchor.event,
         phase=anchor.phase,
         source_frames=list(source_frames),
+        uncertainty=uncertainty,
         view=view,
         interpretation=entry.interpretation(view),
         confidence=MetricConfidence(
@@ -587,6 +589,7 @@ def measure_series(
     landmarks: Sequence[Landmark],
     method: float | NDArray[np.float64],
     methodology: str,
+    uncertainty: float | None = None,
 ) -> Metric | None:
     """Reduce a per-frame series at an anchor and build the metric, or None.
 
@@ -618,4 +621,5 @@ def measure_series(
         observation=observation_factor(visibility, landmarks, frames),
         method=method_factor,
         methodology=methodology,
+        uncertainty=uncertainty,
     )

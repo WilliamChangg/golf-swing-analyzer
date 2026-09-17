@@ -310,6 +310,17 @@ class SequenceFilterReport(BaseModel):
     schema_version: int = FILTER_SCHEMA_VERSION
     config: FilterConfig
     space: LandmarkSpace
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays, as supplied by "
+            "the caller. 1.0 is an ordinary recording. Timestamps here are **real "
+            "seconds**, already divided by it, so they no longer index into the "
+            "video file -- frame numbers do. Nothing in a conformed slow-motion "
+            "clip records this, so it cannot be measured and is not guessed."
+        ),
+    )
     samples: int
     landmarks: list[LandmarkFilterReport]
     elapsed_s: float

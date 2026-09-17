@@ -71,6 +71,7 @@ def landmark_series(
     sequence: PoseSequence,
     landmark: Landmark,
     space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
+    slow_motion_factor: float = 1.0,
 ) -> LandmarkSeries:
     """Extract one landmark's trajectory, NaN where it was not detected.
 
@@ -78,8 +79,20 @@ def landmark_series(
     conversion from the stored IMAGE coordinates happens here, once, below the
     filter -- which is what makes the derivatives come out correctly signed
     without a second correction anywhere above (see `analyzer/coordinates.py`).
+
+    `slow_motion_factor` divides the timestamps, which is the whole of what it
+    takes to analyse slow-motion footage: every duration, every velocity and the
+    filter's own window are then in real seconds. It is applied here for the
+    same reason the coordinate conversion is -- once, below everything, so that
+    no layer above has to know about it or can forget it.
     """
     require_reachable(space)
+    if not np.isfinite(slow_motion_factor) or slow_motion_factor <= 0.0:
+        raise ValueError(
+            f"slow_motion_factor must be a positive number, got {slow_motion_factor!r}. "
+            "It is how many times slower than real time the clip plays: 1 for an "
+            "ordinary recording, 8 for eight-times slow motion."
+        )
     count = len(sequence.frames)
     timestamps = np.empty(count, dtype=np.float64)
     values = {
@@ -90,7 +103,7 @@ def landmark_series(
     for row, (frame, points) in enumerate(
         zip(sequence.frames, _points_for(sequence, space), strict=True)
     ):
-        timestamps[row] = frame.timestamp_s
+        timestamps[row] = frame.timestamp_s / slow_motion_factor
         if not frame.detected or landmark >= len(points):
             continue
         point = points[landmark]
@@ -121,7 +134,12 @@ def landmark_series(
 
 
 def all_series(
-    sequence: PoseSequence, space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS
+    sequence: PoseSequence,
+    space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
+    slow_motion_factor: float = 1.0,
 ) -> dict[Landmark, LandmarkSeries]:
     """Every landmark's trajectory, keyed by landmark."""
-    return {landmark: landmark_series(sequence, landmark, space) for landmark in Landmark}
+    return {
+        landmark: landmark_series(sequence, landmark, space, slow_motion_factor)
+        for landmark in Landmark
+    }

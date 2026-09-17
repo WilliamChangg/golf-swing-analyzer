@@ -144,6 +144,17 @@ class FilterPosesParams(BaseModel, extra="forbid"):
         default_factory=FilterConfig,
         description="Gate, gap and smoothing policy. Defaults are the measured ones.",
     )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. 1 for an "
+            "ordinary recording, 8 for eight-times slow motion. Timestamps are "
+            "divided by it, which is all it takes to put every duration, speed "
+            "and filter window on a real clock. Nothing in a conformed file "
+            "records this, so it is supplied rather than measured."
+        ),
+    )
 
 
 def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
@@ -192,7 +203,13 @@ def _filter_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMod
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    result = filter_sequence(sequence, parsed.config, space=parsed.space, reporter=reporter)
+    result = filter_sequence(
+        sequence,
+        parsed.config,
+        space=parsed.space,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
+    )
     return result.report
 
 
@@ -216,6 +233,17 @@ class DetectPhasesParams(BaseModel, extra="forbid"):
     phases: PhaseConfig = Field(
         default_factory=PhaseConfig,
         description="Structural bounds a motion must satisfy to be reported as a swing.",
+    )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. 1 for an "
+            "ordinary recording, 8 for eight-times slow motion. Timestamps are "
+            "divided by it, which is all it takes to put every duration, speed "
+            "and filter window on a real clock. Nothing in a conformed file "
+            "records this, so it is supplied rather than measured."
+        ),
     )
 
 
@@ -244,7 +272,11 @@ def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # isotropic and upward-positive, and both matter to rules about how far and
     # how high the hands went.
     filtered = filter_sequence(
-        sequence, parsed.filter, space=LandmarkSpace.FRAME_WIDTHS, reporter=reporter
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
     )
     try:
         return detect_phases(filtered, parsed.phases)
@@ -277,6 +309,17 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
         default_factory=MetricConfig,
         description="When a measurement is too ill-conditioned to report at all.",
     )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. 1 for an "
+            "ordinary recording, 8 for eight-times slow motion. Timestamps are "
+            "divided by it, which is all it takes to put every duration, speed "
+            "and filter window on a real clock. Nothing in a conformed file "
+            "records this, so it is supplied rather than measured."
+        ),
+    )
 
 
 def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
@@ -308,7 +351,11 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
     filtered = filter_sequence(
-        sequence, parsed.filter, space=LandmarkSpace.FRAME_WIDTHS, reporter=reporter
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
     )
     try:
         detected = detect_phases(filtered, parsed.phases)

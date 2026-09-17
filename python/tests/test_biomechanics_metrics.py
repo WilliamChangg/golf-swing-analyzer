@@ -818,12 +818,8 @@ class TestCameraView:
         ]
         assert undeclared == []
 
-    def test_a_known_view_never_falls_back_to_the_undetermined_reading(
-        self, result
-    ) -> None:
-        assert not any(
-            "did not establish" in metric.interpretation for metric in result.metrics
-        )
+    def test_a_known_view_never_falls_back_to_the_undetermined_reading(self, result) -> None:
+        assert not any("did not establish" in metric.interpretation for metric in result.metrics)
 
     def test_the_same_computation_means_different_things_from_different_views(self) -> None:
         """The reason the view exists at all.
@@ -902,3 +898,115 @@ class TestHandDepth:
         at_address = ARC_RADIUS * math.sin(arc[int(TAKEAWAY_S * FPS) // 2])
         at_top = ARC_RADIUS * math.sin(arc[int(TOP_S * FPS)])
         assert depth.value == pytest.approx((at_top - at_address) / TORSO, abs=0.25)
+
+
+class TestRotationUncertainty:
+    """A landmark the estimator is guessing, caught by geometry rather than by trust.
+
+    MediaPipe reports full visibility for a shoulder it cannot see, so no
+    confidence it supplies can flag this. What is measurable is that a body turns
+    smoothly: a projected span that moves within a few hundredths of a second is
+    the estimate moving, not the player.
+
+    The fixture injects a **smooth excursion** rather than per-frame noise,
+    because that is what the failure actually looks like. Frame-to-frame jitter
+    is removed by the filter before any of this sees it; what survives is a
+    wrong estimate held for a stretch comparable to the smoothing window, which
+    is what an occluded shoulder produces.
+    """
+
+    SAMPLE_RATE = 4.0  # times the fixture's own rate, so the window holds frames
+
+    @classmethod
+    def _with_excursion(cls, depth: float, span_s: float = 0.16):
+        t = np.arange(0.0, DURATION_S, 1.0 / (FPS * cls.SAMPLE_RATE))
+        _, frames = _swing_frames()
+        indices = np.clip((t * FPS).astype(int), 0, len(frames) - 1)
+
+        # A raised cosine centred just before the top: the far shoulder is
+        # mis-placed for a stretch and then recovers, never wider than it
+        # started, so the address baseline stays the widest view in the clip.
+        centre = TOP_S - 0.05
+        inside = np.abs(t - centre) <= span_s / 2
+        shrink = np.zeros_like(t)
+        shrink[inside] = depth * 0.5 * (1 + np.cos(2 * np.pi * (t[inside] - centre) / span_s))
+
+        rebuilt = []
+        for step, index in enumerate(indices):
+            pose = dict(frames[index])
+            mid = (pose[Landmark.LEFT_SHOULDER] + pose[Landmark.RIGHT_SHOULDER]) / 2.0
+            half = (pose[Landmark.RIGHT_SHOULDER] - pose[Landmark.LEFT_SHOULDER]) / 2.0
+            scale = 1.0 - shrink[step]
+            pose[Landmark.LEFT_SHOULDER] = mid - half * scale
+            pose[Landmark.RIGHT_SHOULDER] = mid + half * scale
+            rebuilt.append(pose)
+        return _measure(_sequence(t, rebuilt))
+
+    def test_a_steady_shoulder_line_earns_a_small_uncertainty(self) -> None:
+        steady = self._with_excursion(0.0).get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        assert steady is not None
+        assert steady.uncertainty is not None
+        assert steady.uncertainty < 1.0
+
+    def test_an_excursion_raises_the_uncertainty(self) -> None:
+        steady = self._with_excursion(0.0).get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        shaky = self._with_excursion(0.25).get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        assert shaky is not None and shaky.uncertainty is not None
+        assert shaky.uncertainty > steady.uncertainty + 1.0
+
+    def test_an_excursion_shorter_than_the_window_does_not_register(self) -> None:
+        """Correctly: the filter removed it, so it did not move the value either."""
+        brief = self._with_excursion(0.5, span_s=0.04).get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        assert brief is not None
+        assert brief.uncertainty < 2.0
+        assert brief.value == pytest.approx(SHOULDER_TURN_TOP, abs=1.0)
+
+    def test_the_uncertainty_covers_the_error_the_excursion_caused(self) -> None:
+        """The point of reporting it in degrees rather than as a score.
+
+        A mis-placed shoulder moves the reported turn. If the uncertainty did
+        not at least span that, it would be decoration.
+        """
+        for depth in (0.25, 0.5):
+            shaky = self._with_excursion(depth).get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+            assert shaky is not None and shaky.uncertainty is not None
+            assert shaky.uncertainty >= abs(shaky.value - SHOULDER_TURN_TOP)
+
+    def test_a_large_excursion_is_refused_rather_than_reported(self) -> None:
+        result = self._with_excursion(0.9)
+        assert result.get(MetricName.SHOULDER_TURN, SwingEvent.TOP) is None
+        reason = next(
+            entry.reason for entry in result.refused if entry.name is MetricName.SHOULDER_TURN
+        )
+        assert "either way" in reason
+        # The reason this cannot be left to the estimator's own confidence.
+        assert "visibility" in reason
+
+    def test_thirty_frames_a_second_reports_unknown_rather_than_a_guess(self) -> None:
+        """Three frames in the window cannot separate a jump from a turn."""
+        t = np.arange(0.0, DURATION_S, 1.0 / 30.0)
+        _, frames = _swing_frames()
+        indices = np.clip((t * FPS).astype(int), 0, len(frames) - 1)
+        measured = _measure(
+            _sequence(t, [frames[index] for index in indices]),
+        )
+        turn = measured.get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        if turn is None:
+            return  # the clip yielded no trajectory at all, which is Phase 3's bound
+        assert turn.uncertainty is None
+
+    def test_x_factor_combines_the_two_it_is_built_from(self) -> None:
+        result = self._with_excursion(0.0)
+        shoulder = result.get(MetricName.SHOULDER_TURN, SwingEvent.TOP)
+        pelvis = result.get(MetricName.PELVIS_TURN, SwingEvent.TOP)
+        x_factor = result.get(MetricName.X_FACTOR, SwingEvent.TOP)
+        assert None not in (shoulder, pelvis, x_factor)
+        assert x_factor.uncertainty == pytest.approx(
+            math.hypot(shoulder.uncertainty, pelvis.uncertainty), rel=1e-6
+        )
+
+    def test_a_metric_with_no_quantified_uncertainty_says_none(self, result) -> None:
+        """None is 'not quantified', not 'exact'."""
+        tempo = result.get(MetricName.TEMPO_RATIO, None)
+        assert tempo is not None
+        assert tempo.uncertainty is None

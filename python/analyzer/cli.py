@@ -357,6 +357,13 @@ def filter_poses(
     max_gap: Annotated[
         float | None, typer.Option("--max-gap", help="Longest absence to bridge, in seconds.")
     ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the raw report as JSON instead of a table.")
     ] = False,
@@ -374,7 +381,12 @@ def filter_poses(
     if max_gap is not None:
         config["gaps"] = {"max_gap_s": max_gap}
 
-    params: dict[str, object] = {"path": str(path), "space": space, "model": model}
+    params: dict[str, object] = {
+        "path": str(path),
+        "space": space,
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
     if config:
         params["config"] = config
 
@@ -501,6 +513,13 @@ def phases(
     polyorder: Annotated[
         int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
     ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
     ] = False,
@@ -512,7 +531,11 @@ def phases(
     if polyorder is not None:
         smoothing["polyorder"] = polyorder
 
-    params: dict[str, object] = {"path": str(path), "model": model}
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
     if smoothing:
         params["filter"] = {"smoothing": smoothing}
 
@@ -559,8 +582,15 @@ _GROUP_TITLES: dict[MetricGroup, str] = {
 
 
 def _format_value(metric: Metric) -> str:
-    """Render a value with its unit, at a precision the measurement can support."""
+    """Render a value with its unit, at a precision the measurement can support.
+
+    The uncertainty rides alongside where there is one. A turn of 53 degrees and
+    a turn of 53 give-or-take 13 are different findings, and only one of them is
+    worth telling a player.
+    """
     if metric.unit is MetricUnit.DEGREES:
+        if metric.uncertainty is not None:
+            return f"{metric.value:+.1f} +/-{metric.uncertainty:.0f} deg"
         return f"{metric.value:+.1f} deg"
     if metric.unit is MetricUnit.SECONDS:
         return f"{metric.value:.3f} s"
@@ -682,6 +712,13 @@ def metrics(
     polyorder: Annotated[
         int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
     ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
     ] = False,
@@ -693,7 +730,11 @@ def metrics(
     if polyorder is not None:
         smoothing["polyorder"] = polyorder
 
-    params: dict[str, object] = {"path": str(path), "model": model}
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
     if smoothing:
         params["filter"] = {"smoothing": smoothing}
 

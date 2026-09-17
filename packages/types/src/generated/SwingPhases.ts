@@ -50,6 +50,10 @@ export interface SwingPhases {
   phases?: DetectedPhase[];
   hand: HandSignalInfo;
   frames: number;
+  /**
+   * How many times slower than real time the clip plays, as supplied by the caller. 1.0 is an ordinary recording. Timestamps here are **real seconds**, already divided by it, so they no longer index into the video file -- frame numbers do. Nothing in a conformed slow-motion clip records this, so it cannot be measured and is not guessed.
+   */
+  slow_motion_factor?: number;
   config: PhaseConfig;
   warnings?: string[];
 }

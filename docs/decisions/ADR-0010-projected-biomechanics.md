@@ -151,3 +151,74 @@ shoulder, which is visible, and projecting the hands' offset onto the shoulder
 line names the side. Where the view does not show it — down the line, where the
 shoulder line points at the camera — no side is named and those metrics are
 refused.
+
+---
+
+## Amendment, 2026-09-16: what tour-pro footage exposed
+
+Two reference clips of a tour professional were added after this ADR was
+accepted. Both contain a fuller turn than any earlier footage and both are
+slow motion. They falsified two things stated above.
+
+### Landmark stability is not covered by `observation`
+
+The decision above says no confidence factor is a chosen constant, and that
+`observation` measures how well the landmarks a metric used were seen. It reads
+the estimator's own reported visibility.
+
+**That reading is worthless exactly where rotation matters most.** Once a player
+turns far enough, the far shoulder passes behind the torso and MediaPipe infers
+its position from a body prior rather than from the image. On the reference clip
+its projected span varies between 0.27 and 0.68 of the address width across 27
+frames in which the player barely moves — an implied turn of anywhere from 47 to
+74 degrees — and **MediaPipe reports a visibility of 1.00 for both shoulders
+throughout**. The model is confident about a landmark it is guessing, so nothing
+it supplies can flag this.
+
+The amateur footage hid it: that player does not turn far enough for the far
+shoulder to disappear, and the same window there varies by one degree.
+
+So stability is now **measured from the geometry** instead. A body rotates
+smoothly, so a projected span that moves within a few hundredths of a second is
+the estimate moving rather than the player. The spread is taken as a median
+absolute deviation over a window in real seconds and propagated through the same
+arccos that produced the angle:
+
+    sigma_theta = sigma_span / (L sin theta)
+
+This is reported as `Metric.uncertainty`, **in degrees**, and a turn is refused
+above `max_rotation_uncertainty_deg`.
+
+It is deliberately _not_ folded into `confidence`. The three factors are
+dimensionless and multiply; an uncertainty has a unit and a meaning. "X-factor 25
+degrees, give or take 16" is a finding a reader can act on, and no score between
+zero and one carries it. Mapping one to the other would need a scale nobody has
+measured — which is the same objection this ADR raised against a fixed
+confidence penalty.
+
+Where the window holds too few frames to separate a jumping landmark from a
+turning body, the uncertainty is reported as **unknown** rather than as a small
+number computed from almost nothing. A 30 fps recording is in that position; a
+slow-motion clip, once its clock is corrected, is not.
+
+### Impact is estimated worse than its own corroboration
+
+`data/face-on/rory_face_on.mp4` carries the only observed impact in the project:
+the ball is on the tee at frame 360 and gone at frame 361. Measured against it,
+across assumed slow-motion factors from 4 to 10:
+
+| Estimator                                    | Error, frames  |
+| -------------------------------------------- | -------------- |
+| Peak hand speed (Phase 4's primary)          | +40.5 to -17.5 |
+| Lowest point of the hand arc (corroboration) | +0.5 to +3.5   |
+
+The corroborating signal is an order of magnitude better **and** stable across
+the assumed factor, for a reason that generalises: a geometric extremum does not
+depend on the clock, while a speed extremum is the output of a differentiation
+that does. On this swing peak hand speed also falls genuinely _after_ impact, as
+the arms extend through the release.
+
+This is one clip, so the primary estimator has **not** been changed on the
+strength of it — that needs the labelled set Phase 12 builds, or the ball
+detection Phase 11 adds. It is recorded here because it is the first evidence
+either way, and because it points at the change Phase 11 should evaluate first.

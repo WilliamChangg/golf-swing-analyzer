@@ -121,6 +121,10 @@ export interface MetricSet {
   torso_length: number;
   geometry: FrameGeometry;
   frames: number;
+  /**
+   * How many times slower than real time the clip plays, as supplied by the caller. 1.0 is an ordinary recording. Timestamps here are **real seconds**, already divided by it, so they no longer index into the video file -- frame numbers do. Nothing in a conformed slow-motion clip records this, so it cannot be measured and is not guessed.
+   */
+  slow_motion_factor?: number;
   config: MetricConfig;
   warnings?: string[];
 }
@@ -154,6 +158,12 @@ export interface Metric {
    * What the number means anatomically from this view, in words. Separate from `methodology`, which says how it was computed: the arithmetic is the same from every camera position and the meaning is not.
    */
   interpretation: string;
+  /**
+   * Measured uncertainty in the value, in the metric's own unit, where the method admits one. None means it was not quantified -- which is not a claim that the value is exact.
+   *
+   * Reported separately rather than folded into `confidence` on purpose. The three confidence factors are dimensionless and multiply; an uncertainty has a unit and a meaning, and 'shoulder turn 53 degrees, give or take 6' tells a reader something no score between 0 and 1 can. Mapping it into one would need a scale nobody has measured.
+   */
+  uncertainty?: number | null;
   confidence: MetricConfidence;
   /**
    * How this number was produced, in words. Never omitted.
@@ -366,6 +376,18 @@ export interface MetricConfig {
    * Projected shoulder width at address, in torso lengths, at or below which the camera is treated as down-the-line. The reference down-the-line clip measures 0.10. Between this and `face_on_span_ratio` the view is reported as unknown rather than rounded to the nearer label -- an oblique camera is a real thing to have recorded, and it supports some measurements and not others.
    */
   down_the_line_span_ratio?: number;
+  /**
+   * Half-width, in **real** seconds, of the window a rotation's stability is measured over. The body turns smoothly, so a shoulder line that jumps about within a window this short is the estimator guessing an occluded landmark rather than the player moving. Real seconds, so a slow-motion clip supplies proportionally more frames rather than a proportionally longer look at the swing.
+   */
+  stability_window_s?: number;
+  /**
+   * Frames the stability window must contain before an uncertainty is quantified at all. A 30 fps recording supplies three, which is too few to separate a jumping landmark from a turning body -- so the uncertainty is reported as unknown rather than as a small number computed from almost nothing.
+   */
+  min_stability_frames?: number;
+  /**
+   * Uncertainty above which a foreshortening rotation is refused rather than reported. Stated policy, not a measured optimum: it is roughly the point past which the number stops distinguishing a full turn from a half one, which is the distinction it exists to make.
+   */
+  max_rotation_uncertainty_deg?: number;
   /**
    * How much wider than its address baseline a body line may project somewhere in the clip before the recording is judged not to be face-on and its rotations refused. Above 1 because landmark noise alone moves the maximum a little past address -- it reaches 1.12 on the face-on reference clip. A down-the-line recording, where the shoulders start end-on and open through the backswing, exceeds it by a wide margin rather than a marginal one.
    */

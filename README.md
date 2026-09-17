@@ -106,6 +106,7 @@ uv run --project python analyzer filter  path/to/swing.mov   # smooth + differen
 uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyorder 4
 uv run --project python analyzer phases  path/to/swing.mov   # takeaway/top/impact/finish
 uv run --project python analyzer metrics path/to/swing.mov   # biomechanics
+uv run --project python analyzer metrics path/to/swing.mov --slow-motion 8
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -384,12 +385,12 @@ npm run check:all
 
 | Suite      | Count | Scope                                                                                                                      |
 | ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 588   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
+| pytest     | 604   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
 | cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                  |
 | Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector                        |
 | Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection                             |
 
-All 694 pass as of Phase 6.
+All 710 pass as of Phase 6.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -611,6 +612,30 @@ A general benchmark harness arrives in Phase 17.
   kinematic estimate with a known bias in a known direction. It is corroborated
   against the lowest point of the hand arc, and Phases 10-11 will replace that
   with club and ball evidence.
+- **Rotation is unreliable on a full turn, and now says so.** Once a player
+  turns far enough for the far shoulder to pass behind the torso, MediaPipe
+  infers its position from a body prior — and reports a visibility of 1.00 while
+  doing it. On tour-pro footage the implied shoulder turn varies by 27 degrees
+  across frames where the player barely moves. Stability is now measured from
+  the geometry and reported as an uncertainty in degrees, and a turn is refused
+  above a bound; but the underlying landmark is still a guess, and a wide
+  uncertainty is a warning rather than a correction.
+- **An uncertainty needs enough frames to measure.** At 30 fps the stability
+  window holds three frames, which cannot separate a jumping landmark from a
+  turning body, so the uncertainty is reported as unknown. Slow-motion footage
+  and high frame rates are where it becomes available.
+- **Slow motion has to be declared.** Nothing in a conformed file records the
+  playback rate, so a slow-motion clip is refused until `--slow-motion` is
+  supplied. The factor is not a relabelling of the clock: the smoothing window
+  is in real seconds too, so it decides how many frames that window holds and
+  therefore where events land.
+- **Impact is estimated worse than its own corroboration, on the one clip
+  where that can be checked.** The ball leaves the tee between two known frames
+  in the tour-pro face-on clip. Peak hand speed — Phase 4's primary estimate —
+  lands 17 to 40 frames away; the lowest point of the hand arc, carried only as
+  corroboration, lands within 4 and is stable across the assumed slow-motion
+  factor. One clip is not enough to change the estimator, and Phase 11 should
+  evaluate it first.
 - **Nothing here is metric.** Lengths are in torso lengths and the frame they
   are measured in is the frame's own width. The same swing filmed from twice the
   distance gives the same torso-length numbers and different frame-width ones,
