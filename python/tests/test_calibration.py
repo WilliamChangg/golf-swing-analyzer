@@ -527,29 +527,65 @@ def test_intrinsics_report_a_checkable_field_of_view() -> None:
 # --- the metric-layer gate (8.5) -----------------------------------------
 
 
-def test_every_shipped_metric_is_measurable_without_a_calibration() -> None:
-    """Phase 5 and 6 measure the image plane, which an uncalibrated camera gives.
+def test_every_projected_metric_is_measurable_without_a_calibration() -> None:
+    """A metric that measures the image plane must not demand a calibration.
 
-    If this ever fails it means a metric was added that claims three dimensions,
-    and the question to ask is whether it should exist rather than whether the
+    Phase 8 asserted this of the *whole* registry, because everything in it
+    measured a picture and an uncalibrated camera supplies one. Phase 9 added six
+    metrics that genuinely are three-dimensional, so the assertion narrowed to
+    the ones whose basis says they are projections -- which is the claim that was
+    always being made.
+
+    If this fails it means a projected metric acquired a calibration requirement,
+    and the question to ask is whether its basis is wrong rather than whether the
     gate should be relaxed.
     """
-    assert all(entry.requires is CalibrationStatus.NONE for entry in REGISTRY.values())
+    from analyzer.contracts.metrics import MetricBasis
+
+    projected = [entry for entry in REGISTRY.values() if entry.basis is not MetricBasis.SPATIAL]
+    assert projected, "the registry has lost its single-camera metrics"
+    assert all(entry.requires is CalibrationStatus.NONE for entry in projected)
 
 
-def test_the_gate_blocks_nothing_at_present() -> None:
-    produced, refused = _apply_calibration_gate([], [], CalibrationStatus.NONE)
-    assert produced == []
+def test_the_gate_blocks_the_spatial_metrics_and_only_those() -> None:
+    """The gate Phase 8 built against nothing now blocks something real."""
+    from analyzer.contracts.metrics import MetricBasis
+
+    spatial = {name for name, entry in REGISTRY.items() if entry.basis is MetricBasis.SPATIAL}
+    assert spatial, "Phase 9 added metrics that need a stereo rig; they are missing"
+
+    _, refused = _apply_calibration_gate([], [], CalibrationStatus.NONE)
+    assert {entry.name for entry in refused} == spatial
+
+    _, refused = _apply_calibration_gate([], [], CalibrationStatus.INTRINSICS)
+    assert {entry.name for entry in refused} == spatial, (
+        "one calibrated camera knows a direction, not a position"
+    )
+
+    produced, refused = _apply_calibration_gate([], [], CalibrationStatus.STEREO)
     assert refused == []
+    assert produced == []
+
+
+def test_the_gate_names_the_calibration_rather_than_the_symptom() -> None:
+    from analyzer.contracts.metrics import MetricName
+
+    _, refused = _apply_calibration_gate([], [], CalibrationStatus.INTRINSICS)
+    reasons = {entry.name: entry.reason for entry in refused}
+    assert "needs a stereo calibration" in reasons[MetricName.X_FACTOR_3D]
+    assert "this project has intrinsics" in reasons[MetricName.X_FACTOR_3D]
 
 
 def test_the_gate_refuses_a_metric_that_needs_more_than_is_known(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The gate is enforced now, against a registry entry that demands stereo.
+    """Still checked against a *patched* entry as well as the shipped ones.
 
-    No shipped metric requires one, so this stands in for Phase 9's. It is the
-    test that makes the gate real rather than decorative.
+    Phase 8 wrote this because no shipped metric required a calibration, so it
+    stood in for Phase 9's. It is kept now that real ones exist, because it is
+    the only version that exercises a metric whose requirement was raised after
+    the fact -- which is what a later phase promoting a projected metric would
+    look like.
     """
     from analyzer.biomechanics import compute
     from analyzer.contracts.metrics import MetricName
@@ -560,11 +596,11 @@ def test_the_gate_refuses_a_metric_that_needs_more_than_is_known(
     monkeypatch.setattr(compute, "REGISTRY", patched)
     monkeypatch.setattr("analyzer.biomechanics.registry.REGISTRY", patched)
 
-    produced, refused = compute._apply_calibration_gate([], [], CalibrationStatus.INTRINSICS)
-    assert [entry.name for entry in refused] == [target]
-    assert "stereo" in refused[0].reason
+    _, refused = compute._apply_calibration_gate([], [], CalibrationStatus.INTRINSICS)
+    assert target in {entry.name for entry in refused}
+    assert "stereo" in next(entry.reason for entry in refused if entry.name is target)
 
-    # And it passes once the rig supplies what the metric asked for.
+    # And it passes once the rig supplies what every metric asked for.
     produced, refused = compute._apply_calibration_gate([], [], CalibrationStatus.STEREO)
     assert refused == []
     assert produced == []

@@ -237,6 +237,39 @@ class TimeMap(BaseModel):
         lever = abs(reference_s - self.pivot_s) * (self.rate_uncertainty or 0.0)
         return math.hypot(self.offset_uncertainty_s, lever)
 
+    def inverse(self) -> TimeMap:
+        """The same relation, stated from the target clip's point of view.
+
+        Needed because "which clip is the reference" is a free choice above this
+        layer and a recorded one below it. Phase 9 reconstructs into whichever
+        camera's frame the caller names, and a project stores one alignment per
+        ordered pair; without this, asking for the other order would mean
+        re-fitting a relation that is already known.
+
+        The pivot moves to `to_target(pivot_s)`, which is the same instant on the
+        other clock. That is not decoration either: the pivot is the anchor
+        centroid precisely so the two uncertainties are uncorrelated, and a pivot
+        left at the original value would re-correlate them and make
+        `uncertainty_at` understate the total away from the anchors.
+        """
+        return TimeMap(
+            offset_s=-self.offset_s,
+            rate=1.0 / self.rate,
+            rate_estimated=self.rate_estimated,
+            pivot_s=self.pivot_s + self.offset_s,
+            # An offset in the other clock's seconds, and a rate that is the
+            # reciprocal: both propagated to first order, which is exact enough
+            # for a rate this close to 1 and honest about being a propagation.
+            offset_uncertainty_s=(
+                None if self.offset_uncertainty_s is None else self.offset_uncertainty_s / self.rate
+            ),
+            rate_uncertainty=(
+                None if self.rate_uncertainty is None else self.rate_uncertainty / (self.rate**2)
+            ),
+            support_start_s=self.to_target(self.support_start_s),
+            support_end_s=self.to_target(self.support_end_s),
+        )
+
     @property
     def extrapolates_beyond(self) -> float:
         """Seconds of anchored span. Zero when every anchor sits at one instant."""

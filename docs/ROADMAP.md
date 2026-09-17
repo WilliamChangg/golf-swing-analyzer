@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-8 complete (9 / 21).**
+**Progress: Phases 0-9 complete (10 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -17,8 +17,8 @@ advance past a broken phase.
 | 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                          |
 | 7   | Two-camera sync       | ✅ **Done** | Measured sync residual in ms                               |
 | 8   | Camera calibration    | ✅ **Done** | Coverage gates claims; reprojection error shown for what it is |
-| 9   | 3D reconstruction     | ⬜ Next     | Reconstruction error measured on synthetic ground truth    |
-| 10  | Club tracking         | ⬜          | Shaft tracked; low confidence emits nothing                |
+| 9   | 3D reconstruction     | ✅ **Done** | Reconstruction error measured on synthetic ground truth    |
+| 10  | Club tracking         | ⬜ Next     | Shaft tracked; low confidence emits nothing                |
 | 11  | Ball detection        | ⬜          | Impact-frame agreement measured                            |
 | 12  | Temporal ML           | ⬜          | Leak-free splits; metrics only from a real labelled set    |
 | 13  | Coaching engine       | ⬜          | Every finding cites computed evidence                      |
@@ -1012,14 +1012,225 @@ intrinsics from 14 views.
   docstring. One command finishes this once a board has been filmed:
   `uv run --project python python scripts/benchmark_calibration.py --real <dir>`
 
-## Phase 9 — Multi-view 3D reconstruction ⬜
+## Phase 9 — Multi-view 3D reconstruction ✅
 
-- [ ] 9.1 DLT triangulation + non-linear refinement
-- [ ] 9.2 Reprojection error + bone-length consistency checks
-- [ ] 9.3 Per-joint per-frame confidence
-- [ ] 9.4 Synthetic ground-truth validation harness
-- [ ] 9.5 Hard gate: no metric claims without sufficient calibration
-- [ ] 9.6 Measure reconstruction error on synthetic truth; commit
+`python/analyzer/reconstruction/{pairing,triangulate,skeleton,reconstruct}.py` ·
+`python/analyzer/biomechanics/spatial.py` ·
+[ADR-0013](decisions/ADR-0013-epipolar-blindness.md)
+
+Two calibrated rays meet, and the result is metres — the first thing this engine
+has ever said about a body rather than about a picture of one. It also contains
+the phase's whole argument, which is a **negative** of exactly the shape Phase 8
+found one layer down and is not the same fact: the number that scores a
+triangulation is blind to half of the error that matters, and blind to it in a
+nameable direction.
+
+- [x] **9.1 DLT triangulation + non-linear refinement** — Hartley's linear
+      solution as a seed, then batched Gauss-Newton on the actual reprojection
+      error in both views. `StereoGeometry` composes the rig once, so the
+      reference camera sits at the origin and every point is a `CAMERA`
+      coordinate by construction rather than by a later transform
+- [x] **9.2 Reprojection error + bone-length consistency** — and the finding that
+      these answer different questions. Bone variation is the check the residual
+      cannot make; left-right symmetry is corroboration, which is **less** than it
+      was designed to be (below)
+- [x] **9.3 Per-joint per-frame confidence** — ray convergence angle, reprojection
+      residual, and a positional uncertainty in **metres** propagated through the
+      triangulation's own Jacobian from a pixel sigma measured on the clip
+- [x] **9.4 Synthetic ground-truth harness** — `tests/synthetic_body3d.py`: a
+      swing that exists in three dimensions, with exact bone lengths by inverse
+      kinematics, filmed by two cameras with different lenses, different frame
+      rates and different clocks. The first pair in this project that genuinely
+      is one swing from two viewpoints
+- [x] **9.5 Hard gate made real** — six metrics declaring `requires=STEREO`, so
+      the gate Phase 8 built and tested against nothing now blocks something
+- [x] **9.6 Tests** — 50 added (all pytest), plus 8 earlier assertions updated
+      that Phase 9 was written to invalidate
+- [x] **9.7 Measured on synthetic truth; commit**
+
+**Measured** (`scripts/benchmark_reconstruct.py`, Apple M1 Pro / macOS 26.4.1).
+A 1.78 m synthetic body filmed by a 120 fps face-on camera and a 60 fps
+down-the-line one, 4.8 m apart at 90°. **A floor, not an estimate**: there is no
+pose estimator in the fixture, so no blur, no occlusion, no mis-tracked wrist.
+
+Accuracy against isotropic landmark noise, over the eight landmarks that move:
+
+| landmark sigma | median  | p95     | hands p95 | reprojection | uncertainty |
+| -------------- | ------- | ------- | --------- | ------------ | ----------- |
+| 0.5 px         | 1.0 mm  | 1.9 mm  | 1.9 mm    | 0.16 px      | 1.0 mm      |
+| **2.7 px**     | **5.5 mm** | **10.4 mm** | **10.5 mm** | 0.85 px | 5.4 mm  |
+| 5.0 px         | 10.1 mm | 19.3 mm | 19.4 mm   | 1.55 px      | 10.1 mm     |
+| 10.0 px        | 20.4 mm | 38.5 mm | 38.3 mm   | 2.45 px      | 20.2 mm     |
+
+2.7 px is the 0.0014 frame widths Phase 3 measured on real footage, at 1920 px
+wide — so the bolded row is what this pipeline would do on a perfect capture of a
+real swing.
+
+**The headline is the negative.** Displace every landmark in one view *along its
+epipolar line* — the direction in which a wrong depth is a perfect fit — and:
+
+| along-epipolar | median 3D error | **reprojection** | bone variation |
+| -------------- | --------------- | ---------------- | -------------- |
+| 0 px           | 0.0 mm          | **0.00 px**      | 2.6%           |
+| 1 px           | 1.4 mm          | **0.00 px**      | 4.8%           |
+| 2 px           | 2.7 mm          | **0.00 px**      | 9.6%           |
+| 4 px           | 5.4 mm          | **0.00 px**      | 19.1%          |
+| 8 px           | 10.8 mm         | **0.00 px**      | 37.8%          |
+
+Not insensitive — **exactly zero**, because every one of those detections has a
+perfect 3D explanation. The same pixel counts applied isotropically give
+0.31 / 0.63 / 1.25 / 2.51 px, so the residual is a real measurement of the
+component it can see and is not the accuracy. Bone variation is what notices.
+
+**The gate is the geometry, and it is flat in the residual too.** Camera
+separation, at 2.7 px of noise:
+
+| separation | ray angle | median error | **reprojection** | uncertainty | 1/sin |
+| ---------- | --------- | ------------ | ---------------- | ----------- | ----- |
+| 90°        | 94°       | 5.5 mm       | **0.85 px**      | 5.4 mm      | 1.0x  |
+| 45°        | 48°       | 6.5 mm       | **0.84 px**      | 8.7 mm      | 1.3x  |
+| 30°        | 32°       | 8.2 mm       | **0.84 px**      | 12.7 mm     | 1.9x  |
+| 15°        | 16°       | 14.3 mm      | **0.84 px**      | 25.0 mm     | 3.6x  |
+| 8°         | 9°        | 26.0 mm      | **0.84 px**      | 46.6 mm     | 6.7x  |
+
+Flat to two decimal places over a range where the error grows 4.7x. That is
+Phase 8's tilt sweep again, one layer up, and it is why `min_convergence_deg` is
+the gate and is checked **before** the residual.
+
+**Phase 8's capture instruction does not survive the subject moving.** Stereo
+calibration tolerates unsynchronised cameras because pairing error is
+`sync_error × image_speed` and a board can be held still. Nothing in a swing is:
+
+| target fps | pairing        | hands p95 | nearest-frame cost |
+| ---------- | -------------- | --------- | ------------------ |
+| 240        | resampled      | 0.0 mm    | 1.6 px             |
+| 240        | nearest frame  | 2.4 mm    | 1.6 px             |
+| 120        | nearest frame  | 2.4 mm    | 3.3 px             |
+| 60         | **resampled**  | **0.0 mm**| 6.5 px             |
+| 60         | nearest frame  | **12.3 mm** | 6.5 px           |
+| 30         | refused        | —         | Phase 3's window floor |
+
+No landmark noise in that table, so every millimetre is the pairing. Resampling
+uses cubic Hermite interpolation of the position *and velocity* Phase 3 already
+fitted — no new kernel and no second smoothing pass.
+
+**The 3D rotations, against angles that are inputs.** The fixture turns the
+shoulders 92° and the pelvis 45° about a declared axis, so X-factor has a true
+value — which no single-camera measurement in this project has ever had:
+
+| landmark sigma | shoulder | pelvis | X-factor | reported ± | worst error |
+| -------------- | -------- | ------ | -------- | ---------- | ----------- |
+| 0.0 px         | 92.0°    | 45.0°  | 47.0°    | 0.0°       | 0.0°        |
+| 1.0 px         | 92.3°    | 44.6°  | 47.3°    | 1.1°       | 0.9°        |
+| 2.7 px         | 91.6°    | 44.5°  | 47.2°    | 3.0°       | 0.5°        |
+| 5.0 px         | — no swing detected: **Phase 4 refuses the clip** | | | | |
+
+Truth: 92 / 45 / 47. The last row is the finding: **at 5 px of scatter the
+reconstruction is fine and the phase detector is not**, so there is no instant to
+anchor a rotation to. On noisy footage the limit on a 3D metric is Phase 4, not
+the triangulation.
+
+Non-linear refinement is worth a little and is kept: 5.7 → 5.5 mm median at
+2.7 px, residual 1.02 → 0.85 px.
+
+**Cost:** 70 ms to reconstruct 312 frames (8,778 points), against ~95 ms to
+filter both clips and ~1.3 s per clip to extract poses in the first place.
+Nothing is cached, for the same measured reason as Phase 3.
+
+**Deliberate deviations from the original plan:**
+
+- **9.2's two checks are not equals, and finding that out corrected this
+  phase's own design.** Left-right symmetry was built on the reasoning that a
+  consistent depth bias would give a *stably* wrong bone length that the
+  variation check could not see. Measured, that reasoning is wrong: a swing
+  rotates the body, so a displacement constant in the camera's frame is not
+  constant relative to the bone. Displacing one elbow 5 cm along the optical axis
+  makes the forearm's variation 11% — past the bound — while the left-right
+  disagreement is 2.6%, well inside it. Symmetry is kept because it **localises**
+  (it names which side is worse, which a per-segment number does not), and it is
+  documented as corroboration rather than as the instrument it was meant to be.
+- **`WORLD` is not delivered, and the obstacle is not arithmetic.** Phase 6
+  recorded that WORLD "needs a calibrated stereo pair, which arrives in Phase 9".
+  A stereo pair is necessary and not sufficient: a scene-fixed frame also needs a
+  gravity direction and a target line, and the cameras know neither their own
+  attitude nor which way the shot goes. Both fall out of a capture that lays the
+  calibration board flat on the ground with one edge along the target line, which
+  `data/README.md` does not currently ask for. So Phase 9 produces `CAMERA` and
+  names what WORLD is missing. The cost is specific: a **3D spine tilt** needs a
+  vertical and is therefore absent from the metric family. Nothing else is —
+  lengths, joint angles and speeds are invariant to the frame, and the rotations
+  are taken about the body's own measured spine axis.
+- **`CAMERA` is produced and still refused by `require_reachable`.** It is not a
+  conversion of one clip's landmarks, it is a measurement made from two of them,
+  and a `landmark_series` call that returned it would have had to invent the depth
+  the projection destroyed. The error message names triangulation rather than a
+  phase number.
+- **The target clip is resampled, not paired.** 9.1 does not mention pairing at
+  all, which quietly assumes the two cameras' frames correspond. They do not, and
+  Phase 8's answer to that — pair nearest frames, hold the subject still — is
+  unavailable on a swing. The table above is the measurement that decided it.
+- **3D velocity is not a finite difference of the reconstructed track.**
+  Differentiating the triangulation's least-squares condition through time gives
+  `X_dot = (J'J)^-1 J' x_obs_dot`, which assembles the 3D velocity from the two
+  views' *fitted* image velocities. That is Phase 3's rule — a derivative comes
+  from the fit, never from differencing what the fit produced — applied one layer
+  up, and it is exact at a converged reconstruction.
+- **The pixel sigma that drives every uncertainty is measured from the clip**,
+  as the filter's own residual RMS, rather than chosen. A residual of exactly
+  zero is **not** treated as evidence of perfect landmarks — that is what an
+  exactly-determined local fit produces every time — so that case falls back to
+  the 0.0014 frame widths Phase 3 measured on real footage, and says so.
+- **Six new metric names rather than promoting the existing five.**
+  `SHOULDER_TURN` is a rotation inferred from how much a line shortened in one
+  picture and `SHOULDER_TURN_3D` is the angle between two measured directions in
+  space. They will disagree, the disagreement is informative, and one name whose
+  meaning depended on whether a rig happened to be calibrated would make two
+  numbers that cannot be compared look like one that can. The 3D ones carry
+  `meaning` rather than `meanings`, and an empty `refused_in` — a reconstructed
+  quantity means the same thing from every camera position, and a down-the-line
+  clip that refuses `SHOULDER_TURN` supports `SHOULDER_TURN_3D` from the same
+  footage.
+- **The sign of a 3D turn is measured, not assumed.** "Away from the target"
+  needs the target line and "clockwise from above" needs an up; neither is
+  available. What is available is the swing, so the direction the shoulders had
+  turned at the top defines positive for the whole clip.
+- **The fixture's framing is set by measurement, twice.** At 4.2 m the torso
+  spans 0.072 frame widths and Phase 4 refuses to call the clip a swing at
+  ordinary noise levels, so the cameras moved to 3.4 m. And the clock offset is
+  deliberately not a whole number of frames: at exactly 0.35 s every 120 fps
+  reference instant maps onto an exact 60 fps target frame, so nearest-frame
+  pairing is *exact* and the sweep measuring what it costs measures zero.
+- **A camera convention bug the reconstruction could not see.** `look_at` built
+  with `cross(world_up, forward)` produces two cameras that are both upside down
+  and mirrored. Triangulation is unaffected — the reference frame is merely
+  rotated, and the measured error was zero — and Phase 4 caught it immediately,
+  because the hands reached their *lowest* point at the top of the backswing.
+  There is now a test asserting the convention directly.
+- **No UI.** Phase 4 built an inspector because checking an event's timing needs
+  the video frame by frame; a reconstruction is checked by its own bones and by
+  the numbers `analyzer reconstruct` prints. The 3D viewport is Phase 15, and it
+  should render something this phase has already validated rather than being the
+  thing that validates it.
+- **The rig is checked before any footage is read, and the first version was
+  not.** Running `analyzer reconstruct` on an uncalibrated project reported "no
+  extracted poses for this clip" — the last thing that went wrong rather than the
+  first thing that was wrong — because the dispatcher aligned the pair and loaded
+  both clips before `reconstruct_pair` looked at the rig. `require_stereo_rig`
+  is now split out and called up front: every check in it reads the project and
+  none reads the footage, which is what makes it cheap enough to run first.
+  Found by running the command, not by a test.
+- **Three pre-existing TypeScript errors were fixed**, in Phase 8's
+  `CalibrationPanel`. They are not Phase 9's, and `npm run check:all` was already
+  red on `cf41d97`: an `exactOptionalPropertyTypes` violation passing an
+  `undefined` tone, an optional `observations[]` used as required, and a test
+  variable TypeScript narrows to `null` because its assignment happens inside a
+  callback. Fixed rather than left, because a phase boundary that cannot be
+  verified green is not a phase boundary.
+- **No real reconstruction exists in this project**, and the benchmark says so in
+  its own docstring. It needs two calibrated cameras that filmed one swing
+  simultaneously; Phase 7 established that the only two-angle pair here is not the
+  same swing, and Phase 8 that no real calibration footage exists. Everything
+  above is synthetic, and the errors are a floor.
 
 ## Phase 10 — Club tracking ⬜
 

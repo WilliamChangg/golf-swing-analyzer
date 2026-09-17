@@ -6,13 +6,16 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-7 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-9 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
-> explicit coordinate frames with measured camera-view tagging, and two-camera
-> time alignment are built and verified. No camera calibration, club tracking, 3D
-> reconstruction or coaching exists yet. Sections below marked _Not yet
-> implemented_ say so rather than describing features that do not exist. See
+> explicit coordinate frames with measured camera-view tagging, two-camera time
+> alignment, camera calibration and multi-view 3D reconstruction are built and
+> verified. No club tracking, ball detection or coaching exists yet. **Nothing
+> has been reconstructed or calibrated from real footage** — no board capture and
+> no simultaneous two-camera recording exists in this repository, so every figure
+> in §9 is synthetic and is a floor. Sections below marked _Not yet implemented_
+> say so rather than describing features that do not exist. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
@@ -95,11 +98,12 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 9-13 outstanding._ A clip can be imported,
+_Partially implemented — Phases 10-13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
-derivatives, segmented into swing phases, measured, and aligned against a second
-camera — all of it from the app's **Video** screen except project management, and
-all of it from a terminal:
+derivatives, segmented into swing phases, measured, aligned against a second
+camera, and — with both cameras calibrated — reconstructed into 3D positions in
+metres. All of it from the app's **Video** screen except project management and
+reconstruction, and all of it from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -128,6 +132,11 @@ uv run --project python analyzer project add 1 faceon.mov --role face_on
 uv run --project python analyzer project add 1 dtl.mov --role down_the_line --slow-motion 8
 uv run --project python analyzer project sync 1                # stored on the project
 uv run --project python analyzer project list
+
+# Two calibrated, aligned views: metres, in three dimensions.
+uv run --project python analyzer reconstruct 1
+uv run --project python analyzer reconstruct 1 --json
+uv run --project python analyzer metrics faceon.mov --project 1   # now includes the 3D metrics
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -154,6 +163,15 @@ confidence and a methodology. Metrics that cannot honestly be computed from a
 given recording are listed as refusals with the reason, rather than omitted.
 `scripts/overlay_metrics.py` draws each value on the frame it was measured from,
 which is the only way to tell a correct angle from a plausible one.
+
+Reconstruction turns two calibrated, aligned views into 3D positions in metres,
+and reports three numbers rather than one: how well the two views agree
+(reprojection error), what the capture could possibly determine (the ray
+convergence angle), and an independent check the first cannot make (whether the
+reconstructed bones keep their length). It refuses by name when the rig is not
+stereo, when a calibration does not describe the footage, or when the clocks have
+not been related — never at a default offset of zero, which is both a plausible
+answer and the wrong one.
 
 Synchronisation relates two cameras' clocks, which everything above two views
 depends on: triangulating a point is only meaningful for two views of the same
@@ -238,7 +256,8 @@ The spaces are kept apart deliberately: `IMAGE` is normalised to the frame and
 is the only space a landmark can be drawn in, while `HIP_LOCAL` is MediaPipe's
 "world" output — hip-centred, only roughly metric, and carrying no camera
 geometry. It is **not** calibrated world coordinates, and no metric claim rests
-on it. Real world coordinates arrive in Phase 9 from stereo triangulation.
+on it. Genuinely metric coordinates come from triangulating two calibrated views
+of one instant — §9 — and they are camera-centred rather than scene-fixed.
 
 **Filtering.** Landmark trajectories are smoothed and differentiated by local
 polynomial regression solved at each sample on the clip's real timestamps.
@@ -270,7 +289,53 @@ Club and ball tracking are not built. Planned stages and their ordering are in
 
 ## 9. 3D reconstruction methodology
 
-_Triangulation not yet implemented — Phase 9._ Both of its prerequisites are.
+Two calibrated rays meet, and the result is metres. On a synthetic swing whose 3D
+positions are inputs, filmed by two simulated cameras at 90°, the reconstruction
+lands within **5.5 mm at the median and 10.4 mm at the 95th percentile** at the
+landmark scatter Phase 3 measured on real footage — a floor rather than an
+estimate, since there is no pose estimator in the fixture.
+
+**The number that scores a triangulation is blind to half of the error.** A point
+detected in camera 1 defines a ray, and every 3D point on that ray projects into
+camera 2 along a single line. Displace camera 2's detection *across* that line
+and no 3D point explains it, so it lands in the residual. Displace it *along* the
+line and a point further up or down the ray explains it perfectly — the fit is
+exact and the depth is wrong. Measured, the residual is not merely insensitive
+to that but **exactly zero**:
+
+| along-epipolar displacement | 3D error | reprojection | bone variation |
+| --------------------------- | -------- | ------------ | -------------- |
+| 0 px                        | 0.0 mm   | **0.00 px**  | 2.6%           |
+| 2 px                        | 2.7 mm   | **0.00 px**  | 9.6%           |
+| 8 px                        | 10.8 mm  | **0.00 px**  | 37.8%          |
+
+For the camera pair this system recommends — one face-on, one down the line — the
+epipolar lines run nearly horizontally in both images, and nothing makes a pose
+estimator's horizontal error smaller than its vertical one.
+
+So three numbers are reported, each labelled with its own question. **The gate is
+the ray convergence angle**, because depth error scales as `1/sin` of it and it
+is a property of where the tripods went: closing the cameras from 90° to 8° moves
+the error 4.7x and leaves the residual flat at 0.84 px. **The independent check
+is bone length**, because a point sliding along its ray changes its distance to
+its neighbours and a bone does not change length during a swing — no ground truth
+and no anatomical table required. Full reasoning in
+[ADR-0013](docs/decisions/ADR-0013-epipolar-blindness.md).
+
+**Phase 8's capture instruction does not survive the subject moving.** Stereo
+calibration tolerates unsynchronised cameras because the pairing error is
+`sync_error × image_speed` and a board can be held still. Nothing in a swing is,
+so pairing nearest frames costs 2.4–12.3 mm at the hands; the target clip is
+resampled onto the reference clock instead, by cubic Hermite interpolation of the
+position and velocity the Phase 3 filter already fitted.
+
+**What comes out is camera-centred metres, not a scene frame.** A scene-fixed
+frame needs a gravity direction and a target line, and a stereo pair supplies
+neither. Every length, angle and speed between two reconstructed points is
+unaffected, so the six metrics this unlocks — shoulder turn, pelvis turn and
+X-factor about the body's own measured spine axis, both true elbow angles, and
+peak hand speed in metres per second — need no scene frame. A 3D *spine tilt*
+would, and is therefore absent.
 
 `CalibrationStatus` is `none`, `intrinsics` or `stereo`, and the metric layer
 gates on it centrally. **Three values rather than two, because a calibrated
@@ -280,6 +345,9 @@ such rays intersect and one does not, so `intrinsics` permits removing the lens
 from a landmark and permits no metric-scale claim whatever. `apply.bearings`
 returns unit vectors for that reason, and nothing in the calibration package
 returns a 3D point.
+
+Both prerequisites are gated, and a reconstruction refuses by name when either is
+missing.
 
 **Prerequisite one, Phase 7: the two cameras' clocks.** Triangulating a point
 from two views is only meaningful for two views of the same instant. An offset
@@ -324,8 +392,8 @@ conventions in [docs/coordinate-systems.md](docs/coordinate-systems.md).
 | `IMAGE`        | x/W, y/H        | down | **no**    | no     | stored              |
 | `FRAME_WIDTHS` | x/W, (H−y_px)/W | up   | yes       | no     | derived on read     |
 | `HIP_LOCAL`    | approx. metres  | up   | yes       | approx | stored              |
-| `CAMERA`       | metres          | —    | yes       | yes    | **Phase 8, absent** |
-| `WORLD`        | metres          | —    | yes       | yes    | **Phase 9, absent** |
+| `CAMERA`       | metres          | down | yes       | **yes** | **triangulated**   |
+| `WORLD`        | metres          | —    | yes       | yes    | **absent**          |
 
 `IMAGE` is what a pose estimator emits and a bad frame to measure in, for two
 reasons that both fail silently: it is **anisotropic** (x divided by the frame
@@ -786,9 +854,9 @@ A general benchmark harness arrives in Phase 17.
 - **Calibrating one camera does not make it see depth, and the word
   "calibrated" invites believing it does.** A calibrated pixel is a direction.
   `CalibrationStatus` keeps `intrinsics` and `stereo` apart for that reason and
-  the metric layer gates on it — but the gate blocks nothing today, because no
-  metric in this build claims three dimensions. It is machinery waiting for
-  Phase 9 rather than machinery currently refusing anything.
+  the metric layer gates on it. The gate now blocks six metrics: on a project
+  with one camera calibrated, every quantity whose basis is `spatial` is refused
+  by name, because two rays are what make a point and one does not.
 - **Neither camera may move between the board capture and the swing**, and
   nothing detects that one was nudged. The extrinsics describe where the cameras
   stood; a bumped tripod makes every triangulated point wrong with no symptom.
@@ -931,17 +999,28 @@ rendering, swing comparison, performance work, model management, test hardening
 and documentation. Sequencing, deliverables, and exit criteria per phase are in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-Phase 7 began the two-camera work that eventually makes the projections in §11
-unnecessary, and settled the first of the two things a second view needs: the
-relation between the cameras' clocks, with the error in it carried rather than
-assumed away. Phase 8 settles the second — where the cameras were — and only
-with both can Phase 9 claim a measurement about a body rather than about a
+Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
+and settled the first of the two things a second view needs: the relation between
+the cameras' clocks, with the error carried rather than assumed away. Phase 8
+settled the second — where the cameras were. Phase 9 spends both, and the six
+metrics in §9 are the first numbers here that describe a body rather than a
 picture of one.
 
-Two open items carry forward. Synchronisation has never been checked against a
-genuinely simultaneous pair, because none exists here; and Phase 4's event
-confidence does not detect a badly located event, which Phase 7 measured and
-deliberately did not fix.
+Four open items carry forward:
+
+- **Nothing here has been reconstructed from real footage.** It needs two
+  calibrated cameras that filmed one swing at once, and no such recording exists
+  in this repository. Every figure in §9 is synthetic and is a floor.
+- **Synchronisation has never been checked against a genuinely simultaneous
+  pair**, for the same reason.
+- **A scene frame is one capture away.** Laying the calibration board on the
+  ground with an edge along the target line would supply the vertical and the
+  target line that a stereo pair does not, and with them a 3D forward spine
+  tilt. `data/README.md` now asks for that footage; nothing reads it yet.
+- **Phase 4 is the limit on 3D metrics under noise, not the triangulation.**
+  Measured: at 5 px of landmark scatter the reconstruction is still accurate to
+  millimetres and the phase detector declines to call the clip a swing, so there
+  is no instant to anchor a rotation to. Phase 12 is where that is revisited.
 
 ## Licence
 

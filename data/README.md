@@ -84,6 +84,27 @@ systematically distorts apparent shaft plane and club path.
 Keep both cameras fixed. Any pan or handheld drift is indistinguishable from
 body motion to a single-camera pipeline.
 
+**The angle between the two cameras is the single most important thing about the
+placement, and it is measured rather than advised.** A 3D point is the
+intersection of two rays, and how well it is determined depends on the angle they
+meet at: depth error scales as `1 / sin(theta)`. Face-on plus down-the-line puts
+that near 90°, which is the best it can be — and it is what the two placements
+above already ask for, so following them costs nothing extra. What to avoid is
+putting both cameras on the same side of the player:
+
+| separation | reconstruction error | reprojection error |
+| ---------- | -------------------- | ------------------ |
+| 90°        | 5.5 mm               | 0.85 px            |
+| 45°        | 6.5 mm               | 0.84 px            |
+| 30°        | 8.2 mm               | 0.84 px            |
+| 15°        | 14.3 mm              | 0.84 px            |
+| 8°         | 26.0 mm              | 0.84 px            |
+
+Note the right-hand column. Nothing in the reconstruction's own residual changes
+across that range, which is why the system gates on the angle and refuses below
+15° rather than trusting a fit that looks identical either way
+(`scripts/benchmark_reconstruct.py --sweep convergence`).
+
 ### Settings
 
 | Setting        | Recommendation               | Why                                                                                                          |
@@ -257,4 +278,25 @@ measured above inherits that displacement with nothing in the numbers showing it
 Calibrating one camera removes it. It does **not** make one camera see depth: a
 calibrated pixel is a direction, and how far along that direction anything sat is
 exactly what the projection destroyed. That needs two calibrated views of the
-same instant, which is Phase 9.
+same instant, which is what a stereo calibration plus an alignment buys.
+
+### What a reconstruction still does not know: up, and the target line
+
+Triangulating two calibrated views gives metres **centred on one of the
+cameras**. That is enough for every quantity measured between two reconstructed
+points — bone lengths, true joint angles, speeds in metres per second, and
+rotations about the body's own spine axis — because none of those depends on the
+frame they are expressed in.
+
+What it does not give is a *scene* frame, because nothing in the capture says
+which way is up or which way the shot goes. The cost is specific: a **3D forward
+spine tilt**, the posture angle a coach actually talks about, needs a vertical
+and so is not produced.
+
+**One extra shot would fix it, and the protocol does not currently ask for it:**
+lay the calibration board flat on the ground in the hitting area, one edge along
+the target line, and record a few seconds of it from both cameras before the
+player steps in. The board's plane is then the ground, its normal is up, and its
+own axes give the target line. If you are calibrating anyway, it costs ten
+seconds — and it is worth capturing now even though this build does not yet read
+it, because it cannot be recovered from footage afterwards.

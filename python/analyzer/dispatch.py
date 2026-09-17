@@ -23,6 +23,7 @@ from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
 from analyzer.contracts.pose import LandmarkSpace
+from analyzer.contracts.reconstruction import ReconstructionConfig
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
@@ -344,6 +345,21 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
             "records this, so it is supplied rather than measured."
         ),
     )
+    reconstruct: bool = Field(
+        default=True,
+        description=(
+            "Also triangulate this clip against its partner, where the project is "
+            "a calibrated, aligned pair, so that the metrics whose basis is "
+            "`spatial` can be measured.\n\n"
+            "It costs nothing on the ordinary project, because it does nothing "
+            "there: an uncalibrated or unaligned or single-clip project returns "
+            "no reconstruction before any work is done, and the spatial metrics "
+            "are refused by the calibration gate. False is for measuring the "
+            "single-camera result on a pair that could do better, which is how "
+            "the projected and reconstructed versions of the same quantity get "
+            "compared."
+        ),
+    )
 
 
 def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
@@ -384,11 +400,107 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
         intrinsics=intrinsics,
         reporter=reporter,
     )
+    reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
     try:
         detected = detect_phases(filtered, parsed.phases)
-        return compute_metrics(filtered, detected, parsed.metrics, status)
+        result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
     except (SignalError, BodyError) as exc:
         raise _unsupported_input(exc, None) from exc
+
+    result.warnings = [*result.warnings, *notes]
+    return result
+
+
+def _reconstruction_for_metrics(
+    parsed: ComputeMetricsParams, sequence: Any, filtered: Any, reporter: ProgressReporter
+) -> tuple[Any, list[str]]:
+    """Triangulate this clip against its partner, when the project supports it.
+
+    Returns `(None, [])` for every project that is not a calibrated, aligned pair,
+    which is the ordinary case and a silent one: the spatial metrics are then
+    refused by the calibration gate, whose reason names the calibration rather
+    than this function's inability to find a partner. A project that *is* a
+    calibrated pair but whose clips are not aligned gets a warning, because there
+    the fix is one command away.
+    """
+    from analyzer.contracts.calibration import CalibrationStatus
+    from analyzer.projects import ProjectError, ProjectStore
+    from analyzer.reconstruction import ReconstructionError, reconstruct_pair
+
+    if parsed.project_id is None or not parsed.reconstruct:
+        return None, []
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    if project.rig is None or project.rig.status() is not CalibrationStatus.STEREO:
+        return None, []
+
+    digest = sequence.video_content_key.digest
+    this = next((entry for entry in project.clips if entry.content_key.digest == digest), None)
+    others = [entry for entry in project.clips if this is not None and entry.id != this.id]
+    if this is None or len(others) != 1:
+        return None, []
+    other = others[0]
+
+    time_map = _stored_time_map(project, this.id, other.id)
+    if time_map is None:
+        return None, [
+            "This project's cameras are calibrated as a stereo pair, so a 3D reconstruction "
+            "is possible -- but the two clips' clocks have not been related, and "
+            "triangulation is only meaningful between two views of the same instant. "
+            "`analyzer project sync` relates them."
+        ]
+
+    reconstruct_params = ReconstructParams(
+        project_id=parsed.project_id,
+        reference_clip_id=this.id,
+        target_clip_id=other.id,
+        model=parsed.model,
+        filter=parsed.filter,
+        phases=parsed.phases,
+    )
+    try:
+        return (
+            reconstruct_pair(
+                filtered,
+                _filtered_for_clip(project, other, reconstruct_params, reporter),
+                project.rig,
+                time_map,
+                reference_role=this.role,
+                target_role=other.role,
+                reference_name=this.name,
+                target_name=other.name,
+            ),
+            [],
+        )
+    except ReconstructionError as exc:
+        # A reconstruction that cannot be produced is not a reason to produce no
+        # metrics: everything the single camera supports is still measurable, and
+        # the spatial family is refused by name with this as the reason.
+        return None, [f"No 3D reconstruction was produced for this pair: {exc}"]
+
+
+def _stored_time_map(project: Project, reference_id: int, target_id: int) -> Any:
+    """The project's alignment for one ordered pair, inverting a stored reverse one.
+
+    A project stores one `SyncModel` per ordered pair, and which clip was the
+    reference when it was fitted has nothing to do with which clip is the
+    reference now -- that choice belongs to whoever is asking, and it only
+    decides which camera the reconstructed metres are centred on.
+    `TimeMap.inverse` is what makes the two questions independent.
+    """
+    for entry in project.syncs:
+        if entry.model.time_map is None or not entry.model.aligned:
+            continue
+        if entry.reference_clip_id == reference_id and entry.target_clip_id == target_id:
+            return entry.model.time_map
+        if entry.reference_clip_id == target_id and entry.target_clip_id == reference_id:
+            return entry.model.time_map.inverse()
+    return None
 
 
 def _calibration_for(project_id: int | None, sequence: Any) -> tuple[Any, CalibrationStatus]:
@@ -1185,6 +1297,221 @@ def _calibrate_stereo(params: dict[str, Any], reporter: ProgressReporter) -> Bas
     return stereo
 
 
+# --- reconstruction (Phase 9) ---------------------------------------------
+
+
+class ReconstructParams(BaseModel, extra="forbid"):
+    """Parameters for `reconstruct`.
+
+    Project-based rather than path-based, and that is not a convenience. A
+    reconstruction needs three things that all belong to a *pair* rather than to
+    a clip -- which camera filmed which clip, the rig relating them, and the map
+    relating their clocks -- and a project is the only thing in this engine that
+    records any of them. Two loose paths cannot supply them, so there is no
+    signature here that takes two loose paths.
+    """
+
+    project_id: int
+    reference_clip_id: int | None = Field(
+        default=None,
+        description=(
+            "Which clip sets the clock, the frame numbering and the coordinate "
+            "frame. None picks the face-on clip where there is one. It changes "
+            "which camera the metres are centred on and nothing else, so the "
+            "useful choice is whichever clip the swing events were found in."
+        ),
+    )
+    target_clip_id: int | None = Field(
+        default=None, description="The second view. None picks the other clip."
+    )
+    model: str | None = None
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description=(
+            "Smoothing policy, applied to **both** clips, for the reason "
+            "`sync_clips` shares one: the fitted position and velocity are what "
+            "the target clip is resampled with, and smoothing the two "
+            "differently would bias every reconstructed point by an amount "
+            "nothing measures."
+        ),
+    )
+    phases: PhaseConfig = Field(default_factory=PhaseConfig)
+    sync: SyncConfig = Field(default_factory=SyncConfig)
+    reconstruction: ReconstructionConfig = Field(default_factory=ReconstructionConfig)
+    align: bool = Field(
+        default=False,
+        description=(
+            "Re-align the pair now instead of using the project's stored "
+            "alignment. False by default because a stored alignment is a "
+            "**recorded decision** -- a person may have placed its anchors by "
+            "hand -- and silently recomputing it would discard that. A project "
+            "with no stored alignment for this pair aligns anyway and says so in "
+            "the warnings."
+        ),
+    )
+
+
+def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Triangulate a project's pair of clips into 3D positions.
+
+    Filtering and phase detection are recomputed rather than taken as input, for
+    the reason `compute_metrics` gives: they cost milliseconds, and accepting
+    pre-computed ones would let two clips be reconstructed whose trajectories
+    were fitted under different settings -- a difference that would surface as
+    reconstruction error with no way to attribute it.
+    """
+    parsed = ReconstructParams.model_validate(params)
+
+    from analyzer.contracts.sync import SyncModel
+    from analyzer.projects import ProjectError, ProjectStore
+    from analyzer.reconstruction import (
+        ReconstructionError,
+        reconstruct_pair,
+        require_stereo_rig,
+    )
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    reference, target = _choose_pair(project, parsed.reference_clip_id, parsed.target_clip_id)
+
+    # Before the poses are read and before the clips are aligned. Both of those
+    # cost seconds and neither can rescue a project whose cameras were never
+    # calibrated -- and running them first makes the reported failure the last
+    # thing that went wrong rather than the first thing that was wrong.
+    try:
+        require_stereo_rig(project.rig, reference.role, target.role)
+    except ReconstructionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    warnings: list[str] = []
+
+    stored = next(
+        (
+            entry
+            for entry in project.syncs
+            if entry.reference_clip_id == reference.id and entry.target_clip_id == target.id
+        ),
+        None,
+    )
+    if stored is not None and not parsed.align:
+        alignment: SyncModel = stored.model
+    else:
+        if stored is None:
+            warnings.append(
+                "This pair has no stored alignment, so one was fitted for this "
+                "reconstruction and not saved. `analyzer project sync` stores one, which "
+                "is worth doing: an alignment is a decision about which instants "
+                "correspond, and every reconstructed point inherits its error."
+            )
+        result = _sync_clips(
+            {
+                "reference": {
+                    "path": reference.path,
+                    "model": parsed.model,
+                    "slow_motion_factor": reference.slow_motion_factor,
+                },
+                "target": {
+                    "path": target.path,
+                    "model": parsed.model,
+                    "slow_motion_factor": target.slow_motion_factor,
+                },
+                "filter": parsed.filter.model_dump(mode="json"),
+                "phases": parsed.phases.model_dump(mode="json"),
+                "sync": parsed.sync.model_dump(mode="json"),
+            },
+            reporter,
+        )
+        assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+        alignment = result
+
+    if not alignment.aligned or alignment.time_map is None:
+        raise _unsupported_input(
+            ValueError(
+                "The two clips' clocks could not be related, so nothing knows which target "
+                f"frame shows the same instant as a given reference frame. {alignment.refusal or ''}".strip()
+            ),
+            "Align the pair with `analyzer project sync`, placing anchors by hand if the "
+            "automatic fit is refused. Triangulating two views of different instants "
+            "produces a confident answer about a pose the player never held.",
+        )
+
+    filtered = {
+        name: _filtered_for_clip(project, clip, parsed, reporter)
+        for name, clip in (("reference", reference), ("target", target))
+    }
+
+    try:
+        reconstruction = reconstruct_pair(
+            filtered["reference"],
+            filtered["target"],
+            project.rig,
+            alignment.time_map,
+            reference_role=reference.role,
+            target_role=target.role,
+            reference_name=reference.name,
+            target_name=target.name,
+            config=parsed.reconstruction,
+        )
+    except ReconstructionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    report = reconstruction.report
+    report.warnings = [*warnings, *report.warnings]
+    return report
+
+
+def _filtered_for_clip(
+    project: Project, clip: ProjectClip, parsed: ReconstructParams, reporter: ProgressReporter
+) -> Any:
+    """Load, undistort and filter one clip of a pair, ready to be triangulated.
+
+    The undistortion is not optional here, which is the difference from
+    `compute_metrics`: an uncalibrated clip there is a supported case whose
+    measurements are honestly labelled, and an uncalibrated clip here cannot be
+    triangulated at all. The intrinsics come from the clip's **declared role**,
+    because that is the only record of which of the project's cameras produced
+    this footage, and they are applied below the filter for the third time in
+    this engine's history and the same reason -- a lens displaces a landmark by
+    tens of pixels near the frame edge, and correcting after fitting would leave
+    the fit describing the distorted trajectory.
+    """
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=clip.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    camera = project.rig.usable_camera(clip.role) if project.rig is not None else None
+    intrinsics = camera.intrinsics if camera is not None else None
+    if intrinsics is not None and not intrinsics.applies_to(
+        sequence.geometry.width, sequence.geometry.height
+    ):
+        intrinsics = None
+
+    return filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=clip.slow_motion_factor,
+        intrinsics=intrinsics,
+        reporter=reporter,
+    )
+
+
 def _get_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
     """A project's camera rig: what is known about its cameras' geometry."""
     parsed = ProjectParams.model_validate(params)
@@ -1237,6 +1564,7 @@ METHODS: dict[str, Method] = {
     "calibrate_stereo": _calibrate_stereo,
     "get_calibration": _get_calibration,
     "clear_calibration": _clear_calibration,
+    "reconstruct": _reconstruct,
 }
 
 

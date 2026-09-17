@@ -54,6 +54,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     },
     "get_calibration": {"project_id": 1},
     "clear_calibration": {"project_id": 1},
+    "reconstruct": {"project_id": 1},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -70,6 +71,12 @@ _FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
 # and a stub would exercise the dispatch wiring against a fixture rather than
 # against the engine. `tests/test_calibration.py` covers the path they call into,
 # from rendered board views, which is the stronger test of the two.
+#
+# `reconstruct` is absent for the same reason and one more: it needs a project
+# holding two calibrated clips *and* an alignment between them, which is three
+# pieces of state that only exist together on a real session.
+# `tests/test_reconstruction.py` drives the engine it calls into directly, from a
+# synthetic body whose 3D positions are inputs.
 
 
 class TestCall:

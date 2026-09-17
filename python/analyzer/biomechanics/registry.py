@@ -445,6 +445,115 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         ),
         meaning="Backswing against downswing. Unitless and view-independent: the one number here no camera position can distort.",
     ),
+    # --- reconstructed in three dimensions -------------------------------
+    #
+    # The first entries in this registry that declare a `requires`, which is what
+    # makes the gate Phase 8 built and tested against nothing into a gate that
+    # blocks something. Each also carries `meaning` rather than `meanings`: a
+    # quantity measured between two points in space is the same quantity from
+    # every camera position, so there is one anatomical reading rather than one
+    # per view -- and `refused_in` is empty for the same reason, which is the
+    # visible difference between these and their projected namesakes. A
+    # down-the-line clip refuses `SHOULDER_TURN` because that view does not
+    # contain it; with a second calibrated camera, `SHOULDER_TURN_3D` is
+    # available from exactly the same footage.
+    MetricDefinition(
+        name=MetricName.SHOULDER_TURN_3D,
+        group=MetricGroup.ROTATION,
+        label="Shoulder turn (3D)",
+        unit=MetricUnit.DEGREES,
+        basis=MetricBasis.SPATIAL,
+        requires=CalibrationStatus.STEREO,
+        summary=(
+            "Angle the reconstructed shoulder line has turned about the spine axis "
+            "since address, measured in space rather than inferred from "
+            "foreshortening. The spine axis is the address hip-midpoint to "
+            "shoulder-midpoint direction, so the rotation is about the body's own "
+            "axis and needs no knowledge of which way is up."
+        ),
+        meaning=(
+            "How far the shoulders have actually turned, in three dimensions. "
+            "Positive is the direction they turned during the backswing, which is "
+            "measured from this swing rather than assumed from handedness."
+        ),
+    ),
+    MetricDefinition(
+        name=MetricName.PELVIS_TURN_3D,
+        group=MetricGroup.ROTATION,
+        label="Pelvis turn (3D)",
+        unit=MetricUnit.DEGREES,
+        basis=MetricBasis.SPATIAL,
+        requires=CalibrationStatus.STEREO,
+        summary=(
+            "The same measurement across the reconstructed hip line, about the same "
+            "address spine axis, so the two rotations are directly subtractable."
+        ),
+        meaning="How far the pelvis has actually turned, in three dimensions.",
+    ),
+    MetricDefinition(
+        name=MetricName.X_FACTOR_3D,
+        group=MetricGroup.ROTATION,
+        label="X-factor (3D)",
+        unit=MetricUnit.DEGREES,
+        basis=MetricBasis.SPATIAL,
+        requires=CalibrationStatus.STEREO,
+        summary=(
+            "Shoulder turn minus pelvis turn, both about the same address spine "
+            "axis. The difference of two measured rotations rather than of two "
+            "foreshortening estimates -- which is the whole reason a second camera "
+            "is worth owning, because the projected version inherits both "
+            "estimates' errors and then subtracts away most of the signal."
+        ),
+        meaning=(
+            "Separation between the shoulders and the pelvis about the spine: how "
+            "much the upper body is wound against the lower."
+        ),
+    ),
+    MetricDefinition(
+        name=MetricName.LEAD_ARM_ANGLE_3D,
+        group=MetricGroup.ARMS,
+        label="Lead arm angle (3D)",
+        unit=MetricUnit.DEGREES,
+        basis=MetricBasis.SPATIAL,
+        requires=CalibrationStatus.STEREO,
+        summary=(
+            "Interior angle at the lead elbow between the reconstructed upper arm "
+            "and forearm. 180 degrees is a straight arm. The true joint angle, not "
+            "its projection: a projected elbow angle is always smaller than the "
+            "real one and equal to it only when the whole arm lies in the image "
+            "plane."
+        ),
+        meaning="How straight the lead arm is, measured rather than projected.",
+    ),
+    MetricDefinition(
+        name=MetricName.TRAIL_ARM_ANGLE_3D,
+        group=MetricGroup.ARMS,
+        label="Trail arm angle (3D)",
+        unit=MetricUnit.DEGREES,
+        basis=MetricBasis.SPATIAL,
+        requires=CalibrationStatus.STEREO,
+        summary="The same at the trail elbow. 180 degrees is a straight arm.",
+        meaning="How folded the trail arm is, measured rather than projected.",
+    ),
+    MetricDefinition(
+        name=MetricName.PEAK_HAND_SPEED_3D,
+        group=MetricGroup.ARMS,
+        label="Peak hand speed (3D)",
+        unit=MetricUnit.METRES_PER_S,
+        basis=MetricBasis.SPATIAL,
+        anchored=True,
+        requires=CalibrationStatus.STEREO,
+        summary=(
+            "Greatest speed of the reconstructed hand midpoint, in metres per "
+            "second. The single-camera version of this is in torso lengths per "
+            "second because an uncalibrated frame has no metre in it; this one has "
+            "one, and it descends from a board square measured with a ruler."
+        ),
+        meaning=(
+            "How fast the hands are actually moving. Not club-head speed, which is "
+            "several times larger and needs the club tracked."
+        ),
+    ),
 )
 
 REGISTRY: Mapping[MetricName, MetricDefinition] = {

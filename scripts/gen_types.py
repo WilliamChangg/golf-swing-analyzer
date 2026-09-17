@@ -41,6 +41,7 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.metrics", "MetricSet"),
     ("analyzer.contracts.sync", "SyncModel"),
     ("analyzer.contracts.calibration", "CameraRig"),
+    ("analyzer.contracts.reconstruction", "ReconstructionReport"),
 )
 
 # `Project` and `ProjectList` are deliberately *not* exported. They are reachable

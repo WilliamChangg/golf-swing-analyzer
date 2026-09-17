@@ -111,6 +111,7 @@ filtering/      smoothing, gap policy, derivatives
 phases/         swing event detection
 sync/           relating two cameras' clocks to each other
 calibration/    what a pixel means: the lens, and where the cameras stand
+reconstruction/ where two calibrated rays meet: metres, in three dimensions
 biomechanics/   measured metrics, with units, confidence and methodology
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
@@ -137,8 +138,16 @@ under `data_dir()`, which backup tools do not skip.
 in the same way `sync` is: nothing below it requires a calibration, and
 everything above it is better with one. It is general computer vision — a
 Charuco board and a lens model know nothing about golf — and it is the only
-package whose output is a statement about the physical world rather than about a
-picture of it.
+package below `reconstruction` whose output is a statement about the physical
+world rather than about a picture of it.
+
+`reconstruction` is the only package with **three** prerequisites, and it refuses
+by name when any is missing: a stereo calibration (`calibration`), an alignment
+between the two clips' clocks (`sync`), and a filtered trajectory in each
+(`filtering`). That makes it the one place in the engine where the optional
+layers stop being optional. It is still general computer vision — nothing in a
+triangulation knows what a golf swing is — and it is the layer every earlier
+phase has been qualifying its output against.
 
 `coordinates` sits below everything and owns the one conversion the whole system
 depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
@@ -151,12 +160,21 @@ correctly signed in the velocity and acceleration rather than needing a second
 correction kept in step by hand. See
 [coordinate-systems.md](coordinate-systems.md).
 
-`biomechanics` has one entry point, `compute_metrics(filtered, phases)`. It
-measures the **camera view** before anything else, because a projected number is
-only interpretable once the direction it was taken from is known, and tags every
-metric with it — the same spine tilt is lateral side bend face-on and forward
-posture angle down the line. Metrics a view cannot support are refused centrally
-rather than per family, so a family added later cannot forget the check.
+`biomechanics` has one entry point, `compute_metrics(filtered, phases, config,
+calibration, reconstruction)`. It measures the **camera view** before anything
+else, because a projected number is only interpretable once the direction it was
+taken from is known, and tags every metric with it — the same spine tilt is
+lateral side bend face-on and forward posture angle down the line. Metrics a view
+cannot support are refused centrally rather than per family, so a family added
+later cannot forget the check.
+
+Its fifth argument is the reason the layering above is worth reading twice.
+`compute_metrics` measures **one clip**, and a reconstruction is a fact about
+**two**, so it arrives as an argument rather than being computed here. Absent, the
+spatial metrics are refused by name; on a project without a stereo rig they are
+refused one step earlier by the calibration gate, whose reason names the
+calibration rather than the missing reconstruction — the more actionable of the
+two answers, and so the one that wins.
 
 ## Video ingestion
 
@@ -470,6 +488,81 @@ simultaneous to the millisecond and showing the board in two different places.
 The fit's residual catches that, so stereo *does* gate on reprojection error:
 there it is measuring a correspondence rather than a model's fit to its own data.
 
+## Multi-view 3D reconstruction
+
+Two calibrated rays meet, and the result is metres. This is the layer every
+earlier phase has been qualifying its output against — and, like the calibration
+below it, its central finding is a negative.
+
+**The reprojection residual is blind along the epipolar line.** A point detected
+in camera 1 defines a ray, and every 3D point on that ray projects into camera 2
+along a single line. Split camera 2's detection error into two components: the
+part *across* that line has no 3D explanation and lands in the residual, and the
+part *along* it is explained perfectly by a point further up or down the ray. The
+first is visible, the second is invisible, and the second is the one that moves
+the answer in depth.
+
+Measured, it is not merely insensitive but exactly blind — displacing every
+landmark along its epipolar line moves the reconstruction by a centimetre at a
+residual of 0.00 px throughout:
+
+| along-epipolar displacement | 3D error | reprojection | bone variation |
+| --------------------------- | -------- | ------------ | -------------- |
+| 0 px                        | 0.0 mm   | **0.00 px**  | 2.6%           |
+| 2 px                        | 2.7 mm   | **0.00 px**  | 9.6%           |
+| 8 px                        | 10.8 mm  | **0.00 px**  | 37.8%          |
+
+For the pair this system recommends — one face-on, one down-the-line — the
+epipolar lines run nearly horizontally in both images, and nothing makes a pose
+estimator's horizontal error smaller than its vertical one. Roughly half the
+error by variance lands where the residual cannot see it.
+
+So three numbers are reported and each is labelled with its own question, the
+same shape `CalibrationQuality` uses one layer down:
+
+```
+reprojection_px    how well the two views agree, across the epipolar line
+convergence_deg    what the capture could possibly determine        the gate
+bone variation     an independent check the residual cannot make
+uncertainty_m      what the first two imply, in metres          the answer
+```
+
+**The gate is the ray convergence angle**, because depth error scales as `1/sin`
+of it and it is a property of where the tripods went rather than of the fit. A
+sweep from 90° to 8° of camera separation moves the error 4.7x and leaves the
+residual flat at 0.84 px. [ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
+
+**Bone length is the independent check**, because a point sliding along its ray
+changes its distance to its neighbours, and a bone does not change length during a
+swing. It needs no ground truth and no anatomical table: the *variation* across a
+clip is error whatever the absolute value is.
+
+```
+two filtered clips
+  └─ pairing       resample the target onto the reference clock
+      └─ triangulate   DLT, then Gauss-Newton on reprojection error
+          └─ gate      convergence, then residual, then uncertainty
+              └─ skeleton   bones and symmetry, on what survived
+```
+
+**Phase 8's capture instruction has no analogue here.** Stereo calibration
+survives unsynchronised cameras because the pairing error is `sync_error x
+image_speed`, and a board held still drives the second factor to zero. Nothing in
+a swing is still: hands reach thousands of pixels per second, so pairing nearest
+frames costs 2.4–12.3 mm at the hands depending on the frame rate. The target
+clip is therefore **resampled** onto the reference clock by cubic Hermite
+interpolation of the position and velocity Phase 3 already fitted — no new
+kernel, no second smoothing pass — and what survives is the map's own uncertainty,
+converted into pixels the same way Phase 8 converted it.
+
+**What comes out is CAMERA, not WORLD.** Triangulation gives metres centred on
+the reference camera. A scene-fixed frame needs a gravity direction and a target
+line, and a stereo pair supplies neither; both would fall out of a capture that
+laid the board flat on the ground, which the protocol does not currently ask for.
+Every length, angle and speed between two reconstructed points is unaffected,
+because none of them depends on the frame — which is why the spatial metrics are
+rotations about the body's own measured spine axis rather than about a vertical.
+
 ## Projects
 
 The first state in this engine that cannot be recomputed, and the reason
@@ -642,11 +735,39 @@ the offset.
 Aligning two 312-frame clips costs 0.5 ms on signals already filtered. Nothing is
 cached, for the same measured reason as Phase 3.
 
+### 3D reconstruction (Phase 9, 2026-09-17)
+
+`scripts/benchmark_reconstruct.py`. **Not a real capture**: a synthetic body
+whose 3D positions are inputs, filmed by two simulated cameras. There is no pose
+estimator in the fixture, so no motion blur, no occluded hip and no mis-tracked
+wrist — the errors are a **floor**.
+
+Accuracy over the eight landmarks that move, against isotropic landmark noise:
+
+| landmark sigma | median  | p95     | reprojection | uncertainty |
+| -------------- | ------- | ------- | ------------ | ----------- |
+| 0.5 px         | 1.0 mm  | 1.9 mm  | 0.16 px      | 1.0 mm      |
+| **2.7 px**     | **5.5 mm** | **10.4 mm** | 0.85 px | 5.4 mm  |
+| 5.0 px         | 10.1 mm | 19.3 mm | 1.55 px      | 10.1 mm     |
+
+2.7 px is the 0.0014 frame widths Phase 3 measured on real footage, at 1920 px
+wide.
+
+The two sweeps that decided the design both show the residual refusing to move
+while the answer does — along the epipolar line it is *exactly* 0.00 px while the
+error reaches 10.8 mm, and across a camera separation sweep from 90° to 8° it is
+flat at 0.84 px while the error grows 4.7x. See the section above and
+[ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
+
+Reconstructing 312 frames (8,778 points) costs 70 ms, against ~95 ms to filter
+both clips and ~1.3 s per clip to extract poses. Nothing is cached, for the same
+measured reason as Phase 3.
+
 ## Testing strategy
 
 | Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
 | ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (758)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration |
+| Contracts, probes, dispatch, protocol | pytest (814)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction |
 | Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
 | IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                       |
 | UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                 |

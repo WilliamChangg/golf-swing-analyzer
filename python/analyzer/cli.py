@@ -49,6 +49,7 @@ from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.projects import Project, ProjectList
+from analyzer.contracts.reconstruction import ReconstructionReport
 from analyzer.contracts.rpc import EngineError
 from analyzer.contracts.sync import SyncModel
 from analyzer.contracts.video import TimestampSource, VideoMetadata
@@ -583,6 +584,7 @@ _BASIS_TAG: dict[MetricBasis, str] = {
     MetricBasis.IMAGE_PLANE: "image",
     MetricBasis.PROJECTED_ANGLE: "proj angle",
     MetricBasis.FORESHORTENED_ANGLE: "foreshort",
+    MetricBasis.SPATIAL: "3D",
 }
 
 _GROUP_TITLES: dict[MetricGroup, str] = {
@@ -610,6 +612,8 @@ def _format_value(metric: Metric) -> str:
         return f"{metric.value:.2f} : 1"
     if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
         return f"{metric.value:.2f} torso/s"
+    if metric.unit is MetricUnit.METRES_PER_S:
+        return f"{metric.value:.2f} m/s"
     return f"{metric.value:+.3f} torso"
 
 
@@ -711,9 +715,11 @@ def _render_metrics(result: MetricSet) -> None:
         "[dim]basis: clock = from the timestamps, unaffected by camera position; "
         "image = measured in the image plane, blind to motion towards the camera; "
         "proj angle = an angle in the picture, not a 3D joint angle; "
-        "foreshort = rotation inferred from foreshortening, a magnitude only.\n"
-        "Lengths are in torso lengths, which is framing-independent but not metric. "
-        "Confidence is observation x anchor x method.[/dim]"
+        "foreshort = rotation inferred from foreshortening, a magnitude only; "
+        "3D = triangulated from two calibrated views, in metres, and the only rows "
+        "here that measure the body rather than a picture of it.\n"
+        "Lengths are in torso lengths, which is framing-independent but not metric, "
+        "except on 3D rows. Confidence is observation x anchor x method.[/dim]"
     )
 
     for warning in result.warnings:
@@ -1744,6 +1750,189 @@ def calibrate_clear(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     console.print(f"Project {project} is now uncalibrated.")
+
+
+def _render_reconstruction(result: ReconstructionReport) -> None:
+    """The three numbers, each labelled with the question it answers.
+
+    Laid out like the calibration review for the same reason: a reader who is
+    shown only the reprojection error will take it for the accuracy, and it is
+    not -- it is blind along the epipolar line, which is the direction the error
+    actually moves a point. So the convergence angle and the bone check sit
+    beside it, and each row says what it is evidence of.
+    """
+    summary = Table(title="3D reconstruction", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.reconstructed else "[yellow]NO[/yellow]"
+    summary.add_row("reconstructed", verdict)
+    summary.add_row(
+        "cameras",
+        f"{result.reference_role.value} ({result.reference_name}) -> "
+        f"{result.target_role.value} ({result.target_name})",
+    )
+    summary.add_row("frame", f"metres, centred on the {result.reference_role.value} camera")
+    summary.add_row(
+        "rig", f"{result.baseline_m:.2f} m apart, {result.convergence_deg:.0f} deg apart"
+    )
+    summary.add_row("frames", f"{result.reconstructed_frames} of {result.frames} carry a point")
+
+    quality = result.quality
+    if quality is not None:
+        summary.add_row("coverage", f"{quality.coverage:.0%} of landmark-frames")
+        summary.add_row(
+            "ray convergence",
+            f"{_deg(quality.median_convergence_deg)} median, {_deg(quality.min_convergence_deg)} "
+            "worst  [dim](the gate: depth error goes as 1/sin)[/dim]",
+        )
+        summary.add_row(
+            "reprojection error",
+            f"{_px(quality.median_reprojection_px)} median, {_px(quality.max_reprojection_px)} "
+            "worst  [dim](blind along the epipolar line)[/dim]",
+        )
+        summary.add_row(
+            "positional uncertainty",
+            f"{_mm(quality.median_uncertainty_m)} median, {_mm(quality.p95_uncertainty_m)} p95 "
+            f"[dim](worst direction, from {quality.pixel_sigma_px:.2f} px landmark scatter)[/dim]",
+        )
+        if quality.worst_bone_variation is not None:
+            style = (
+                "green"
+                if quality.worst_bone_variation <= result.config.max_bone_variation
+                else "yellow"
+            )
+            summary.add_row(
+                "worst bone variation",
+                f"[{style}]{quality.worst_bone_variation:.1%}[/{style}]  "
+                "[dim](the check the residual cannot make)[/dim]",
+            )
+
+    pairing = result.pairing
+    if pairing is not None:
+        summary.add_row(
+            "pairing",
+            f"{pairing.method}, {pairing.resampled_frames} frames"
+            + (
+                f", {pairing.outside_overlap} outside the overlap"
+                if pairing.outside_overlap
+                else ""
+            ),
+        )
+        if pairing.max_pairing_error_px is not None:
+            summary.add_row(
+                "sync cost, in pixels",
+                f"{pairing.max_pairing_error_px:.2f} px at the fastest landmark "
+                f"[dim](nearest-frame pairing would cost "
+                f"{_px(pairing.nearest_frame_error_px)})[/dim]",
+            )
+    console.print(summary)
+
+    if quality is not None and quality.bones:
+        bones = Table(title="Reconstructed segments", title_justify="left", expand=True)
+        bones.add_column("Segment", no_wrap=True)
+        bones.add_column("Median", justify="right")
+        bones.add_column("Variation", justify="right")
+        bones.add_column("", no_wrap=True)
+        for entry in sorted(quality.bones, key=lambda row: -row.variation)[:8]:
+            mark = "" if entry.stable else "[yellow]unstable[/yellow]"
+            bones.add_row(
+                entry.name,
+                f"{entry.median_length_m * 100:.1f} cm",
+                f"{entry.variation:.1%}",
+                mark,
+            )
+        console.print(bones)
+
+    if quality is not None and quality.symmetry:
+        worst = max(quality.symmetry, key=lambda row: row.disagreement)
+        console.print(
+            f"[dim]Left/right agreement: worst is {worst.segment} at "
+            f"{worst.disagreement:.1%} ({worst.left_m * 100:.1f} vs "
+            f"{worst.right_m * 100:.1f} cm).[/dim]"
+        )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _deg(value: float | None) -> str:
+    return "-" if value is None else f"{value:.0f} deg"
+
+
+def _px(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f} px"
+
+
+def _mm(value: float | None) -> str:
+    return "-" if value is None else f"{value * 1000:.1f} mm"
+
+
+@app.command()
+def reconstruct(
+    project: Annotated[int, typer.Argument(help="Which project's pair to triangulate.")],
+    reference_clip: Annotated[
+        int | None,
+        typer.Option("--reference-clip", help="Which clip sets the clock and the frame."),
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="The second view.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use for both clips.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, for both clips.")
+    ] = None,
+    align: Annotated[
+        bool,
+        typer.Option("--align", help="Re-align the pair now instead of using the stored sync."),
+    ] = False,
+    nearest_frame: Annotated[
+        bool,
+        typer.Option(
+            "--nearest-frame",
+            help="Pair nearest frames instead of resampling. For comparison; measurably worse.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Triangulate two calibrated, aligned views into 3D positions in metres."""
+    params: dict[str, object] = {"project_id": project, "model": model, "align": align}
+    if reference_clip is not None:
+        params["reference_clip_id"] = reference_clip
+    if target_clip is not None:
+        params["target_clip_id"] = target_clip
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if nearest_frame:
+        params["reconstruction"] = {"resample": False}
+
+    try:
+        result = call("reconstruct", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ReconstructionReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_reconstruction(result)
+
+    # Non-zero when nothing came out, so a script driving this learns that the
+    # pair produced no positions rather than reading an empty report as success.
+    if not result.reconstructed:
+        raise typer.Exit(code=1)
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed

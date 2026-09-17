@@ -16,8 +16,8 @@ The code is `python/analyzer/coordinates.py`; the enum is
 | `IMAGE`        | x/W, y/H           | down   | top-left       | **no**    | no     | stored              |
 | `FRAME_WIDTHS` | x/W, (H−y_px)/W    | **up** | bottom-left    | yes       | no     | derived on read     |
 | `HIP_LOCAL`    | approximate metres | up     | hip midpoint   | yes       | approx | stored              |
-| `CAMERA`       | metres             | —      | camera centre  | yes       | yes    | **Phase 8, absent** |
-| `WORLD`        | metres             | —      | fixed to scene | yes       | yes    | **Phase 9, absent** |
+| `CAMERA`       | metres             | down   | camera centre  | yes       | **yes** | **triangulated**   |
+| `WORLD`        | metres             | —      | fixed to scene | yes       | yes    | **absent**          |
 
 `W` and `H` are the **displayed** frame dimensions, after rotation. A phone clip
 stores frames sideways with a display matrix; the coded and displayed dimensions
@@ -89,19 +89,52 @@ the biomechanics layer refuse them, for a reason beyond the missing calibration:
 the origin moves with the body, so a hip displacement measured in them is zero
 by construction and a head height is measured from a moving datum.
 
-## CAMERA and WORLD
+## CAMERA
 
-Named here, and not produced by this build.
+**Produced, from Phase 9 on, and never by a conversion.**
 
-`CAMERA` needs the intrinsic matrix and distortion coefficients that calibration
-produces in **Phase 8**. `WORLD` needs triangulation against a calibrated stereo
-pair, which arrives in **Phase 9**.
+Metres in three dimensions, centred on the reference camera, from triangulating
+two calibrated views of the same instant (`analyzer/reconstruction`). It is the
+only frame in this table whose unit is a real metre, and the scale descends from
+one number: the printed board square measured with a ruler in Phase 8.
 
-They are in the enum deliberately. A later phase should add the capability, not
-the concept — and in the meantime, asking for either raises an error naming the
-phase that will supply it rather than reporting an unsupported value. That is
-also what keeps the distinction between "a frame we could compute and have not"
-and "a frame that requires equipment this recording did not have".
+It is still listed in `UNREACHABLE_SPACES`, and that is the distinction worth
+keeping. `landmark_series` refuses it, because a stored pose sequence is **one
+clip**, which is one projection — asking it for CAMERA would mean inventing the
+depth the projection destroyed. The frame is a measurement made from two
+sequences, not a reading of one, so it does not live behind `convert`.
+
+## WORLD
+
+**Named here, and not produced — and the obstacle is not arithmetic.**
+
+A scene-fixed frame needs two directions that a calibrated stereo pair does not
+supply:
+
+- **which way is up.** The cameras do not know their own attitude. Nothing in a
+  reconstruction distinguishes a level floor from a sloped one.
+- **which way the target line runs.** A body does not declare one, and Phase 6
+  already established that a down-the-line recording cannot even tell which *end*
+  of the target line the camera stood at.
+
+Both fall out of a capture that lays the calibration board flat on the ground in
+the hitting area with one edge along the target line: the board's plane gives the
+ground, its normal gives up, and its own axes give the line. That is a change to
+`data/README.md` and a later phase, not a missing function — and until it
+happens, naming the frame and refusing it beats rotating into axes that were
+assumed.
+
+This costs something real and it is worth being specific about what. A **3D spine
+tilt** — the forward posture angle a coach actually talks about — needs a
+vertical, so it is not in the spatial metric family. What does not need one is
+anything measured against the body's own axes or between two reconstructed
+points: the 3D rotations are taken about the measured address spine axis, joint
+angles and lengths are invariant to the frame entirely, and speeds in metres per
+second are too.
+
+Both are in the enum deliberately. A later phase should add a capability, not a
+concept — and asking for either raises an error naming what supplies it rather
+than reporting an unsupported value.
 
 ## Conversions
 
@@ -115,8 +148,10 @@ image_to_pixels             (for drawing)
 
 `convert(points, source, target, geometry)` dispatches and refuses everything
 else. In particular **there is no conversion between IMAGE and HIP_LOCAL in
-either direction**: recovering the second from the first means recovering the
-depth the picture lost, which is exactly what a single camera cannot do.
+either direction**, and none into CAMERA: recovering either from a picture means
+recovering the depth the picture lost, which is exactly what a single camera
+cannot do. CAMERA arrives from `analyzer/reconstruction`, which is a measurement
+taken from two clips rather than a function of one.
 
 The tests in `python/tests/test_coordinates.py` check three things: facts rather
 than tolerances (equal pixel displacements must measure equal; a true 45° line
