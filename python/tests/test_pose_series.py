@@ -22,7 +22,7 @@ from analyzer.contracts.pose import (
     PoseSequence,
 )
 from analyzer.pose.series import all_series, landmark_series
-from tests.conftest import landmark_points
+from tests.conftest import SQUARE_FRAME, landmark_points
 
 
 def _sequence(detected_flags: list[bool]) -> PoseSequence:
@@ -45,6 +45,7 @@ def _sequence(detected_flags: list[bool]) -> PoseSequence:
         video_content_key=ContentKey(
             algorithm=HashAlgorithm.SHA256_SAMPLED, digest="c" * 64, size_bytes=1
         ),
+        geometry=SQUARE_FRAME,
         model=PoseModelInfo(
             name="fake",
             variant="fake",

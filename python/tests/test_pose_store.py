@@ -26,7 +26,7 @@ from analyzer.contracts.pose import (
     PoseSequence,
 )
 from analyzer.pose.store import PoseStoreError, read_sequence, write_sequence
-from tests.conftest import landmark_points
+from tests.conftest import SQUARE_FRAME, landmark_points
 
 
 def _model() -> PoseModelInfo:
@@ -49,6 +49,7 @@ def _sequence(frames: list[PoseFrame]) -> PoseSequence:
         video_content_key=ContentKey(
             algorithm=HashAlgorithm.SHA256_SAMPLED, digest="b" * 64, size_bytes=1234
         ),
+        geometry=SQUARE_FRAME,
         model=_model(),
         extracted_at=datetime(2026, 9, 16, 12, 0, tzinfo=UTC),
         stats=PoseExtractionStats(

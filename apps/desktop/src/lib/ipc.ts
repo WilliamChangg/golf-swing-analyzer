@@ -13,6 +13,11 @@ import type {
   EnvironmentReport,
   PoseExtractionResult,
   ProgressUpdate,
+  CameraCalibration,
+  CameraRig,
+  CameraRole,
+  SwingPhases,
+  SyncModel,
   VideoMetadata,
 } from "@gsa/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,6 +28,10 @@ const COMMANDS = {
   doctor: "doctor",
   probeVideo: "probe_video",
   extractPoses: "extract_poses",
+  detectPhases: "detect_phases",
+  syncClips: "sync_clips",
+  calibrateCamera: "calibrate_camera",
+  getCalibration: "get_calibration",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -163,6 +172,132 @@ export function extractPoses(
     path,
     model: options.model ?? null,
   });
+}
+
+/**
+ * Locate the takeaway, top, impact and finish in a clip's extracted landmarks.
+ *
+ * Requires `extractPoses` to have run for the clip; the engine resolves the
+ * landmarks through its content-keyed cache and returns an error naming the
+ * extract command when there are none.
+ *
+ * **`detected: false` is a success.** A clip with no swing in it is an answer
+ * the engine can give, and it arrives with warnings explaining what it found
+ * instead. Treating it as a failure would file "nobody swung" alongside "the
+ * worker crashed".
+ *
+ * `windowS` overrides the filter's smoothing window. Worth exposing because a
+ * clip below about 60 fps cannot support the default, and the engine's own
+ * message names the width that clip's frame rate would support.
+ */
+export function detectPhases(
+  path: string,
+  options: { model?: string; windowS?: number } = {},
+): Promise<EngineResult<SwingPhases>> {
+  return call<SwingPhases>(COMMANDS.detectPhases, {
+    path,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+  });
+}
+
+/** One instant a person identified in both clips of a pair. */
+export interface ManualAnchor {
+  label: string;
+  referenceFrame: number;
+  targetFrame: number;
+}
+
+/**
+ * Relate two clips' clocks, and report how well the relation is known.
+ *
+ * Requires `extractPoses` to have run for both clips. Slow-motion factors are
+ * per clip because two cameras in one session routinely differ; the smoothing
+ * window is shared, because smoothing two clips differently would shift the
+ * very features the alignment keys on — which means the *coarser* clip sets it,
+ * and a 30 fps camera cannot support the engine's 0.10 s default.
+ *
+ * **`aligned: false` is a success**, exactly as `detected: false` is for
+ * `detectPhases`. It arrives with a `refusal` saying what was found instead.
+ *
+ * Passing `anchors` switches the engine to the manual method: a person who has
+ * looked at both frames is supplying the answer, not an estimate for the engine
+ * to weigh against its own.
+ */
+export function syncClips(
+  referencePath: string,
+  targetPath: string,
+  options: {
+    model?: string;
+    referenceSlowMotion?: number;
+    targetSlowMotion?: number;
+    windowS?: number;
+    anchors?: ManualAnchor[];
+  } = {},
+): Promise<EngineResult<SyncModel>> {
+  return call<SyncModel>(COMMANDS.syncClips, {
+    referencePath,
+    targetPath,
+    model: options.model ?? null,
+    referenceSlowMotion: options.referenceSlowMotion ?? null,
+    targetSlowMotion: options.targetSlowMotion ?? null,
+    windowS: options.windowS ?? null,
+    anchors:
+      options.anchors?.map((anchor) => ({
+        label: anchor.label,
+        reference_frame: anchor.referenceFrame,
+        target_frame: anchor.targetFrame,
+      })) ?? null,
+  });
+}
+
+/**
+ * Measure one camera's intrinsics from footage of a Charuco board.
+ *
+ * **`usable: false` is a success**, exactly as `aligned: false` is for
+ * `syncClips` and `detected: false` for `detectPhases`. It arrives with a
+ * `refusal` naming which bound the capture failed, and that is the useful part:
+ * the numbers say what to reshoot, which an error would not.
+ *
+ * `projectId` stores the result on that project's rig. Without it the
+ * calibration is computed and returned and nothing is written.
+ */
+export function calibrateCamera(
+  source: string,
+  options: {
+    role?: CameraRole;
+    projectId?: number;
+    squaresX?: number;
+    squaresY?: number;
+    squareLengthMm?: number;
+    stride?: number;
+    notes?: string;
+  } = {},
+): Promise<EngineResult<CameraCalibration>> {
+  return call<CameraCalibration>(COMMANDS.calibrateCamera, {
+    source,
+    role: options.role ?? "other",
+    projectId: options.projectId ?? null,
+    squaresX: options.squaresX ?? null,
+    squaresY: options.squaresY ?? null,
+    squareLengthMm: options.squareLengthMm ?? null,
+    stride: options.stride ?? null,
+    notes: options.notes ?? null,
+  });
+}
+
+/**
+ * What is known about a project's cameras, and therefore what it may claim.
+ *
+ * An uncalibrated project returns an empty rig whose `status` is `none`, rather
+ * than null. That keeps "uncalibrated" a value every caller handles the same
+ * way as any other status, instead of a null check each one writes separately
+ * and one of them forgets.
+ */
+export function getCalibration(
+  projectId: number,
+): Promise<EngineResult<CameraRig>> {
+  return call<CameraRig>(COMMANDS.getCalibration, { projectId });
 }
 
 /**

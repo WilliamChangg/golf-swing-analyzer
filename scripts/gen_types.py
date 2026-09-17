@@ -37,7 +37,17 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.video", "VideoMetadata"),
     ("analyzer.contracts.pose", "PoseExtractionResult"),
     ("analyzer.contracts.progress", "ProgressUpdate"),
+    ("analyzer.contracts.phases", "SwingPhases"),
+    ("analyzer.contracts.metrics", "MetricSet"),
+    ("analyzer.contracts.sync", "SyncModel"),
+    ("analyzer.contracts.calibration", "CameraRig"),
 )
+
+# `Project` and `ProjectList` are deliberately *not* exported. They are reachable
+# over RPC and from `analyzer project`, but no UI renders them yet -- project
+# management is Phase 14.1 -- and exporting types nothing draws would make the
+# app's type surface a description of the plan rather than of the app. Same
+# reasoning that kept `SequenceFilterReport` out until Phase 4 built its panel.
 
 BANNER = """\
 /**
@@ -130,7 +140,18 @@ def _run_generator(schema_file: Path, out_file: Path) -> None:
         raise SystemExit(f"json-schema-to-typescript failed:\n{proc.stdout}\n{proc.stderr}")
 
 
-_NUMBERED_ALIAS_RE = re.compile(r"^export type (?P<base>\w+?)(?P<n>\d+) = (?P<body>[^;]+);$", re.M)
+# `=\s*` rather than `= `: the generator breaks the line after `=` for a union
+# long enough to wrap, which is every enum of more than a few members. Requiring
+# a space silently skipped exactly the largest types.
+_DECLARATION_RE = re.compile(
+    r"^export (?:type (?P<alias>\w+) =\s*(?P<body>[^;]+);|interface (?P<interface>\w+) \{)",
+    re.M,
+)
+
+
+_NUMBERED_ALIAS_RE = re.compile(
+    r"^export type (?P<base>\w+?)(?P<n>\d+) =\s*(?P<body>[^;]+);$", re.M
+)
 
 
 def _dedupe_numbered_aliases(source: str) -> str:
@@ -145,8 +166,15 @@ def _dedupe_numbered_aliases(source: str) -> str:
     """
     for match in list(_NUMBERED_ALIAS_RE.finditer(source)):
         base, body = match.group("base"), match.group("body").strip()
-        canonical = f"export type {base} = {body};"
-        if canonical not in source:
+        canonical = next(
+            (
+                found.group(0)
+                for found in _DECLARATION_RE.finditer(source)
+                if found.group("alias") == base and found.group("body").strip() == body
+            ),
+            None,
+        )
+        if canonical is None:
             continue
 
         # Drop the duplicate declaration along with any doc comment above it.
@@ -162,12 +190,67 @@ def _dedupe_numbered_aliases(source: str) -> str:
     return source
 
 
+def _exported_types(source: str) -> dict[str, str]:
+    """Every type a generated module declares, mapped to its body.
+
+    The body comes along so that two modules declaring the same name can be
+    checked for agreeing about what it means, rather than the first one silently
+    winning.
+    """
+    found: dict[str, str] = {}
+    for match in _DECLARATION_RE.finditer(source):
+        if match.group("alias"):
+            found[match.group("alias")] = match.group("body").strip()
+        else:
+            found[match.group("interface")] = "<interface>"
+    return found
+
+
+def _index_lines(modules: list[tuple[str, dict[str, str]]]) -> list[str]:
+    """Explicit re-exports, with each shared type coming from one module only.
+
+    `export *` cannot be used here. Two root models that both embed a nested
+    enum -- `SwingPhases` and `MetricSet` both carry `SwingEvent` -- each emit
+    their own copy of it, and two `export *` lines offering the same name is
+    ambiguous: TypeScript reports TS2308 rather than picking one. Naming the
+    exports resolves it, and keeps the public surface something a reader can see
+    rather than infer.
+
+    A name declared twice with *different* bodies is a genuine collision, not a
+    shared definition, and stops the build instead of being quietly resolved.
+    """
+    lines: list[str] = [BANNER, ""]
+    seen: dict[str, tuple[str, str]] = {}
+
+    for name, declarations in modules:
+        fresh: list[str] = []
+        for type_name, body in declarations.items():
+            previous = seen.get(type_name)
+            if previous is None:
+                seen[type_name] = (name, body)
+                fresh.append(type_name)
+                continue
+            owner, other = previous
+            if other != body:
+                raise SystemExit(
+                    f"'{type_name}' is declared differently in {owner}.ts and {name}.ts. "
+                    "Two unrelated contracts have taken the same name; rename one."
+                )
+
+        if not fresh:
+            continue
+        exported = ", ".join(fresh)
+        lines.append(f'export type {{ {exported} }} from "./{name}";')
+
+    return lines
+
+
 def generate() -> list[Path]:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     SCHEMA_DIR.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
-    index_lines: list[str] = [BANNER, ""]
+    modules: list[tuple[str, dict[str, str]]] = []
 
     for module_path, name in EXPORTS:
         model = _load_model(module_path, name)
@@ -179,15 +262,14 @@ def generate() -> list[Path]:
 
         ts_file = OUT_DIR / f"{name}.ts"
         _run_generator(schema_file, ts_file)
-        ts_file.write_text(
-            _dedupe_numbered_aliases(ts_file.read_text(encoding="utf-8")), encoding="utf-8"
-        )
+        source = _dedupe_numbered_aliases(ts_file.read_text(encoding="utf-8"))
+        ts_file.write_text(source, encoding="utf-8")
         written.append(ts_file)
 
-        index_lines.append(f'export * from "./{name}";')
+        modules.append((name, _exported_types(source)))
 
     index = OUT_DIR / "index.ts"
-    index.write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+    index.write_text("\n".join(_index_lines(modules)) + "\n", encoding="utf-8")
     written.append(index)
 
     return written

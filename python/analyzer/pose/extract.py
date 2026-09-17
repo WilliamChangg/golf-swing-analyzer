@@ -16,6 +16,7 @@ import numpy as np
 
 from analyzer.contracts.pose import (
     LANDMARK_COUNT,
+    FrameGeometry,
     PoseExtractionResult,
     PoseExtractionStats,
     PoseFrame,
@@ -106,9 +107,15 @@ def extract_poses(
     )
     tracker.report("done", len(frames), total_frames)
 
+    stream = probed.metadata.stream
     return PoseSequence(
         video_path=probed.metadata.path,
         video_content_key=probed.metadata.content_key,
+        # Display dimensions, not coded ones: the estimator saw the frames after
+        # rotation, so those are the dimensions its normalised coordinates are
+        # relative to. On a phone clip the two differ by a transpose, which would
+        # invert the aspect correction rather than merely scale it.
+        geometry=FrameGeometry(width=stream.display_width, height=stream.display_height),
         model=estimator.info,
         extracted_at=datetime.now(UTC),
         stats=stats,

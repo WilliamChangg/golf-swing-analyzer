@@ -39,8 +39,10 @@ data/**
 *.sqlite3
 *.db
 
-# --- Benchmarks output (regenerate, don't commit raw runs) ---
+# --- Benchmarks and debug output (regenerate, don't commit raw runs) ---
 benchmarks/raw/
+# scripts/overlay_metrics.py writes annotated frames and a CSV here by default.
+build/
 
 # --- OS / editor ---
 .DS_Store

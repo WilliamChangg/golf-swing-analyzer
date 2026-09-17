@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
+from analyzer.contracts.calibration import CameraIntrinsics
 from analyzer.contracts.filtering import (
     FilterConfig,
     LandmarkFilterReport,
@@ -32,7 +33,8 @@ from analyzer.contracts.filtering import (
     StageReport,
     unit_for,
 )
-from analyzer.contracts.pose import Landmark, LandmarkSpace, PoseSequence
+from analyzer.contracts.pose import FrameGeometry, Landmark, LandmarkSpace, PoseSequence
+from analyzer.filtering.gating import gated_observations
 from analyzer.filtering.pipeline import FilterPipeline, default_pipeline
 from analyzer.filtering.signal import Signal, signal_from_arrays
 from analyzer.pose.series import LandmarkSeries, landmark_series
@@ -50,6 +52,19 @@ class FilteredLandmark:
     `position`, `velocity` and `acceleration` are (frames, 3) arrays, NaN
     wherever no value is supported. `valid` is the mask of frames carrying a
     complete position -- the only frames a metric may be computed from.
+
+    `visibility` is what the estimator reported per frame, carried through
+    rather than collapsed into the report's averages: Phase 4 weighs an event's
+    confidence by how well the landmark was seen *around that instant*, which a
+    clip-wide mean cannot answer. It is the raw reported value, including on
+    frames the gate rejected — averaging only the frames that survived the gate
+    would raise the score precisely where the landmark was least visible.
+
+    `observed` is the separate question of whether a frame carried a real
+    observation that survived the gate. It differs from `valid` at the ends of
+    every clip, where the estimator saw the landmark perfectly well but the fit
+    had too little support to emit anything, and the difference matters: one is
+    a capture problem and the other a window-width one.
     """
 
     landmark: Landmark
@@ -59,6 +74,8 @@ class FilteredLandmark:
     velocity: NDArray[np.float64]
     acceleration: NDArray[np.float64]
     valid: NDArray[np.bool_]
+    visibility: NDArray[np.float64]
+    observed: NDArray[np.bool_]
     report: LandmarkFilterReport
 
     def __len__(self) -> int:
@@ -77,12 +94,27 @@ class FilteredLandmark:
 
 @dataclass(frozen=True)
 class FilteredSequence:
-    """Every landmark of one clip, filtered."""
+    """Every landmark of one clip, filtered.
+
+    `geometry` is carried through untouched from the pose sequence. Nothing in
+    this layer uses it -- filtering is per-axis and an anisotropic scaling
+    commutes with every stage of it -- but the biomechanics layer above cannot
+    compute a distance or an angle without it, and this is the only path by
+    which it can arrive there.
+    """
 
     space: LandmarkSpace
     t: NDArray[np.float64]
     landmarks: dict[Landmark, FilteredLandmark]
+    geometry: FrameGeometry
+    slow_motion_factor: float
     report: SequenceFilterReport
+    intrinsics: CameraIntrinsics | None = None
+    """The calibration the landmarks were undistorted with, or None.
+
+    Carried for the same reason `geometry` is: the layer above cannot tell from
+    the numbers whether a lens was removed from them, and the difference decides
+    what the measurements are entitled to claim."""
 
     def __getitem__(self, landmark: Landmark) -> FilteredLandmark:
         return self.landmarks[landmark]
@@ -180,6 +212,11 @@ def filter_landmark(
         velocity=velocity,
         acceleration=acceleration,
         valid=valid,
+        visibility=outputs["x"].visibility,
+        # Asked of the pipeline's *input*, not its output: after the fit,
+        # `value` holds fitted numbers and the mask would report where the fit
+        # succeeded rather than where the estimator saw the landmark.
+        observed=gated_observations(signals["x"], resolved.gate),
         report=_landmark_report(series, reports, valid),
     )
 
@@ -234,12 +271,20 @@ def filter_sequence(
     sequence: PoseSequence,
     config: FilterConfig | None = None,
     *,
-    space: LandmarkSpace = LandmarkSpace.IMAGE,
+    space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
+    slow_motion_factor: float = 1.0,
     landmarks: tuple[Landmark, ...] | None = None,
+    intrinsics: CameraIntrinsics | None = None,
     reporter: ProgressReporter | None = None,
     request_id: int | str | None = None,
 ) -> FilteredSequence:
-    """Filter every landmark of a stored pose sequence."""
+    """Filter every landmark of a stored pose sequence.
+
+    `intrinsics` is passed straight down to `landmark_series`, which removes the
+    lens before the frame-widths conversion and therefore before anything here
+    fits a polynomial to the result. Undistorting afterwards would be a
+    different and wrong operation: the fit would have smoothed the distorted
+    trajectory, and its velocity and acceleration would describe that."""
     resolved = config or FilterConfig()
     pipeline = default_pipeline(resolved)
     selected = landmarks if landmarks is not None else tuple(Landmark)
@@ -250,7 +295,7 @@ def filter_sequence(
     started = time.perf_counter()
     filtered: dict[Landmark, FilteredLandmark] = {}
     for done, landmark in enumerate(selected, start=1):
-        series = landmark_series(sequence, landmark, space)
+        series = landmark_series(sequence, landmark, space, slow_motion_factor, intrinsics)
         filtered[landmark] = filter_landmark(series, resolved, pipeline=pipeline)
         tracker.report("filtering", done, len(selected))
 
@@ -259,7 +304,10 @@ def filter_sequence(
     timestamps = (
         next(iter(filtered.values())).t
         if filtered
-        else np.array([frame.timestamp_s for frame in sequence.frames], dtype=np.float64)
+        else np.array(
+            [frame.timestamp_s / slow_motion_factor for frame in sequence.frames],
+            dtype=np.float64,
+        )
     )
 
     tracker.report("done", len(selected), len(selected))
@@ -268,9 +316,13 @@ def filter_sequence(
         space=space,
         t=timestamps,
         landmarks=filtered,
+        geometry=sequence.geometry,
+        slow_motion_factor=slow_motion_factor,
+        intrinsics=intrinsics,
         report=SequenceFilterReport(
             config=resolved,
             space=space,
+            slow_motion_factor=slow_motion_factor,
             samples=len(sequence.frames),
             landmarks=reports,
             elapsed_s=elapsed,

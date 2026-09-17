@@ -18,9 +18,22 @@ from pathlib import Path
 
 import pytest
 
-from analyzer.contracts.pose import LANDMARK_COUNT, LandmarkPoint, PoseFrame, PoseModelInfo
+from analyzer.contracts.pose import (
+    LANDMARK_COUNT,
+    FrameGeometry,
+    LandmarkPoint,
+    PoseFrame,
+    PoseModelInfo,
+)
 from analyzer.ingestion.reader import VideoFrame
-from analyzer.paths import ENV_CACHE_DIR, models_dir
+from analyzer.paths import ENV_CACHE_DIR, ENV_DATA_DIR, models_dir
+
+# The frame shape synthetic fixtures are written against. Square on purpose: the
+# aspect correction is then the identity, so a fixture's coordinates mean the
+# same thing in the file and in frame widths, and a test asserting on a distance
+# is asserting on the number it wrote. Tests that exercise the correction itself
+# pass a deliberately non-square geometry instead.
+SQUARE_FRAME = FrameGeometry(width=1000, height=1000)
 
 VIDEO_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "video"
 
@@ -86,6 +99,20 @@ def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     """
     directory = tmp_path / "cache"
     monkeypatch.setenv(ENV_CACHE_DIR, str(directory))
+    yield directory
+
+
+@pytest.fixture(autouse=True)
+def isolated_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Point the project database at a temporary directory for every test.
+
+    The same reasoning as `isolated_cache` and a sharper consequence. A cache
+    entry written by a test is regenerable; a project is not, and a suite that
+    created, listed and deleted projects in the developer's real data directory
+    would be destroying the one kind of state this system cannot rebuild.
+    """
+    directory = tmp_path / "data"
+    monkeypatch.setenv(ENV_DATA_DIR, str(directory))
     yield directory
 
 

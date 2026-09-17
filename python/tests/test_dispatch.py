@@ -15,12 +15,13 @@ from pydantic import BaseModel
 
 from analyzer import dispatch
 from analyzer.contracts.filtering import SequenceFilterReport
+from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.video import VideoMetadata
 from analyzer.dispatch import ProbeVideoParams
 from analyzer.progress import ProgressReporter, ProgressTracker, RecordingReporter
-from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, requires_ffprobe
+from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, SQUARE_FRAME, requires_ffprobe
 
 # Parameters good enough to invoke each registered method once. Maintained by
 # hand on purpose: the table is what makes a newly-registered method visible.
@@ -29,11 +30,46 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "probe_video": {"path": str(CFR_30FPS)},
     "extract_poses": {"path": str(CFR_30FPS)},
     "filter_poses": {"path": "poses.parquet"},
+    "detect_phases": {"path": "poses.parquet"},
+    "compute_metrics": {"path": "poses.parquet"},
+    "sync_clips": {
+        "reference": {"path": "a.parquet"},
+        "target": {"path": "b.parquet"},
+    },
+    "create_project": {"name": "Session"},
+    "list_projects": {},
+    "get_project": {"project_id": 1},
+    "delete_project": {"project_id": 1},
+    "add_clip": {"project_id": 1, "path": str(CFR_30FPS), "role": "face_on"},
+    "remove_clip": {"project_id": 1, "clip_id": 1},
+    "relocate_clip": {"project_id": 1, "clip_id": 1, "path": str(CFR_30FPS)},
+    "sync_project": {"project_id": 1},
+    "calibrate_camera": {"source": "board.mov"},
+    "calibrate_stereo": {
+        "project_id": 1,
+        "reference_source": "a.mov",
+        "target_source": "b.mov",
+        "reference_role": "face_on",
+        "target_role": "down_the_line",
+    },
+    "get_calibration": {"project_id": 1},
+    "clear_calibration": {"project_id": 1},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
 # decodes a clip, so it is exercised separately under the slow markers.
-_FAST_METHODS = {"doctor", "probe_video"}
+#
+# The project methods qualify because they only touch SQLite -- and they are
+# only safe to call here because `conftest.isolated_data` redirects the database
+# into `tmp_path`. Without that this table would create projects in the
+# developer's real data directory on every run.
+_FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
+
+# `calibrate_camera` and `calibrate_stereo` are absent from the fast set and from
+# the slow one: both need board footage, which this repository does not contain,
+# and a stub would exercise the dispatch wiring against a fixture rather than
+# against the engine. `tests/test_calibration.py` covers the path they call into,
+# from rendered board views, which is the stronger test of the two.
 
 
 class TestCall:
@@ -205,6 +241,7 @@ class TestFilterPoses:
             video_content_key=ContentKey(
                 algorithm=HashAlgorithm.SHA256_SAMPLED, digest="e" * 64, size_bytes=1
             ),
+            geometry=SQUARE_FRAME,
             model=PoseModelInfo(
                 name="fake",
                 variant="fake",
@@ -283,3 +320,48 @@ class TestFilterPoses:
         dispatch.call("filter_poses", {"path": str(poses)}, reporter)
         assert [event.task for event in reporter.events] == ["filter_poses"] * len(reporter.events)
         assert reporter.events[-1].stage == "done"
+
+
+class TestDetectPhases:
+    """Detection runs over filtered landmarks, so its dispatch-level failures are
+    the same file-resolution ones plus its own refusal to invent a swing."""
+
+    def test_returns_a_contract_model(self, tmp_path: Path) -> None:
+        poses = TestFilterPoses._write_poses(tmp_path)
+        result = dispatch.call("detect_phases", {"path": str(poses)})
+        assert isinstance(result, SwingPhases)
+        assert result.frames == 180
+
+    def test_a_clip_without_a_swing_is_a_result_not_an_error(self, tmp_path: Path) -> None:
+        """A still subject is an answer the engine can give, not a failure."""
+        poses = TestFilterPoses._write_poses(tmp_path)
+        result = dispatch.call("detect_phases", {"path": str(poses)})
+        assert isinstance(result, SwingPhases)
+        assert not result.detected
+        assert result.warnings
+
+    def test_accepts_filter_and_phase_configuration(self, tmp_path: Path) -> None:
+        poses = TestFilterPoses._write_poses(tmp_path)
+        result = dispatch.call(
+            "detect_phases",
+            {
+                "path": str(poses),
+                "filter": {"smoothing": {"window_s": 0.2}},
+                "phases": {"min_backswing_s": 0.3},
+            },
+        )
+        assert isinstance(result, SwingPhases)
+        assert result.config.min_backswing_s == 0.3
+
+    def test_rejects_an_unknown_parameter_rather_than_ignoring_it(self, tmp_path: Path) -> None:
+        poses = TestFilterPoses._write_poses(tmp_path)
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("detect_phases", {"path": str(poses), "phase": {}})
+        assert excinfo.value.code == ErrorCode.INVALID_PARAMS
+
+    def test_a_file_that_is_not_a_pose_file_is_unsupported_input(self, tmp_path: Path) -> None:
+        bogus = tmp_path / "not-poses.parquet"
+        bogus.write_bytes(b"certainly not parquet")
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("detect_phases", {"path": str(bogus)})
+        assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT

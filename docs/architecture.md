@@ -100,6 +100,7 @@ transport rather than engine data.
 
 ```
 contracts/      typed models shared with the desktop app
+coordinates.py  reference frames and the conversions between them
 hashing/        content digests for verification and cache keys
 paths/          filesystem layout resolution
 progress/       reporting from long-running methods
@@ -107,15 +108,55 @@ environment/    hardware, tooling, model probing
 ingestion/      container inspection and frame decoding
 pose/           landmark estimation, storage, per-landmark series
 filtering/      smoothing, gap policy, derivatives
+phases/         swing event detection
+sync/           relating two cameras' clocks to each other
+calibration/    what a pixel means: the lens, and where the cameras stand
+biomechanics/   measured metrics, with units, confidence and methodology
+projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `phases`, `biomechanics`, `coaching` as sibling packages with
-Protocol-typed seams (`ClubDetector`, `BallDetector`), following `ingestion`'s
-`FrameSource`, `pose`'s `PoseEstimator` and `filtering`'s `FilterStage`.
-Golf-specific reasoning is confined to `biomechanics`, `phases`, and `coaching`;
-everything below is general computer vision.
+Later phases add `coaching` as a sibling package, and Protocol-typed seams
+(`ClubDetector`, `BallDetector`) following `ingestion`'s `FrameSource`, `pose`'s
+`PoseEstimator` and `filtering`'s `FilterStage`. Golf-specific reasoning is
+confined to `phases`, `sync`, `biomechanics` and `coaching`; everything below is
+general computer vision that would serve any moving body. `sync` is the
+marginal member of that set: its mechanism — an affine time map and a masked
+cross-correlation — would align any pair of recordings of anything, and only its
+choice of signal (hand speed, and the four named swing events) is golf-specific.
+
+`projects` sits apart from the rest, because it holds the only state here that
+cannot be recomputed. Everything else is either input the user already has or a
+derived artifact under `cache_dir()` that exists to save time; a project records
+a _decision_ — these two clips are one swing, filmed from here and from there —
+which nothing can recover from the files once it is lost. It therefore lives
+under `data_dir()`, which backup tools do not skip.
+
+`calibration` sits beside `coordinates` rather than above it, and is optional
+in the same way `sync` is: nothing below it requires a calibration, and
+everything above it is better with one. It is general computer vision — a
+Charuco board and a lens model know nothing about golf — and it is the only
+package whose output is a statement about the physical world rather than about a
+picture of it.
+
+`coordinates` sits below everything and owns the one conversion the whole system
+depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
+pointing downward; both are corrected exactly once, on read in `pose/series.py`,
+so every layer above measures in FRAME_WIDTHS. Putting it there rather than in
+the biomechanics layer is deliberate on two counts: phase detection sits below
+biomechanics and would otherwise measure in the uncorrected frame, and the
+filter is linear, so a conversion applied to positions before fitting emerges
+correctly signed in the velocity and acceleration rather than needing a second
+correction kept in step by hand. See
+[coordinate-systems.md](coordinate-systems.md).
+
+`biomechanics` has one entry point, `compute_metrics(filtered, phases)`. It
+measures the **camera view** before anything else, because a projected number is
+only interpretable once the direction it was taken from is known, and tags every
+metric with it — the same spine tilt is lateral side bend face-on and forward
+posture angle down the line. Metrics a view cannot support are refused centrally
+rather than per family, so a family added later cannot forget the check.
 
 ## Video ingestion
 
@@ -248,6 +289,203 @@ report names the minimum window its measured rate would support. That is the
 same rule as everywhere else in this system — report what was measured, refuse
 what was not — applied to a case where the honest answer is unhelpful.
 
+## Swing phase detection
+
+The first layer that knows what a golf swing is. It reduces filtered
+trajectories to a handful of scalar signals and reads four events off their
+shape — deterministically, with no model, because the shape is not subtle and a
+rule that can be read is a rule that can be argued with.
+
+```
+hand speed |          ___                    /\
+           |      ___/   \__  <- top        /  \   <- impact
+           |  ___/          \__          __/    \___
+           |_/                  \_______/           \____
+            address   backswing      downswing   follow-through
+```
+
+**Searches are nested rather than sequential.** Impact is found first, being the
+clearest feature in the signal; the top is then found _before_ impact, the
+takeaway _before_ the top, the finish _after_ impact. Each search is bounded by
+an event already located, so a rule cannot place the top after impact — that
+ordering is impossible by construction rather than checked afterwards.
+
+**Two sign conventions are handled once, here.** Image y increases downward, so
+a larger y is a _lower_ hand; it is converted into an explicitly named upward
+`height` at the boundary and the raw y is never used again. And a shoulder line
+has an orientation rather than a direction, so its angle is folded onto
+(−90, 90] — taken as a vector angle, a nearly level line sits beside the ±180
+discontinuity and flips the full 360 every time the tilt crosses zero, which for
+shoulders and hips is most of a swing.
+
+**Confidence is three measured factors, reported separately.** Margin (how
+clearly the signal singles the instant out), visibility (how well the landmark
+was seen _around that instant_, which a clip-wide mean cannot answer), and
+resolution — whether the smoothing window the clip's frame rate forced is short
+enough to resolve an event of that duration at all. Their product is the
+headline, but the factors are what make a low score actionable: "0.3" is not,
+and "the frame rate cannot resolve this" is.
+
+Resolution is the factor that stops a 24 fps clip reporting a confident impact.
+Such a clip forces a smoothing window about as long as a downswing, and no
+amount of clarity in the resulting curve makes that measurable.
+
+**Refusal is measured, not assumed.** A clip produces no events at all unless
+the hands ranged far enough — judged in the subject's own torso lengths, so the
+verdict does not depend on where the camera was put. The same test is applied to
+the backswing and downswing separately, because a clip that is still except for
+one twitch can otherwise be organised into a swing shape made almost entirely of
+noise.
+
+Impact is a kinematic estimate rather than an observation: nothing at this layer
+sees the ball or the club, and hand speed peaks slightly before the club reaches
+the ball. It is corroborated against an independent signal — the lowest point
+the hands reach after the top — and Phases 10 and 11 replace that corroboration
+with real evidence.
+
+## Two-camera synchronisation
+
+Two cameras keep two clocks and neither knows about the other. Phases 8 and 9
+triangulate points from two views, and triangulation is only meaningful for two
+views of the _same instant_, so this layer is a prerequisite for everything above
+it — and the error in its answer propagates into every reconstructed point, which
+is why that error is carried rather than assumed away.
+
+```
+target_s = reference_s + offset_s + (rate - 1) * (reference_s - pivot_s)
+```
+
+**The pivot is the anchor centroid, and that is load-bearing.** It makes the two
+fitted parameters uncorrelated, so the offset's and the rate's standard errors
+can be reported separately and combined in quadrature. Quoted at time zero they
+would be strongly correlated and two independent-looking error bars would
+overstate the error near the anchors and understate it far from them.
+
+**The rate is refused by default.** A rate fitted from four instants spanning a
+second and a half carries a fractional error of about a frame divided by the
+span; applied ten seconds from the anchors that is worse than assuming the two
+clocks agree, which for real hardware they do to a small fraction of a percent.
+It is fitted only over a long enough baseline and kept only when it sits more
+than two standard errors from 1.0 — otherwise it is describing noise, and paying
+for it with an uncertainty that grows with distance from the anchors while a
+constant offset has none.
+
+**Two estimators, each used for what it can determine.** A masked normalised
+cross-correlation of the two hand-speed signals produces one number, an offset,
+from several hundred samples. An affine fit to the paired swing events produces
+an offset, a rate and a residual from four instants. They are never averaged —
+averaging two estimates that disagree yields a third matching neither — and the
+split between them was decided by measurement rather than by argument:
+
+| Quantity | Comes from  | Why                                                |
+| -------- | ----------- | -------------------------------------------------- |
+| offset   | correlation | 0.4–1.8 ms error against 14–27 ms for four anchors |
+| rate     | events      | a single lag cannot express one                    |
+| residual | events      | a single lag has nothing left over to disagree     |
+
+The events lose the offset because they are not four equally good clocks. Under
+the landmark noise Phase 3 measured from real footage, the top moves 8 ms, impact
+117 ms, the finish 350 ms and the takeaway 542 ms — the last two are threshold
+crossings on a signal that is barely moving there.
+[ADR-0011](decisions/ADR-0011-affine-time-map.md).
+
+**Nothing may claim to beat the frame-rate floor.** An instant located to the
+nearest frame carries a uniform error one interval wide, standard deviation
+`interval / sqrt(12)`, and two clips contribute one each in quadrature. Every
+reported uncertainty is the larger of the observed scatter and that floor, so
+anchors that happen to agree better than their frame rates allow are reported at
+the frame rates' limit rather than at their own lucky rounding.
+
+**What this layer cannot tell you** is that the two clips show the same swing. It
+aligns swing-shaped signals and will align two different swings just as happily;
+what it cannot do is make their phase durations agree. On the only two-angle pair
+in this project the residual is 40x the floor and the confidence is 0.10, which
+is the correct reading of two different swings — and the honest limit of what a
+pair of uncalibrated recordings can be asked.
+
+## Camera calibration
+
+The first layer that turns a picture back into a statement about space, and the
+one whose central finding is a negative.
+
+**The number every calibration tool prints is blind to the failure that
+matters.** RMS reprojection error says how well the model fits the board views it
+was given. A board held square to the camera at one distance cannot separate
+focal length from distance — a longer lens further away makes the same picture —
+so such a capture determines almost nothing, and fits beautifully, because the
+views it fits are exactly the views it was free to fit. Measured, the residual
+stays at 0.21–0.27 px across a range over which the focal length error moves from
+0.05% to 23%.
+
+**The principled-looking replacement fails backwards.** OpenCV returns a standard
+deviation for every intrinsic, propagated through the fit's Jacobian, and the
+design here assumed that would catch it. It is *smallest* where the answer is
+worst — 0.012% on a capture wrong by 6% — because the distortion coefficients
+absorb the degeneracy and leave a tightly determined wrong answer. A covariance
+computed from one set of views cannot see outside them.
+
+So three numbers are reported and each is labelled with the question it answers:
+
+```
+rms_reprojection_px   how well the model fits the data          the fit
+fx_uncertainty        what the fit says about its own spread    a check
+CoverageReport        what the views could possibly determine   the gate
+```
+
+`usable` rests on the third. [ADR-0012](decisions/ADR-0012-calibration-coverage.md).
+
+**A calibrated camera is not a 3D camera**, and `CalibrationStatus` has three
+values rather than two so that nothing can read it as one. `INTRINSICS` means the
+lens can be removed from a landmark — worth 171 px at the frame edge on an
+ordinary phone, inherited by every angle and distance measured above it — and
+means a pixel is a known *direction*. It is not a position: the distance along
+that direction is exactly what the projection destroyed. `apply.bearings` returns
+unit vectors for that reason, and there is deliberately no function here that
+returns a 3D point. Two of those rays meet, and that is Phase 9.
+
+```
+board footage
+  └─ detect        Charuco corners, per frame
+      └─ select    views that differ from the ones already kept
+          └─ fit   intrinsics, held to a named distortion model
+              └─ judge   coverage decides; the residual catches gross failure
+```
+
+**Stereo extrinsics do not need a genlock, and the reason is measured.** Two
+cameras must see the board at the same instant, and two phones do not share a
+clock. What actually matters is that nothing moved between the two frames — so
+the pairing error is converted into the unit it contaminates by multiplying
+Phase 7's `TimeMap.uncertainty_at` by the board's observed image speed there,
+giving a displacement in **pixels** directly comparable with the reprojection
+error. A still board makes that term zero however badly the clocks are known.
+
+Measured, three frames of stillness is the whole requirement: a tenth of a second
+at 30 fps recovers the baseline to 0.10% and the rotation to 0.03°, and a board
+that never stops yields no usable pairs at all. The images are equally sharp
+either way, which is why the system measures this rather than advising it.
+
+The one failure a clock cannot catch is aliasing — board stations a second apart
+with an offset wrong by exactly a second pair each frame with its neighbour,
+simultaneous to the millisecond and showing the board in two different places.
+The fit's residual catches that, so stereo *does* gate on reprojection error:
+there it is measuring a correspondence rather than a model's fit to its own data.
+
+## Projects
+
+The first state in this engine that cannot be recomputed, and the reason
+`data_dir()` exists alongside `cache_dir()`. SQLite rather than a directory of
+JSON for three reasons in descending order of weight: a sync cannot name a clip
+outside its project because a foreign key says so; deleting a project takes its
+clips and alignments in one statement and cannot half-fail; and a write is atomic
+against a reader in another process, which the desktop app and a terminal running
+the CLI are.
+
+A clip is identified by **content**, not by path. The same footage cannot enter
+one project twice under two names, and a file that has been moved still matches
+its own cached extraction — `ProjectClip.exists` reports whether the path still
+resolves, because a project with a moved clip is correct and incomplete rather
+than corrupt.
+
 ## Progress
 
 Long methods report through a `ProgressReporter` and have no idea what is on the
@@ -293,8 +531,11 @@ frame to settle rotation rather than trusting a property, and why the decode
 benchmark measures both backends rather than assuming the hardware one wins.
 
 This generalises further: the system never reports a capability it has not
-measured. Later phases extend the same rule to calibration status gating
-metric-scale 3D claims, and to detector confidence gating club/ball output.
+measured. Phase 8 extends it to calibration, where the rule needed sharpening:
+a capability must be gated on evidence about the *capture*, not on the estimator's
+opinion of its own fit. Both of the numbers a calibration reports about itself
+pass a capture whose focal length is wrong by tens of percent. Later phases apply
+the same rule to detector confidence gating club and ball output.
 
 ## Baseline measurements
 
@@ -374,16 +615,41 @@ Filtering all 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
 17.5 ms for a 240-frame clip — against ~1.2 s to extract poses for the same 68
 frames. Nothing is cached as a result.
 
-No figures exist yet for metrics, because they do not exist yet.
+### Synchronisation (Phase 7, 2026-09-17)
+
+`scripts/benchmark_sync.py`. **Not ground truth**: one synthetic swing sampled by
+two simulated cameras, with the offset as an input. No simultaneous two-camera
+recording exists in this project, so what this establishes is that the method
+recovers an offset that was put in — not that it recovers one from a real pair,
+whose two cameras see two different projections of the same body.
+
+Median absolute error over 9 seeds, at the sigma = 0.0014 frame widths Phase 3
+measured from real footage:
+
+| Pair          | Frame-rate floor | Recovered offset error |
+| ------------- | ---------------- | ---------------------- |
+| 240 + 240 fps | 1.7 ms           | **0.5 ms**             |
+| 120 + 120 fps | 3.4 ms           | **0.4 – 4.2 ms**       |
+| 120 + 30 fps  | 9.9 ms           | **0.3 ms**             |
+| 30 + 30 fps   | 13.6 ms          | **0.5 ms**             |
+
+The floor is what the two frame rates permit, not what the method achieves; the
+correlation beats it because it averages several hundred samples rather than
+locating one instant. Anchoring on the four swing events instead gives 14–27 ms
+on the same pairs, which is the measurement that decided which estimator supplies
+the offset.
+
+Aligning two 312-frame clips costs 0.5 ms on signals already filtered. Nothing is
+cached, for the same measured reason as Phase 3.
 
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                        |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (407)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                               |
-| IPC wrappers, component rendering     | Vitest (60)     | error normalisation, status rendering, remediation display, metadata panels, failure states                                                                   |
-| UI flows                              | Playwright (15) | layout, engine data rendering, import flow, screen switching, failure panel                                                                                   |
+| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (758)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
+| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                       |
+| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                 |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

@@ -7,7 +7,11 @@
  */
 
 
-export * from "./EnvironmentReport";
-export * from "./VideoMetadata";
-export * from "./PoseExtractionResult";
-export * from "./ProgressUpdate";
+export type { HealthStatus, EnvironmentReport, PlatformInfo, ComponentStatus, ComputeInfo } from "./EnvironmentReport";
+export type { HashAlgorithm, TimestampSource, VideoMetadata, ContentKey, VideoStreamInfo, VideoTiming, IntervalStats } from "./VideoMetadata";
+export type { PoseExtractionResult, PoseModelInfo, PoseExtractionStats } from "./PoseExtractionResult";
+export type { ProgressUpdate } from "./ProgressUpdate";
+export type { SwingEvent, SwingPhase, HandSource, SwingPhases, DetectedEvent, EventConfidence, DetectedPhase, HandSignalInfo, PhaseConfig } from "./SwingPhases";
+export type { MetricName, MetricGroup, MetricUnit, MetricBasis, CameraView, BodySide, CalibrationStatus, MetricSet, Metric, MetricConfidence, RefusedMetric, ViewEstimate, LeadSide, RotationReference, FrameGeometry, MetricConfig } from "./MetricSet";
+export type { SyncMethod, AnchorSource, SyncModel, ClipRef, TimeMap, SyncAnchor, AnchorResidual, SyncQuality, SyncConfidence, CorrelationReport, OverlapReport, SyncConfig } from "./SyncModel";
+export type { CameraRole, DistortionModel, BoardFamily, CameraRig, CameraCalibration, CameraIntrinsics, CalibrationQuality, CoverageReport, DetectionReport, BoardSpec, BoardObservation, StereoCalibration, PairingReport, CalibrationConfig } from "./CameraRig";

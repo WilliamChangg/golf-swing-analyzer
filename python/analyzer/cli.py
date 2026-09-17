@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import BaseModel
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
@@ -25,11 +26,31 @@ from rich.progress import (
 from rich.table import Table
 
 from analyzer import __version__
+from analyzer.calibration.apply import distortion_displacement
+from analyzer.contracts.calibration import (
+    BoardFamily,
+    BoardSpec,
+    CalibrationQuality,
+    CameraCalibration,
+    CameraRig,
+    StereoCalibration,
+)
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.metrics import (
+    CameraView,
+    Metric,
+    MetricBasis,
+    MetricGroup,
+    MetricSet,
+    MetricUnit,
+)
+from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
+from analyzer.contracts.projects import Project, ProjectList
 from analyzer.contracts.rpc import EngineError
+from analyzer.contracts.sync import SyncModel
 from analyzer.contracts.video import TimestampSource, VideoMetadata
 from analyzer.dispatch import call
 from analyzer.progress import CallbackReporter
@@ -336,8 +357,9 @@ def filter_poses(
         str | None, typer.Option("--model", help="Which extraction to filter, when given a video.")
     ] = None,
     space: Annotated[
-        str, typer.Option("--space", help="Coordinate space: image or hip_local.")
-    ] = "image",
+        str,
+        typer.Option("--space", help="Reference frame: frame_widths, image or hip_local."),
+    ] = "frame_widths",
     window: Annotated[
         float | None, typer.Option("--window", help="Fitting window in seconds.")
     ] = None,
@@ -347,6 +369,13 @@ def filter_poses(
     max_gap: Annotated[
         float | None, typer.Option("--max-gap", help="Longest absence to bridge, in seconds.")
     ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
     as_json: Annotated[
         bool, typer.Option("--json", help="Emit the raw report as JSON instead of a table.")
     ] = False,
@@ -364,7 +393,12 @@ def filter_poses(
     if max_gap is not None:
         config["gaps"] = {"max_gap_s": max_gap}
 
-    params: dict[str, object] = {"path": str(path), "space": space, "model": model}
+    params: dict[str, object] = {
+        "path": str(path),
+        "space": space,
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
     if config:
         params["config"] = config
 
@@ -391,14 +425,845 @@ def filter_poses(
         raise typer.Exit(code=1)
 
 
+_PHASE_STYLE: dict[str, str] = {
+    "address": "blue",
+    "backswing": "cyan",
+    "downswing": "magenta",
+    "follow_through": "green",
+}
+
+
+def _render_phases(result: SwingPhases) -> None:
+    hand = result.hand
+
+    summary = Table(title="Swing detection", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.detected else "[yellow]NO[/yellow]"
+    summary.add_row("swing detected", verdict)
+    summary.add_row("frames", str(result.frames))
+    summary.add_row(
+        "hand tracked from", f"{hand.source.value} ({hand.valid_frames}/{hand.total_frames} frames)"
+    )
+    summary.add_row("hand travel", f"{hand.travel:.3f} frame widths")
+    summary.add_row("torso length", f"{hand.torso_length:.3f} frame widths")
+    summary.add_row("travel", f"{hand.travel_ratio:.2f} torso lengths")
+    summary.add_row("peak hand speed", f"{hand.peak_speed:.3f} frame widths/s")
+    console.print(summary)
+
+    if result.detected:
+        events = Table(title="Events", title_justify="left", expand=True)
+        for column in (
+            "event",
+            "frame",
+            "time",
+            "confidence",
+            "margin",
+            "visibility",
+            "resolution",
+        ):
+            events.add_column(column, no_wrap=True)
+        events.add_column("corroboration", no_wrap=True)
+
+        for entry in result.events:
+            factors = entry.confidence
+            style = (
+                "green" if factors.overall >= 0.6 else "yellow" if factors.overall > 0 else "red"
+            )
+            corroboration = (
+                "-"
+                if entry.corroboration_delta_s is None
+                else f"frame {entry.corroboration_frame} ({entry.corroboration_delta_s * 1000:+.0f} ms)"
+            )
+            events.add_row(
+                entry.event.value,
+                str(entry.frame_index),
+                f"{entry.timestamp_s:.3f} s",
+                f"[{style}]{factors.overall:.2f}[/{style}]",
+                f"{factors.margin:.2f}",
+                f"{factors.visibility:.2f}",
+                f"{factors.resolution:.2f}",
+                corroboration,
+            )
+        console.print(events)
+
+        intervals = Table(title="Phases", title_justify="left", expand=True)
+        for column in ("phase", "frames", "start", "duration", "confidence"):
+            intervals.add_column(column, no_wrap=True)
+        for interval in result.phases:
+            style = _PHASE_STYLE.get(interval.phase.value, "white")
+            intervals.add_row(
+                f"[{style}]{interval.phase.value}[/{style}]",
+                f"{interval.start_frame}-{interval.end_frame}",
+                f"{interval.start_s:.3f} s",
+                f"{interval.duration_s:.3f} s",
+                f"{interval.confidence:.2f}",
+            )
+        console.print(intervals)
+
+        console.print(
+            "[dim]Impact is estimated from hand kinematics; nothing here sees the ball "
+            "or the club. Confidence is margin x visibility x resolution.[/dim]"
+        )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def phases(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    polyorder: Annotated[
+        int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
+    ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Locate the takeaway, top, impact and finish in a clip."""
+    smoothing: dict[str, object] = {}
+    if window is not None:
+        smoothing["window_s"] = window
+    if polyorder is not None:
+        smoothing["polyorder"] = polyorder
+
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if smoothing:
+        params["filter"] = {"smoothing": smoothing}
+
+    try:
+        result = call("detect_phases", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, SwingPhases)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_phases(result)
+
+    # Non-zero when no swing was found, so a script driving this learns that no
+    # events came out rather than reading an empty table as success.
+    if not result.detected:
+        raise typer.Exit(code=1)
+
+
+# Short tags, because the basis belongs in every row and the full sentence for
+# each is in the footer. Kept in the table rather than dropped for the meaning
+# column: the two answer different questions, and a reader needs both -- what
+# kind of claim the number is, and what it corresponds to on the body.
+_BASIS_TAG: dict[MetricBasis, str] = {
+    MetricBasis.TEMPORAL: "clock",
+    MetricBasis.IMAGE_PLANE: "image",
+    MetricBasis.PROJECTED_ANGLE: "proj angle",
+    MetricBasis.FORESHORTENED_ANGLE: "foreshort",
+}
+
+_GROUP_TITLES: dict[MetricGroup, str] = {
+    MetricGroup.POSTURE: "Posture",
+    MetricGroup.ROTATION: "Rotation",
+    MetricGroup.ARMS: "Hands and arms",
+    MetricGroup.TIMING: "Timing",
+}
+
+
+def _format_value(metric: Metric) -> str:
+    """Render a value with its unit, at a precision the measurement can support.
+
+    The uncertainty rides alongside where there is one. A turn of 53 degrees and
+    a turn of 53 give-or-take 13 are different findings, and only one of them is
+    worth telling a player.
+    """
+    if metric.unit is MetricUnit.DEGREES:
+        if metric.uncertainty is not None:
+            return f"{metric.value:+.1f} +/-{metric.uncertainty:.0f} deg"
+        return f"{metric.value:+.1f} deg"
+    if metric.unit is MetricUnit.SECONDS:
+        return f"{metric.value:.3f} s"
+    if metric.unit is MetricUnit.RATIO:
+        return f"{metric.value:.2f} : 1"
+    if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
+        return f"{metric.value:.2f} torso/s"
+    return f"{metric.value:+.3f} torso"
+
+
+def _render_metrics(result: MetricSet) -> None:
+    summary = Table(title="Biomechanics", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("metrics computed", f"{len(result.metrics)}")
+    summary.add_row("refused", f"{len(result.refused)}")
+    summary.add_row("frames", str(result.frames))
+    summary.add_row(
+        "frame geometry",
+        f"{result.geometry.width}x{result.geometry.height} "
+        f"(aspect {result.geometry.aspect_ratio:.4f})",
+    )
+    summary.add_row("torso length", f"{result.torso_length:.3f} frame widths")
+    # Stated on every result, not only when something was refused: a reader who
+    # sees no refusals must not conclude the camera geometry was known.
+    summary.add_row(
+        "calibration",
+        {
+            "none": "[yellow]none[/yellow] — these carry the lens's unmeasured distortion",
+            "intrinsics": "[green]intrinsics[/green] — lens removed; still image-plane only",
+            "stereo": "[green]stereo[/green] — triangulation possible (Phase 9)",
+        }[result.calibration.value],
+    )
+
+    view = result.view
+    if view is not None:
+        style = "green" if view.view is not CameraView.UNKNOWN else "yellow"
+        summary.add_row(
+            "camera view",
+            f"[{style}]{view.view.value}[/{style}] "
+            f"(confidence {view.confidence:.2f}, shoulders {view.shoulder_span_ratio:.2f} "
+            f"torso at address)",
+        )
+
+    lead = result.lead_side
+    if lead is not None:
+        named = lead.side.value if lead.side is not None else "[yellow]undetermined[/yellow]"
+        summary.add_row("lead side", f"{named} (margin {lead.margin:.2f})")
+    console.print(summary)
+
+    for reference in result.references:
+        verdict = (
+            "square at address"
+            if reference.square_at_address
+            else "[yellow]not square at address[/yellow]"
+        )
+        console.print(
+            f"[dim]{reference.landmarks}: {reference.span:.2f} torso lengths at address, "
+            f"widest {reference.widest_span:.2f} on frame {reference.widest_frame} "
+            f"({reference.excess:.2f}x) -- {verdict}[/dim]"
+        )
+
+    for group in MetricGroup:
+        entries = result.by_group(group)
+        if not entries:
+            continue
+        table = Table(title=_GROUP_TITLES[group], title_justify="left", expand=True)
+        for column in ("metric", "value", "conf", "obs", "anchor", "method", "basis"):
+            table.add_column(column, no_wrap=True)
+        table.add_column("what it means from this view", overflow="fold")
+
+        for metric in entries:
+            factors = metric.confidence
+            style = (
+                "green" if factors.overall >= 0.6 else "yellow" if factors.overall > 0 else "red"
+            )
+            table.add_row(
+                metric.label,
+                _format_value(metric),
+                f"[{style}]{factors.overall:.2f}[/{style}]",
+                f"{factors.observation:.2f}",
+                f"{factors.anchor:.2f}",
+                f"{factors.method:.2f}",
+                _BASIS_TAG[metric.basis],
+                metric.interpretation,
+            )
+        console.print(table)
+
+    if result.refused:
+        refusals = Table(title="Refused", title_justify="left", expand=True)
+        refusals.add_column("metric", no_wrap=True)
+        refusals.add_column("why", overflow="fold")
+        # One row per distinct reason: a metric refused at three anchors for the
+        # same cause is one fact about the recording, not three.
+        seen: set[tuple[str, str]] = set()
+        for entry in result.refused:
+            key = (entry.name.value, entry.reason)
+            if key in seen:
+                continue
+            seen.add(key)
+            refusals.add_row(entry.name.value, entry.reason)
+        console.print(refusals)
+
+    console.print(
+        "[dim]basis: clock = from the timestamps, unaffected by camera position; "
+        "image = measured in the image plane, blind to motion towards the camera; "
+        "proj angle = an angle in the picture, not a 3D joint angle; "
+        "foreshort = rotation inferred from foreshortening, a magnitude only.\n"
+        "Lengths are in torso lengths, which is framing-independent but not metric. "
+        "Confidence is observation x anchor x method.[/dim]"
+    )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def metrics(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    polyorder: Annotated[
+        int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
+    ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
+    project: Annotated[
+        int | None,
+        typer.Option(
+            "--project",
+            help="Apply this project's camera calibration. The clip must be one of its clips.",
+        ),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Measure the biomechanics metrics for a swing."""
+    smoothing: dict[str, object] = {}
+    if window is not None:
+        smoothing["window_s"] = window
+    if polyorder is not None:
+        smoothing["polyorder"] = polyorder
+
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if smoothing:
+        params["filter"] = {"smoothing": smoothing}
+    if project is not None:
+        params["project_id"] = project
+
+    try:
+        result = call("compute_metrics", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, MetricSet)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_metrics(result)
+
+    # Non-zero when nothing was measured, so a script driving this learns that no
+    # metrics came out rather than reading an empty set as success.
+    if not result.computed:
+        raise typer.Exit(code=1)
+
+
+def _format_ms(value: float | None, *, signed: bool = False) -> str:
+    if value is None:
+        return "-"
+    return f"{value:+.1f} ms" if signed else f"{value:.1f} ms"
+
+
+def _render_sync(result: SyncModel) -> None:
+    summary = Table(title="Synchronisation", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.aligned else "[yellow]NO[/yellow]"
+    summary.add_row("aligned", verdict)
+    summary.add_row("method", result.method.value if result.method else "-")
+    for role, clip in (("reference", result.reference), ("target", result.target)):
+        rate = f"{1.0 / clip.median_interval_s:.1f} fps" if clip.median_interval_s > 0 else "-"
+        slow = "" if clip.slow_motion_factor == 1.0 else f", {clip.slow_motion_factor:g}x slo-mo"
+        summary.add_row(role, f"{clip.name} ({clip.frames} frames, {rate}{slow})")
+
+    mapping = result.time_map
+    if mapping is not None:
+        uncertainty = mapping.offset_uncertainty_s
+        offset = f"{mapping.offset_s * 1000:+.1f} ms"
+        if uncertainty is not None:
+            offset += f" +/-{uncertainty * 1000:.1f} ms"
+        summary.add_row("offset (target - reference)", offset)
+        if mapping.rate_estimated:
+            spread = (
+                f" +/-{mapping.rate_uncertainty:.5f}"
+                if mapping.rate_uncertainty is not None
+                else ""
+            )
+            summary.add_row("clock rate", f"[yellow]{mapping.rate:.5f}{spread}[/yellow]")
+        else:
+            summary.add_row("clock rate", "[dim]1.0 (assumed, not measured)[/dim]")
+        summary.add_row(
+            "anchored over",
+            f"{mapping.support_start_s:.3f}-{mapping.support_end_s:.3f} s of the reference",
+        )
+
+    overlap = result.overlap
+    if overlap is not None:
+        summary.add_row(
+            "overlap",
+            f"{overlap.duration_s:.3f} s ({overlap.reference_fraction:.0%} of the reference, "
+            f"{overlap.target_fraction:.0%} of the target)",
+        )
+    console.print(summary)
+
+    quality, confidence = result.quality, result.confidence
+    if quality is not None and confidence is not None:
+        scores = Table(title="How well it is determined", title_justify="left", expand=True)
+        scores.add_column("Property", no_wrap=True)
+        scores.add_column("Value", overflow="fold")
+
+        style = (
+            "green"
+            if confidence.overall >= 0.6
+            else "yellow"
+            if confidence.overall > 0.1
+            else "red"
+        )
+        scores.add_row("confidence", f"[{style}]{confidence.overall:.2f}[/{style}]")
+        scores.add_row(
+            "",
+            f"[dim]agreement {confidence.agreement:.2f} x anchors {confidence.anchors:.2f} "
+            f"x stability {confidence.stability:.2f}[/dim]",
+        )
+        scores.add_row("frame-rate floor", _format_ms(quality.quantisation_floor_ms))
+        # The distinction that matters most in this table: a residual of zero
+        # because the anchors agreed, against no residual at all because there
+        # was nothing left over to disagree.
+        if quality.residual_rms_ms is None:
+            scores.add_row(
+                "anchor residual",
+                f"[yellow]not measurable[/yellow] ({quality.degrees_of_freedom} spare "
+                "degrees of freedom -- the fit passes through every anchor)",
+            )
+        else:
+            ratio = quality.residual_rms_ms / max(quality.quantisation_floor_ms, 1e-9)
+            scores.add_row(
+                "anchor residual",
+                f"{_format_ms(quality.residual_rms_ms)} rms, "
+                f"{_format_ms(quality.residual_max_ms)} worst ({ratio:.1f}x the floor)",
+            )
+        if quality.method_disagreement_ms is not None:
+            comparable = mapping is not None and not mapping.rate_estimated
+            note = "" if comparable else " [dim](not comparable: a rate was fitted)[/dim]"
+            scores.add_row(
+                "vs cross-correlation", _format_ms(quality.method_disagreement_ms) + note
+            )
+        console.print(scores)
+
+    if result.anchors:
+        anchors = Table(title="Anchors", title_justify="left", expand=True)
+        for column in ("instant", "source", "reference frame", "target frame", "conf", "residual"):
+            anchors.add_column(column, no_wrap=True)
+        residuals = {entry.label: entry for entry in result.residuals}
+        for anchor in result.anchors:
+            entry = residuals.get(anchor.label)
+            anchors.add_row(
+                anchor.label,
+                anchor.source.value,
+                f"{anchor.reference_frame} ({anchor.reference_s:.3f} s)",
+                f"{anchor.target_frame} ({anchor.target_s:.3f} s)",
+                f"{anchor.confidence:.2f}",
+                "-" if entry is None else _format_ms(entry.residual_ms, signed=True),
+            )
+        console.print(anchors)
+
+    correlation = result.correlation
+    if correlation is not None:
+        rival = (
+            "no rival scored"
+            if correlation.rival_correlation is None
+            else f"best rival {correlation.rival_correlation:.3f} at "
+            f"{(correlation.rival_offset_s or 0.0) * 1000:+.0f} ms"
+        )
+        console.print(
+            f"[dim]Cross-correlation: peak {correlation.peak_correlation:.3f} at "
+            f"{correlation.peak_offset_s * 1000:+.1f} ms over {correlation.overlap_s:.2f} s "
+            f"({correlation.samples} samples at {correlation.grid_interval_s * 1000:.2f} ms); "
+            f"{rival}.[/dim]"
+        )
+
+    if result.refusal:
+        console.print(f"[red]{result.refusal}[/red]")
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _parse_anchor(raw: str) -> dict[str, object]:
+    """Parse `label=reference_frame:target_frame`.
+
+    Terse because picking four instants on a command line should not need four
+    flags each. The error names the form rather than the parse failure, because
+    what a user needs here is the shape, not which colon was missing.
+    """
+    label, _, frames = raw.partition("=")
+    reference, _, target = frames.partition(":")
+    try:
+        return {
+            "label": label.strip() or "manual",
+            "reference_frame": int(reference),
+            "target_frame": int(target),
+        }
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"'{raw}' is not an anchor. The form is label=REFERENCE_FRAME:TARGET_FRAME, "
+            "for example impact=204:252."
+        ) from exc
+
+
+@app.command()
+def sync(
+    reference: Annotated[
+        Path, typer.Argument(help="The clip whose clock everything is stated in.")
+    ],
+    target: Annotated[Path, typer.Argument(help="The clip to align to the reference.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given videos.")
+    ] = None,
+    window: Annotated[
+        float | None,
+        typer.Option(
+            "--window",
+            help="Filtering window in seconds, shared by both clips. The coarser clip sets it.",
+        ),
+    ] = None,
+    method: Annotated[
+        str | None,
+        typer.Option("--method", help="Force a method: events, correlation or manual."),
+    ] = None,
+    anchor: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--anchor",
+            help="A manual pick, as label=REFERENCE_FRAME:TARGET_FRAME. Repeatable.",
+        ),
+    ] = None,
+    slow_motion_reference: Annotated[
+        float,
+        typer.Option("--slow-motion-reference", help="Slow-motion factor of the reference clip."),
+    ] = 1.0,
+    slow_motion_target: Annotated[
+        float, typer.Option("--slow-motion-target", help="Slow-motion factor of the target clip.")
+    ] = 1.0,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Relate two clips' clocks, and report how well the relation is known."""
+    params: dict[str, object] = {
+        "reference": {
+            "path": str(reference),
+            "model": model,
+            "slow_motion_factor": slow_motion_reference,
+        },
+        "target": {
+            "path": str(target),
+            "model": model,
+            "slow_motion_factor": slow_motion_target,
+        },
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if method is not None:
+        params["sync"] = {"method": method}
+    if anchor:
+        params["anchors"] = [_parse_anchor(entry) for entry in anchor]
+
+    try:
+        result = call("sync_clips", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_sync(result)
+
+    # Non-zero when no map came out, so a script driving this learns that the
+    # clips were not aligned rather than reading a refusal as an offset of zero.
+    if not result.aligned:
+        raise typer.Exit(code=1)
+
+
+projects = typer.Typer(
+    name="project",
+    help="Sessions: the clips of one swing, and how their clocks relate.",
+    no_args_is_help=True,
+)
+app.add_typer(projects)
+
+
+def _render_project(project: Project) -> None:
+    summary = Table(title=f"{project.name} (id {project.id})", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("created", project.created_at.astimezone().strftime("%Y-%m-%d %H:%M"))
+    if project.notes:
+        summary.add_row("notes", project.notes)
+    summary.add_row("clips", str(len(project.clips)))
+    console.print(summary)
+
+    if project.clips:
+        clips = Table(title="Clips", title_justify="left", expand=True)
+        for column in ("id", "role", "file", "slow motion", "on disk"):
+            clips.add_column(column, no_wrap=True)
+        for clip in project.clips:
+            clips.add_row(
+                str(clip.id),
+                clip.role.value,
+                clip.name,
+                "-" if clip.slow_motion_factor == 1.0 else f"{clip.slow_motion_factor:g}x",
+                "[green]yes[/green]" if clip.exists else "[red]missing[/red]",
+            )
+        console.print(clips)
+
+    for stored in project.syncs:
+        mapping = stored.model.time_map
+        offset = "refused" if mapping is None else f"{mapping.offset_s * 1000:+.1f} ms"
+        confidence = (
+            "-" if stored.model.confidence is None else f"{stored.model.confidence.overall:.2f}"
+        )
+        console.print(
+            f"[dim]sync {stored.reference_clip_id} -> {stored.target_clip_id}: {offset} "
+            f"(confidence {confidence}, {stored.updated_at.astimezone():%Y-%m-%d %H:%M})[/dim]"
+        )
+
+    for warning in project.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _project_call(method: str, params: dict[str, object]) -> BaseModel:
+    try:
+        return call(method, params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+
+@projects.command("create")
+def project_create(
+    name: Annotated[str, typer.Argument(help="What this session is.")],
+    notes: Annotated[str, typer.Option("--notes", help="Free text.")] = "",
+) -> None:
+    """Create an empty project."""
+    result = _project_call("create_project", {"name": name, "notes": notes})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("list")
+def project_list() -> None:
+    """List every project, newest first."""
+    result = _project_call("list_projects", {})
+    assert isinstance(result, ProjectList)  # noqa: S101 - narrows the dispatch return type
+
+    if not result.projects:
+        console.print("[dim]No projects yet. Create one with `analyzer project create`.[/dim]")
+        console.print(f"[dim]Database: {result.database_path}[/dim]")
+        return
+
+    table = Table(title="Projects", title_justify="left", expand=True)
+    for column in ("id", "name", "created", "clips", "missing"):
+        table.add_column(column, no_wrap=True)
+    for project in result.projects:
+        missing = sum(1 for clip in project.clips if not clip.exists)
+        table.add_row(
+            str(project.id),
+            project.name,
+            project.created_at.astimezone().strftime("%Y-%m-%d"),
+            str(len(project.clips)),
+            "-" if missing == 0 else f"[red]{missing}[/red]",
+        )
+    console.print(table)
+    console.print(f"[dim]Database: {result.database_path}[/dim]")
+
+
+@projects.command("show")
+def project_show(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+) -> None:
+    """Show one project, its clips and its stored alignments."""
+    result = _project_call("get_project", {"project_id": project_id})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("add")
+def project_add(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    path: Annotated[Path, typer.Argument(help="Video file to attach.")],
+    role: Annotated[str, typer.Option("--role", help="face_on, down_the_line or other.")] = "other",
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    label: Annotated[str, typer.Option("--label", help="Free text.")] = "",
+) -> None:
+    """Attach a clip to a project. The clip is identified by content, not by path."""
+    result = _project_call(
+        "add_clip",
+        {
+            "project_id": project_id,
+            "path": str(path),
+            "role": role,
+            "slow_motion_factor": slow_motion,
+            "label": label,
+        },
+    )
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("delete")
+def project_delete(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")] = False,
+) -> None:
+    """Delete a project, its clips and its alignments. The video files are untouched."""
+    if not yes:
+        # A project is the one thing here that cannot be recomputed from the
+        # footage, so deleting one is confirmed rather than assumed. Everything
+        # else this CLI removes can be rebuilt by re-running a command.
+        project = _project_call("get_project", {"project_id": project_id})
+        assert isinstance(project, Project)  # noqa: S101 - narrows the dispatch return type
+        console.print(
+            f"Deleting project {project.id} ({project.name}) with {len(project.clips)} clip(s) "
+            f"and {len(project.syncs)} stored alignment(s). The video files are not touched."
+        )
+        typer.confirm("Continue?", abort=True)
+
+    result = _project_call("delete_project", {"project_id": project_id})
+    assert isinstance(result, ProjectList)  # noqa: S101 - narrows the dispatch return type
+    console.print(f"[dim]Deleted. {len(result.projects)} project(s) remain.[/dim]")
+
+
+@projects.command("remove")
+def project_remove(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    clip_id: Annotated[int, typer.Argument(help="Which clip.")],
+) -> None:
+    """Detach a clip from a project. Its stored alignments go with it."""
+    result = _project_call("remove_clip", {"project_id": project_id, "clip_id": clip_id})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("relocate")
+def project_relocate(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    clip_id: Annotated[int, typer.Argument(help="Which clip.")],
+    path: Annotated[Path, typer.Argument(help="Where the file is now.")],
+) -> None:
+    """Point a clip at a moved file, keeping its recorded content key."""
+    result = _project_call(
+        "relocate_clip", {"project_id": project_id, "clip_id": clip_id, "path": str(path)}
+    )
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("sync")
+def project_sync(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    reference_clip: Annotated[
+        int | None, typer.Option("--reference-clip", help="Clip id to use as the reference.")
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="Clip id to align to the reference.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Which extraction to use.")] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, shared by both.")
+    ] = None,
+    method: Annotated[
+        str | None, typer.Option("--method", help="events, correlation or manual.")
+    ] = None,
+    anchor: Annotated[
+        list[str] | None,
+        typer.Option("--anchor", help="A manual pick, as label=REFERENCE_FRAME:TARGET_FRAME."),
+    ] = None,
+    save: Annotated[
+        bool, typer.Option("--save/--no-save", help="Store the result on the project.")
+    ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Align two of a project's clips, using each clip's own slow-motion factor."""
+    params: dict[str, object] = {
+        "project_id": project_id,
+        "reference_clip_id": reference_clip,
+        "target_clip_id": target_clip,
+        "model": model,
+        "save": save,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if method is not None:
+        params["sync"] = {"method": method}
+    if anchor:
+        params["anchors"] = [_parse_anchor(entry) for entry in anchor]
+
+    result = _project_call("sync_project", params)
+    assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_sync(result)
+    if not result.aligned:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def version() -> None:
     """Print the engine version."""
     typer.echo(__version__)
-
-
-if __name__ == "__main__":
-    app()
 
 
 @app.command()
@@ -467,3 +1332,423 @@ def extract(
     # run produced no usable landmarks, and an exit code is how it finds out.
     if result.stats.frames_detected == 0:
         raise typer.Exit(code=1)
+
+
+# Last in the file on purpose. Typer registers a command when its decorator
+# runs, so anything defined below this block is absent when the module is
+
+
+def _run_with_progress(
+    method: str, params: dict[str, object], description: str, *, quiet: bool = False
+) -> BaseModel:
+    """Call a long method, driving a terminal bar from the same reporter seam the app uses.
+
+    Factored out here because board detection is the third long method in this
+    CLI and the bar wiring was already written twice. The error handling is part
+    of it: a failure has to stop the bar before printing, or Rich leaves the
+    partly-drawn bar sitting over the message.
+    """
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=True,
+        # Redirected to stderr so `--json` output stays a clean pipe.
+        disable=quiet,
+    ) as progress:
+        bar = progress.add_task(description, total=None)
+
+        def on_update(update: ProgressUpdate) -> None:
+            progress.update(bar, completed=update.current, total=update.total)
+
+        try:
+            return call(method, params, CallbackReporter(on_update))
+        except EngineError as exc:
+            progress.stop()
+            console.print(f"[red]{exc}[/red]")
+            remediation = (exc.data or {}).get("remediation")
+            if remediation:
+                console.print(f"[dim]fix: {remediation}[/dim]")
+            raise typer.Exit(code=1) from exc
+
+
+calibrate = typer.Typer(
+    name="calibrate",
+    help="Measure a camera's geometry, so the system knows what a pixel means.",
+    no_args_is_help=True,
+)
+app.add_typer(calibrate)
+
+
+def _render_coverage(quality: CalibrationQuality) -> Table:
+    """The diagnostic half, which is the half that decides whether to trust the fit."""
+    table = Table(title="Coverage", title_justify="left", expand=True)
+    table.add_column("What the board views sampled", no_wrap=True)
+    table.add_column("Value", overflow="fold")
+
+    found = quality.coverage
+    table.add_row("views used", str(found.views))
+    table.add_row("corners", str(found.corners))
+    table.add_row("frame area visited", f"{found.image_fraction:.0%}")
+    table.add_row("corners near the edge", f"{found.edge_fraction:.0%}")
+    table.add_row("tilt spread", f"{found.tilt_range_deg:.0f} deg")
+    table.add_row("apparent size spread", f"{found.scale_range:.2f}x")
+    table.add_row("spare degrees of freedom", str(quality.degrees_of_freedom))
+    return table
+
+
+def _render_camera_calibration(result: CameraCalibration) -> None:
+    summary = Table(title="Camera calibration", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    found = result.intrinsics
+    verdict = "[green]USABLE[/green]" if result.usable else "[red]REFUSED[/red]"
+    summary.add_row("usable", verdict)
+    summary.add_row("role", result.role.value)
+    summary.add_row("frame size", f"{found.image_width}x{found.image_height}")
+    summary.add_row("focal length", f"fx {found.fx:.1f} px, fy {found.fy:.1f} px")
+    summary.add_row("optical centre", f"({found.cx:.1f}, {found.cy:.1f}) px")
+    summary.add_row(
+        "field of view",
+        f"{found.horizontal_fov_deg:.1f} deg across, {found.vertical_fov_deg:.1f} deg down"
+        "  [dim](check this against the lens)[/dim]",
+    )
+    summary.add_row("distortion model", found.model.value)
+    summary.add_row(
+        "distortion", ", ".join(f"{value:+.4f}" for value in found.distortion) or "none"
+    )
+
+    # The three numbers that answer three different questions, in the order the
+    # module docstring puts them: the fit, the answer, and then the cause.
+    quality = result.quality
+    summary.add_row(
+        "reprojection error",
+        f"{quality.rms_reprojection_px:.3f} px rms, {quality.max_reprojection_px:.3f} px worst "
+        "[dim](how well the model fits these views)[/dim]",
+    )
+    if found.fx_uncertainty is not None:
+        ratio = found.fx_uncertainty / found.fx
+        style = "green" if ratio <= 0.02 else "yellow" if ratio <= 0.05 else "red"
+        summary.add_row(
+            "focal uncertainty",
+            f"[{style}]{found.fx_uncertainty:.2f} px ({ratio:.2%})[/{style}] "
+            "[dim](whether these views determined it)[/dim]",
+        )
+    else:
+        summary.add_row("focal uncertainty", "[dim]not reported[/dim]")
+
+    edge, worst = distortion_displacement(found)
+    summary.add_row(
+        "this lens moves a pixel by",
+        f"{edge:.1f} px at the frame edge, {worst:.1f} px at worst",
+    )
+    if result.notes:
+        summary.add_row("notes", result.notes)
+    console.print(summary)
+    console.print(_render_coverage(quality))
+
+    detection = result.detection
+    console.print(
+        f"[dim]Scanned {detection.frames_scanned} frame(s); board found in "
+        f"{detection.frames_with_board}; {detection.views_used} distinct views kept.[/dim]"
+    )
+    for warning in [*detection.warnings, *result.warnings]:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _render_stereo(result: StereoCalibration) -> None:
+    summary = Table(title="Stereo extrinsics", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]USABLE[/green]" if result.usable else "[red]REFUSED[/red]"
+    summary.add_row("usable", verdict)
+    summary.add_row("cameras", f"{result.reference_role.value} -> {result.target_role.value}")
+    summary.add_row(
+        "baseline",
+        f"{result.baseline_m:.3f} m  [dim](check this with a tape measure)[/dim]",
+    )
+    summary.add_row("convergence", f"{result.convergence_deg:.1f} deg between the optical axes")
+    summary.add_row(
+        "reprojection error",
+        f"{result.quality.rms_reprojection_px:.3f} px rms "
+        "[dim](a point located by one camera, seen by the other)[/dim]",
+    )
+
+    pairing = result.pairing
+    summary.add_row("paired views", f"{pairing.pairs} of {pairing.candidates} candidates")
+    if pairing.median_time_error_ms is not None:
+        summary.add_row("pairing, in time", f"{pairing.median_time_error_ms:.1f} ms median")
+    if pairing.median_board_speed_px_s is not None:
+        summary.add_row("board speed", f"{pairing.median_board_speed_px_s:.0f} px/s median")
+    if pairing.worst_pairing_error_px is not None:
+        summary.add_row(
+            "pairing, in pixels",
+            f"{pairing.worst_pairing_error_px:.2f} px worst "
+            "[dim](sync uncertainty x board speed)[/dim]",
+        )
+    console.print(summary)
+    console.print(_render_coverage(result.quality))
+
+    for entry in pairing.dropped:
+        console.print(f"[dim]dropped: {entry}[/dim]")
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _board_params(
+    squares: str, square_mm: float, marker_mm: float | None, family: str, legacy: bool
+) -> dict[str, object]:
+    width, _, height = squares.partition("x")
+    if not height:
+        raise typer.BadParameter("Give the board as WxH, for example 7x5.", param_hint="--squares")
+    return {
+        "squares_x": int(width),
+        "squares_y": int(height),
+        "square_length_mm": square_mm,
+        "marker_length_mm": marker_mm,
+        "family": family,
+        "legacy_pattern": legacy,
+    }
+
+
+@calibrate.command(name="board")
+def calibrate_board(
+    output: Annotated[Path, typer.Argument(help="Where to write the printable board image.")],
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[
+        float, typer.Option("--square-mm", help="Intended printed square size, in millimetres.")
+    ] = 35.0,
+    family: Annotated[str, typer.Option("--family", help="ArUco dictionary.")] = "DICT_5X5_100",
+    dpi: Annotated[float, typer.Option("--dpi", help="Rendering resolution.")] = 600.0,
+) -> None:
+    """Generate a Charuco board to print.
+
+    Generated here rather than downloaded, so the board that is printed and the
+    board that is looked for are the same object by construction.
+    """
+    import cv2
+
+    from analyzer.calibration.board import generate_board_image
+
+    spec = BoardSpec(
+        squares_x=int(squares.partition("x")[0]),
+        squares_y=int(squares.partition("x")[2]),
+        square_length_m=square_mm / 1000.0,
+        marker_length_m=0.75 * square_mm / 1000.0,
+        family=BoardFamily(family),
+    )
+    image = generate_board_image(spec, pixels_per_metre=dpi / 0.0254)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(output), image):
+        console.print(f"[red]Could not write {output}.[/red]")
+        raise typer.Exit(code=1)
+
+    console.print(f"Wrote [bold]{output}[/bold] ({image.shape[1]}x{image.shape[0]} px).")
+    console.print(
+        Panel(
+            f"Print this at 100% scale -- no 'fit to page'. Then [bold]measure one square "
+            f"with a ruler[/bold] and pass what you measure as --square-mm, not "
+            f"{square_mm:.0f}.\n\n"
+            "Every metric-scale claim this system ever makes descends from that one "
+            "measured length, and a page silently scaled to 96% makes every future "
+            "distance wrong by 4% with nothing anywhere looking amiss.\n\n"
+            "Mount it on something rigid and flat. The method assumes the board is a "
+            "plane, and a sheet held in one hand is not.",
+            title="Before you use it",
+            border_style="yellow",
+        )
+    )
+
+
+@calibrate.command(name="camera")
+def calibrate_camera_command(
+    source: Annotated[
+        Path, typer.Argument(help="A video of the board, or a directory of board photographs.")
+    ],
+    role: Annotated[
+        str, typer.Option("--role", help="Which camera: face_on, down_the_line or other.")
+    ] = "other",
+    project: Annotated[
+        int | None, typer.Option("--project", help="Store the result on this project's rig.")
+    ] = None,
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[
+        float,
+        typer.Option("--square-mm", help="Square size measured on the printed sheet, in mm."),
+    ] = 35.0,
+    marker_mm: Annotated[
+        float | None, typer.Option("--marker-mm", help="Marker size. Defaults to 0.75 of a square.")
+    ] = None,
+    family: Annotated[str, typer.Option("--family", help="ArUco dictionary.")] = "DICT_5X5_100",
+    legacy: Annotated[
+        bool, typer.Option("--legacy-pattern", help="The board came from OpenCV before 4.6.")
+    ] = False,
+    stride: Annotated[int, typer.Option("--stride", help="Frames to skip, for a video.")] = 5,
+    model: Annotated[
+        str | None,
+        typer.Option("--distortion", help="pinhole, radial_tangential_4 or radial_tangential_5."),
+    ] = None,
+    notes: Annotated[
+        str,
+        typer.Option("--notes", help="Lens, zoom, stabilisation -- what the file cannot record."),
+    ] = "",
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """Measure one camera's intrinsics from footage of a Charuco board."""
+    params: dict[str, object] = {
+        "source": str(source),
+        "role": role,
+        "board": _board_params(squares, square_mm, marker_mm, family, legacy),
+        "stride": stride,
+        "notes": notes,
+    }
+    if project is not None:
+        params["project_id"] = project
+    if model is not None:
+        params["calibration"] = {"distortion_model": model}
+
+    result = _run_with_progress("calibrate_camera", params, "Detecting the board", quiet=as_json)
+    assert isinstance(result, CameraCalibration)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+    else:
+        _render_camera_calibration(result)
+
+    # Non-zero when the calibration should not be used, so a script driving this
+    # learns that rather than reading a refused calibration as a usable one.
+    if not result.usable:
+        raise typer.Exit(code=1)
+
+
+@calibrate.command(name="stereo")
+def calibrate_stereo_command(
+    project: Annotated[int, typer.Argument(help="The project whose cameras these are.")],
+    reference: Annotated[Path, typer.Argument(help="The reference camera's board footage.")],
+    target: Annotated[Path, typer.Argument(help="The target camera's board footage.")],
+    reference_role: Annotated[
+        str, typer.Option("--reference-role", help="Which camera the reference footage is.")
+    ] = "face_on",
+    target_role: Annotated[
+        str, typer.Option("--target-role", help="Which camera the target footage is.")
+    ] = "down_the_line",
+    offset: Annotated[
+        float | None,
+        typer.Option("--offset", help="Target clock minus reference clock, in seconds."),
+    ] = None,
+    offset_uncertainty: Annotated[
+        float,
+        typer.Option("--offset-uncertainty", help="How well that offset is known, in seconds."),
+    ] = 0.0,
+    squares: Annotated[str, typer.Option("--squares", help="Board squares, as WxH.")] = "7x5",
+    square_mm: Annotated[float, typer.Option("--square-mm", help="Square size, in mm.")] = 35.0,
+    marker_mm: Annotated[float | None, typer.Option("--marker-mm")] = None,
+    family: Annotated[str, typer.Option("--family")] = "DICT_5X5_100",
+    legacy: Annotated[bool, typer.Option("--legacy-pattern")] = False,
+    stride: Annotated[int, typer.Option("--stride", help="Frames to skip, for a video.")] = 5,
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """Measure where two already-calibrated cameras stand relative to each other.
+
+    Both cameras must be calibrated first: the stereo fit holds the intrinsics
+    fixed rather than re-fitting them, because they are the better-determined
+    quantity and a joint fit would trade focal length against baseline.
+    """
+    params: dict[str, object] = {
+        "project_id": project,
+        "reference_source": str(reference),
+        "target_source": str(target),
+        "reference_role": reference_role,
+        "target_role": target_role,
+        "board": _board_params(squares, square_mm, marker_mm, family, legacy),
+        "stride": stride,
+        "offset_uncertainty_s": offset_uncertainty,
+    }
+    if offset is not None:
+        params["offset_s"] = offset
+
+    result = _run_with_progress("calibrate_stereo", params, "Detecting the board", quiet=as_json)
+    assert isinstance(result, StereoCalibration)  # noqa: S101
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+    else:
+        _render_stereo(result)
+
+    if not result.usable:
+        raise typer.Exit(code=1)
+
+
+@calibrate.command(name="show")
+def calibrate_show(
+    project: Annotated[int, typer.Argument(help="Which project's rig to report.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Emit the raw result as JSON.")] = False,
+) -> None:
+    """What is known about a project's cameras, and what that permits."""
+    try:
+        result = call("get_calibration", {"project_id": project})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, CameraRig)  # noqa: S101
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    status = result.status()
+    style = {"none": "red", "intrinsics": "yellow", "stereo": "green"}[status.value]
+    console.print(
+        Panel(
+            f"[{style}]{status.value.upper()}[/{style}] -- "
+            + {
+                "none": "no camera geometry is known, so every measurement is a statement "
+                "about the image plane and carries the lens's unmeasured distortion.",
+                "intrinsics": "the lens is measured and can be removed from the landmarks. "
+                "Still no depth: a calibrated camera knows which direction a pixel came "
+                "from, not how far away it was.",
+                "stereo": "both cameras and their relative pose are known, so two views of "
+                "one instant can be triangulated. Phase 9 is what does that.",
+            }[status.value],
+            title="What this project may claim",
+            border_style=style,
+        )
+    )
+
+    for _role, entry in sorted(result.cameras.items(), key=lambda item: item[0].value):
+        console.print()
+        _render_camera_calibration(entry)
+    if result.stereo is not None:
+        console.print()
+        _render_stereo(result.stereo)
+
+
+@calibrate.command(name="clear")
+def calibrate_clear(
+    project: Annotated[int, typer.Argument(help="Which project to forget the calibration of.")],
+) -> None:
+    """Forget a project's calibration. The footage is untouched."""
+    try:
+        call("clear_calibration", {"project_id": project})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(f"Project {project} is now uncalibrated.")
+
+
+# executed as `python -m analyzer.cli` -- the commands exist under the installed
+# `analyzer` entry point, which imports the module fully first, and silently do
+# not under the module form. Keeping the two entry points equivalent means this
+# stays at the bottom.
+if __name__ == "__main__":
+    app()

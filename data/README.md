@@ -15,6 +15,56 @@ data/
   fixtures/            small synthetic clips for tests
 ```
 
+## Slow-motion footage
+
+Nothing in a conformed slow-motion file records that it is slow motion. A clip
+captured at 240 fps and written out at 30 fps has honest timestamps at 1/30 s
+apart and a swing that takes eight times too long, and no metadata separates it
+from a genuinely slow movement.
+
+Every duration rule in this engine is stated in **real** seconds, so such a clip
+is refused until the factor is supplied:
+
+```bash
+uv run --project python analyzer metrics clip.mp4 --slow-motion 8
+```
+
+The detector says so rather than leaving it at "no swing detected": when a
+motion has a swing's shape but every phase is long in the same proportion, it
+reports the smallest factor that would bring the durations inside the bounds.
+
+**The factor is not a relabelling of the clock.** The smoothing window is in real
+seconds too, so the factor decides how many frames it holds, and that changes
+where events land. Getting it right matters; guessing it badly is visible in the
+results. Phone slow motion is usually 4x or 8x, from a 120 or 240 fps capture.
+
+Supplying it correctly is a gain rather than a concession: a slow-motion clip is
+a high-speed capture, so the events resolve better than on any ordinary 30 fps
+recording. On the reference footage every event scores a resolution factor of
+1.00, which no 30 fps clip in this project manages.
+
+## Reference footage
+
+Not committed, and not ground truth — no one has motion-captured any of these.
+They are a stress test, and they earn their keep by disagreeing with the engine.
+
+| Clip                          | View          | Notes                                    |
+| ----------------------------- | ------------- | ---------------------------------------- |
+| `face-on/PW_face-on.mp4`      | face-on       | 68 frames, 30 fps, real time             |
+| `dtl/iron_dtl.mp4`            | down the line | 96 frames, 30 fps; filmed from the front |
+| `dtl/driver_swing_aug19_2026` | down the line | 24 fps; refused, motion blur             |
+| `face-on/rory_face_on.mp4`    | face-on       | tour pro, ~7x slow motion, from behind   |
+| `dtl/rory_dtl.mp4`            | down the line | tour pro, ~5x slow motion                |
+
+The tour-pro clips found two defects the amateur footage could not, because they
+contain a full turn and a slow-motion clock. Both are recorded in
+[../docs/decisions/ADR-0010-projected-biomechanics.md](../docs/decisions/ADR-0010-projected-biomechanics.md).
+
+`face-on/rory_face_on.mp4` also carries the only **observed** impact in the
+project: the ball is on the tee at frame 360 and gone at frame 361. Phase 4's
+kinematic estimate is the only thing in the pipeline that can be checked against
+a real event, and that check is recorded in the ADR.
+
 ## Capture protocol
 
 Analysis quality is bounded by capture quality, and most of what limits it is
@@ -56,23 +106,155 @@ body motion to a single-camera pipeline.
 - Clothing that contrasts with the background; avoid very loose garments, which
   hide joint positions.
 
+### Synchronising the two cameras
+
+Nothing relates two cameras' clocks for you, and everything above two views
+depends on that relation: triangulating a point is only meaningful for two views
+of the same instant. `analyzer sync` recovers the offset from the footage itself
+and reports how well it knows it, but two things about the capture bound what it
+can do.
+
+**Both cameras want the same frame rate, and both want to be fast.** An instant
+located to the nearest frame carries an error of about a third of a frame
+interval, and the two clips' errors add in quadrature, so the pair's floor is
+set by the _coarser_ camera:
+
+| Pair          | Best possible alignment |
+| ------------- | ----------------------- |
+| 30 + 30 fps   | 13.6 ms                 |
+| 30 + 240 fps  | 9.7 ms                  |
+| 240 + 240 fps | **1.7 ms**              |
+
+Upgrading one camera of a 30 fps pair is worth a factor of sqrt(2) at most —
+the slow one still contributes 9.6 ms on its own. Upgrading both is worth the
+whole ratio.
+
+A second consequence: both clips are smoothed with one window, because smoothing
+them differently shifts the features the alignment reads. The coarser clip sets
+it, and a 30 fps camera cannot support the default at all — so pairing a 240 fps
+phone with a 30 fps one degrades the fast clip too.
+
+**Get both slow-motion factors right, or discover which is wrong.** If both are
+supplied and the fit returns a clock rate far from 1.0, one of them is wrong by
+about that ratio: two real camera clocks do not differ by more than a fraction of
+a percent. This is the one thing a second camera can measure that a single clip
+cannot — nothing in one file records its own factor.
+
 ### Per-swing checklist
 
 1. Both cameras recording before address.
 2. Full swing to a held finish, then a pause before stopping.
 3. Ball visible at address in both views.
 4. Note club used and any range/course conditions.
+5. **One swing per pair of clips.** Nothing in the system can tell that two
+   recordings show the same swing — it aligns swing-shaped signals, and two
+   different swings align perfectly happily. The only evidence is that their
+   phase durations disagree, which shows up as a residual, and on two swings of
+   similar tempo that evidence is weak. Do not pair a face-on clip of one swing
+   with a down-the-line clip of another and expect to be told.
 
-## Camera calibration (Phases 8-9)
+## Camera calibration (Phase 8)
 
-Metric-scale 3D reconstruction requires calibration. Print a **Charuco board**,
-mount it rigidly flat, and capture 15-20 frames per camera with the board at
-varied angles and distances filling different parts of the frame — corners
-included, since that is where lens distortion is strongest.
+Metric-scale 3D reconstruction requires calibration, and a calibration is only
+as good as the capture it was measured from. The instructions below are not
+style advice: each one is a thing the system checks and refuses on, and the
+thresholds come from `scripts/benchmark_calibration.py`.
 
-For stereo extrinsics, both cameras must see the board **simultaneously** in a
-set of frames.
+### The board
 
-Without this the system runs in `UNCALIBRATED` mode. That is a supported state,
-not a failure: it simply means no metric-scale claims are made, and the system
-will say so rather than producing a plausible-looking number.
+```bash
+uv run --project python analyzer calibrate board board.png --squares 7x5 --square-mm 35
+```
+
+Print it at **100% scale** — no "fit to page" — mount it on something rigid and
+flat, and then **measure one square with a ruler**. Pass what you measure, not
+what you asked for:
+
+```bash
+uv run --project python analyzer calibrate camera board.mov --role face_on --square-mm 34.6
+```
+
+Every metric-scale claim this system ever makes descends from that one measured
+length. A page silently scaled to 96% makes every future distance wrong by 4%,
+and nothing anywhere will look amiss. It is the one step of the process no
+software can check.
+
+Generate the board here rather than downloading one. A pattern from a website is
+a pattern whose dictionary, square count and marker layout are all guesses, and
+OpenCV changed the Charuco layout in 4.6 — a board from an older generator
+produces corners in the *wrong places* rather than no corners at all, which is
+much the worse failure.
+
+### Capturing a camera
+
+**Tilt the board. This is the one that is not obvious and the one that decides
+whether the calibration is worth anything.** A board held square to the camera
+cannot separate focal length from distance: a longer lens further away makes the
+same picture. Such a capture fits beautifully — a fifth of a pixel of
+reprojection error — and leaves the focal length wrong by up to 23%. Neither the
+residual nor the uncertainty the fit reports about itself will tell you. Aim for
+at least 20° of spread between your flattest and most oblique views; the system
+refuses below that.
+
+**Take the board to the corners of the frame.** Lens distortion is a function of
+radius and is nearly nothing in the middle, so a centred capture fits its
+distortion coefficients to almost no evidence and then applies them out at the
+edge, where the swing is. Half the board leaving the frame is fine — that is
+exactly what Charuco tolerates and a plain chessboard does not.
+
+**Vary the distance.** The calibration otherwise describes the lens at one
+working distance.
+
+| what to vary   | why                                       | the bound     |
+| -------------- | ----------------------------------------- | ------------- |
+| tilt           | separates focal length from distance      | ≥ 20° spread  |
+| position       | distortion is measurable only off-centre  | ≥ 35% of frame |
+| distance       | one distance measures one working distance | reported      |
+| number of views | 8 well-spread views reach 0.08% focal error | ≥ 8         |
+
+Twenty views buy 0.02% against eight views' 0.08%. Spread matters far more than
+count, which is why the system measures spread directly.
+
+**Calibrate at the setting you will film at.** A calibration belongs to a camera
+*and* a zoom, lens and capture resolution. Frame size is the only part of that a
+file records, and the system refuses a calibration applied to footage of a
+different size; zoom and lens changes leave no trace at all. Use `--notes` to
+record what the file cannot.
+
+### Capturing a stereo pair
+
+Both cameras must see the board at the same instant, and two phones do not share
+a clock. **Hold the board still at each position** and that stops mattering: the
+pairing error is the clock uncertainty multiplied by how fast the board was
+moving, so a still board makes it zero however badly the clocks are known.
+
+Measured, the requirement is remarkably light — **three frames** of stillness,
+which is a tenth of a second at 30 fps:
+
+| board             | pairing error | baseline error | rotation error |
+| ----------------- | ------------- | -------------- | -------------- |
+| held 1 s          | 0.00 px       | 0.104%         | 0.031°         |
+| held **3 frames** | 0.00 px       | 0.104%         | 0.031°         |
+| held 2 frames     | —             | refused        | —              |
+| never stops       | —             | refused        | —              |
+
+So: move the board to a new position, pause for a moment, move again. Do not
+wave it. A waved board produces images that are exactly as sharp and yields no
+usable pairs, which is why the system measures this instead of trusting it.
+
+Neither camera may move between the stereo capture and the swing — the
+extrinsics describe where they stood, and nothing detects that one was nudged.
+
+### Without a calibration
+
+The system runs uncalibrated, and that is a supported state rather than a
+failure: every measurement is reported as a statement about the image plane,
+which is what it is, and no metric-scale 3D claim is made. What it costs is the
+lens. An ordinary phone's main camera displaces a landmark near the frame edge
+by about 170 px on a 1920x1080 frame, and every angle, distance and speed
+measured above inherits that displacement with nothing in the numbers showing it.
+
+Calibrating one camera removes it. It does **not** make one camera see depth: a
+calibrated pixel is a direction, and how far along that direction anything sat is
+exactly what the projection destroyed. That needs two calibrated views of the
+same instant, which is Phase 9.

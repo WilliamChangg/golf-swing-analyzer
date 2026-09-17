@@ -46,6 +46,9 @@ class SignalUnit(StrEnum):
     NORMALIZED_FRAME = "normalized_frame"
     NORMALIZED_FRAME_PER_S = "normalized_frame_per_s"
     NORMALIZED_FRAME_PER_S2 = "normalized_frame_per_s2"
+    FRAME_WIDTH = "frame_width"
+    FRAME_WIDTH_PER_S = "frame_width_per_s"
+    FRAME_WIDTH_PER_S2 = "frame_width_per_s2"
     APPROX_M = "approx_m"
     APPROX_M_PER_S = "approx_m_per_s"
     APPROX_M_PER_S2 = "approx_m_per_s2"
@@ -56,6 +59,16 @@ _UNITS: dict[LandmarkSpace, tuple[SignalUnit, SignalUnit, SignalUnit]] = {
         SignalUnit.NORMALIZED_FRAME,
         SignalUnit.NORMALIZED_FRAME_PER_S,
         SignalUnit.NORMALIZED_FRAME_PER_S2,
+    ),
+    # Distinct from NORMALIZED_FRAME rather than sharing it, because the two are
+    # different units that happen to agree on x: a y of 0.5 is half the frame's
+    # height in one and half its width in the other. Naming them apart is what
+    # stops a residual measured in one being compared against a bound derived in
+    # the other.
+    LandmarkSpace.FRAME_WIDTHS: (
+        SignalUnit.FRAME_WIDTH,
+        SignalUnit.FRAME_WIDTH_PER_S,
+        SignalUnit.FRAME_WIDTH_PER_S2,
     ),
     LandmarkSpace.HIP_LOCAL: (
         SignalUnit.APPROX_M,
@@ -73,7 +86,13 @@ def unit_for(space: LandmarkSpace, derivative: int) -> SignalUnit:
     """
     if derivative not in (0, 1, 2):
         raise ValueError(f"No unit is defined for derivative order {derivative}.")
-    return _UNITS[space][derivative]
+    units = _UNITS.get(space)
+    if units is None:
+        raise ValueError(
+            f"No unit is defined for {space.value} coordinates; this build cannot "
+            "produce landmarks in that frame."
+        )
+    return units[derivative]
 
 
 class ConfidenceGate(BaseModel, extra="forbid"):
@@ -291,6 +310,17 @@ class SequenceFilterReport(BaseModel):
     schema_version: int = FILTER_SCHEMA_VERSION
     config: FilterConfig
     space: LandmarkSpace
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays, as supplied by "
+            "the caller. 1.0 is an ordinary recording. Timestamps here are **real "
+            "seconds**, already divided by it, so they no longer index into the "
+            "video file -- frame numbers do. Nothing in a conformed slow-motion "
+            "clip records this, so it cannot be measured and is not guessed."
+        ),
+    )
     samples: int
     landmarks: list[LandmarkFilterReport]
     elapsed_s: float

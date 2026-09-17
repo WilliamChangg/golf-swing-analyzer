@@ -24,6 +24,7 @@ from analyzer.contracts.filtering import (
 )
 from analyzer.contracts.pose import (
     LANDMARK_COUNT,
+    UNREACHABLE_SPACES,
     Landmark,
     LandmarkPoint,
     LandmarkSpace,
@@ -35,6 +36,9 @@ from analyzer.contracts.pose import (
 from analyzer.filtering.landmarks import filter_landmark, filter_sequence, signals_from_series
 from analyzer.pose.series import landmark_series
 from analyzer.progress import RecordingReporter
+from tests.conftest import SQUARE_FRAME
+
+_MEASURABLE = set(LandmarkSpace) - set(UNREACHABLE_SPACES)
 
 FPS = 120.0
 
@@ -81,6 +85,7 @@ def _sequence(
         video_content_key=ContentKey(
             algorithm=HashAlgorithm.SHA256_SAMPLED, digest="d" * 64, size_bytes=1
         ),
+        geometry=SQUARE_FRAME,
         model=PoseModelInfo(
             name="fake",
             variant="fake",
@@ -143,7 +148,13 @@ class TestFilterLandmark:
         assert np.array_equal(finite[:, 0], finite[:, 2])
 
     def test_reports_units_matching_the_coordinate_space(self) -> None:
-        image = filter_landmark(landmark_series(_sequence(), Landmark.LEFT_WRIST))
+        widths = filter_landmark(landmark_series(_sequence(), Landmark.LEFT_WRIST))
+        assert widths.report.position_unit is SignalUnit.FRAME_WIDTH
+        assert widths.report.velocity_unit is SignalUnit.FRAME_WIDTH_PER_S
+
+        image = filter_landmark(
+            landmark_series(_sequence(), Landmark.LEFT_WRIST, LandmarkSpace.IMAGE)
+        )
         assert image.report.position_unit is SignalUnit.NORMALIZED_FRAME
         assert image.report.velocity_unit is SignalUnit.NORMALIZED_FRAME_PER_S
 
@@ -152,6 +163,10 @@ class TestFilterLandmark:
         )
         assert hip.report.position_unit is SignalUnit.APPROX_M
         assert hip.report.acceleration_unit is SignalUnit.APPROX_M_PER_S2
+
+    def test_frame_widths_and_image_are_different_units(self) -> None:
+        """They agree on x and differ on y, which is exactly why naming them apart matters."""
+        assert SignalUnit.FRAME_WIDTH is not SignalUnit.NORMALIZED_FRAME
 
     def test_accounts_for_every_frame_that_did_not_survive(self) -> None:
         """The frame count minus the valid count must be explainable."""
@@ -193,7 +208,7 @@ class TestFilterLandmark:
         series = landmark_series(_sequence(), Landmark.LEFT_WRIST)
         signals = signals_from_series(series)
         assert set(signals) == {"x", "y", "z"}
-        assert signals["x"].label == "left_wrist.x[image]"
+        assert signals["x"].label == "left_wrist.x[frame_widths]"
 
 
 class TestFilterSequence:
@@ -273,9 +288,15 @@ class TestUnits:
         with pytest.raises(ValueError, match="derivative order 3"):
             unit_for(LandmarkSpace.IMAGE, 3)
 
-    @pytest.mark.parametrize("space", list(LandmarkSpace))
-    def test_every_space_has_a_unit_for_every_order(self, space: LandmarkSpace) -> None:
+    @pytest.mark.parametrize("space", sorted(_MEASURABLE, key=lambda s: s.value))
+    def test_every_produced_space_has_a_unit_for_every_order(self, space: LandmarkSpace) -> None:
         assert len({unit_for(space, order) for order in (0, 1, 2)}) == 3
+
+    @pytest.mark.parametrize("space", sorted(UNREACHABLE_SPACES, key=lambda s: s.value))
+    def test_a_frame_this_build_cannot_produce_has_no_unit(self, space: LandmarkSpace) -> None:
+        """Naming the frame is not the same as being able to measure in it."""
+        with pytest.raises(ValueError, match="cannot"):
+            unit_for(space, 0)
 
 
 class TestConfigValidation:

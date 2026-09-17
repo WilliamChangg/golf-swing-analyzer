@@ -6,11 +6,13 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-3 of 21 complete.** The foundation, typed engine boundary,
-> environment health check, video ingestion, single-camera pose extraction, and
-> temporal filtering are built and verified. No phase detection, metrics, or
-> coaching exist yet. Sections below marked _Not yet implemented_ say so rather
-> than describing features that do not exist. See
+> **Status: Phases 0-7 of 21 complete.** The foundation, typed engine boundary,
+> environment health check, video ingestion, single-camera pose extraction,
+> temporal filtering, swing phase detection, the biomechanics metric engine,
+> explicit coordinate frames with measured camera-view tagging, and two-camera
+> time alignment are built and verified. No camera calibration, club tracking, 3D
+> reconstruction or coaching exists yet. Sections below marked _Not yet
+> implemented_ say so rather than describing features that do not exist. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
@@ -42,7 +44,7 @@ apps/desktop/          Tauri 2 + React 19 + TypeScript + Tailwind 4
 packages/types/        Shared types (generated from Pydantic + hand-written IPC)
 python/analyzer/       Analysis engine
 models/                Model manifest (weights fetched, not committed)
-docs/                  Architecture, decisions, roadmap
+docs/                  Architecture, coordinate systems, decisions, roadmap
 scripts/               Bootstrap, codegen, model download, health check
 ```
 
@@ -93,9 +95,11 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 4-13 outstanding._ A clip can be imported,
-inspected, run through pose estimation, and filtered into trajectories with
-derivatives — from the app's **Video** screen or from a terminal:
+_Partially implemented — Phases 9-13 outstanding._ A clip can be imported,
+inspected, run through pose estimation, filtered into trajectories with
+derivatives, segmented into swing phases, measured, and aligned against a second
+camera — all of it from the app's **Video** screen except project management, and
+all of it from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -103,6 +107,27 @@ uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
 uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
 uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
 uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyorder 4
+uv run --project python analyzer phases  path/to/swing.mov   # takeaway/top/impact/finish
+uv run --project python analyzer metrics path/to/swing.mov   # biomechanics
+uv run --project python analyzer metrics path/to/swing.mov --slow-motion 8
+
+# Two cameras, one swing.
+uv run --project python analyzer sync faceon.mov dtl.mov     # relate their clocks
+uv run --project python analyzer sync faceon.mov dtl.mov --slow-motion-target 8
+uv run --project python analyzer sync faceon.mov dtl.mov --anchor impact=204:252
+
+# Camera geometry: what a pixel means.
+uv run --project python analyzer calibrate board board.png      # one to print
+uv run --project python analyzer calibrate camera board.mov --role face_on --square-mm 34.6
+uv run --project python analyzer calibrate stereo 1 faceon_board.mov dtl_board.mov
+uv run --project python analyzer calibrate show 1               # what may be claimed
+
+# Sessions, which remember which clips belong together.
+uv run --project python analyzer project create "Tuesday range"
+uv run --project python analyzer project add 1 faceon.mov --role face_on
+uv run --project python analyzer project add 1 dtl.mov --role down_the_line --slow-motion 8
+uv run --project python analyzer project sync 1                # stored on the project
+uv run --project python analyzer project list
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -113,10 +138,43 @@ Filtering reads those landmarks back and produces position, velocity and
 acceleration per landmark, along with an account of what it refused: detections
 below the confidence gate, gaps too long to bridge, and windows without enough
 support to fit. Nothing is persisted — filtering a clip costs milliseconds
-against seconds of extraction. No metrics or coaching consume it yet.
+against seconds of extraction.
 
-The engine methods are `doctor`, `probe_video`, `extract_poses` and
-`filter_poses`.
+Phase detection locates the takeaway, top, impact and finish, and reports a
+confidence for each built from three measured factors. A clip with no swing in
+it produces no events and an explanation, rather than events at frame zero. The
+app's **Swing phases** panel adds a scrubbable timeline for stepping through the
+clip frame by frame, which is the only way to actually check whether an event
+landed where it should. `scripts/plot_phases.py` writes the same signals as a
+plot and a per-frame CSV.
+
+Metrics turn those phases into measured quantities — posture, rotation, hands
+and arms, timing — each with a unit, the frames it came from, a decomposed
+confidence and a methodology. Metrics that cannot honestly be computed from a
+given recording are listed as refusals with the reason, rather than omitted.
+`scripts/overlay_metrics.py` draws each value on the frame it was measured from,
+which is the only way to tell a correct angle from a plausible one.
+
+Synchronisation relates two cameras' clocks, which everything above two views
+depends on: triangulating a point is only meaningful for two views of the same
+instant. It reports an offset with an uncertainty, a clock rate only when the
+evidence supports one, and — the number that matters most — how far the swing
+events in the two clips disagree, measured against the floor the two frame rates
+impose. **It cannot tell you that both cameras filmed the same swing**; it aligns
+swing-shaped signals, and two different swings align perfectly happily. What they
+cannot do is agree about phase durations, so that disagreement survives as
+residual, and a residual many times the floor is the system saying so.
+
+A **project** records which clips belong to one session and stores their
+alignment. It is the only state in this system that cannot be recomputed from the
+video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
+(`$XDG_DATA_HOME` elsewhere) rather than in the cache, and clips are identified by
+content so moving a file does not break the record of what it is.
+
+The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
+`detect_phases`, `compute_metrics`, `sync_clips`, `sync_project`,
+`create_project`, `list_projects`, `get_project`, `delete_project`, `add_clip`,
+`remove_clip` and `relocate_clip`.
 
 ## 6. Supported video formats
 
@@ -166,7 +224,8 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 4-11 outstanding._ Three stages are built.
+_Partially implemented — Phases 9-11 outstanding._ Five stages are built; what
+sits on top of them is in §10 and §11.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -192,22 +251,194 @@ mutually consistent. Low-confidence detections become absences, absences longer
 than the gap policy stay absent, and windows without enough observations emit
 nothing at all. See [ADR-0009](docs/decisions/ADR-0009-local-polynomial-filtering.md).
 
-Phase detection, club and ball tracking are not built. Planned stages and their
-ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
+**Swing phases.** The first golf-specific layer: everything under it would serve
+any moving body. Four events — takeaway, top, impact, finish — are located from
+the shape of the hand-speed signal, deterministically and without a model. Each
+carries a confidence built from three measured factors (how clearly the signal
+singles the instant out, how well the landmark was seen around it, and whether
+the frame rate can resolve an event of that duration at all), reported
+separately because a single number hides which of them was weak.
+
+Impact is a **kinematic estimate, not an observation** — nothing here sees the
+ball or the club — and it is corroborated against an independent signal, the
+lowest point the hands reach after the top. On the reference clip the two agree
+to within one frame. Phases 10 and 11 replace the corroboration with real
+evidence.
+
+Club and ball tracking are not built. Planned stages and their ordering are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## 9. 3D reconstruction methodology
 
-_Not yet implemented — Phases 8-9._ The system will distinguish
-`UNCALIBRATED` / `INTRINSIC_ONLY` / `STEREO_CALIBRATED` and will refuse to make
-metric-scale claims without stereo calibration.
+_Triangulation not yet implemented — Phase 9._ Both of its prerequisites are.
 
-## 10. Biomechanics methodology
+`CalibrationStatus` is `none`, `intrinsics` or `stereo`, and the metric layer
+gates on it centrally. **Three values rather than two, because a calibrated
+camera is not a 3D camera.** A calibrated pixel names a *direction*; how far
+along that direction anything sat is exactly what the projection destroyed. Two
+such rays intersect and one does not, so `intrinsics` permits removing the lens
+from a landmark and permits no metric-scale claim whatever. `apply.bearings`
+returns unit vectors for that reason, and nothing in the calibration package
+returns a 3D point.
 
-_Not yet implemented — Phase 5._ Every metric will carry name, value, unit,
-phase, confidence, source frames, and methodology. Angles derived from a single
-2D camera will be labelled as projected, not true 3D rotation.
+**Prerequisite one, Phase 7: the two cameras' clocks.** Triangulating a point
+from two views is only meaningful for two views of the same instant. An offset
+known to 3.4 ms on a 120 fps pair bounds how much of the disagreement between
+two views is real parallax and how much is one camera looking a frame later —
+the difference between a reconstruction error and a timing error, which are not
+separable after the fact.
+[ADR-0011](docs/decisions/ADR-0011-affine-time-map.md).
 
-## 11. Model architecture
+**Prerequisite two, Phase 8: what a pixel means.** Charuco board, intrinsics per
+camera, extrinsics between them, all measured and all gated. The gate is the
+interesting part, because the obvious one does not work:
+
+| number                | what it answers                       | gates? |
+| --------------------- | ------------------------------------- | ------ |
+| RMS reprojection error | how well the model fits these views   | gross failure only |
+| reported σ(fx)        | what the fit says about its own spread | a backstop |
+| coverage              | what the views could possibly determine | **yes** |
+
+A board held square to the camera at one distance cannot separate focal length
+from distance, so it determines almost nothing — and fits beautifully. Measured,
+the residual stays at 0.21–0.27 px while the focal length error moves from 0.05%
+to 23%, and the parameter uncertainty the fit reports is *smallest* where the
+answer is worst. Full reasoning in
+[ADR-0012](docs/decisions/ADR-0012-calibration-coverage.md).
+
+The two cameras do not need a genlock. What stereo extrinsics actually need is
+that nothing moved between the two frames, so the sync uncertainty is multiplied
+by the board's measured image speed and reported as a displacement in **pixels**
+— the same unit as the reprojection error it would otherwise be mistaken for.
+Three frames of stillness per board position is the whole requirement, and that
+recovers the baseline to 0.104% and the rotation to 0.031°.
+
+## 10. Coordinate systems and camera views
+
+Every number here is a measurement taken in some reference frame, and most ways
+to get one wrong produce a plausible number rather than an error. Full
+conventions in [docs/coordinate-systems.md](docs/coordinate-systems.md).
+
+| Frame          | Units           | y    | Isotropic | Metric | Status              |
+| -------------- | --------------- | ---- | --------- | ------ | ------------------- |
+| `IMAGE`        | x/W, y/H        | down | **no**    | no     | stored              |
+| `FRAME_WIDTHS` | x/W, (H−y_px)/W | up   | yes       | no     | derived on read     |
+| `HIP_LOCAL`    | approx. metres  | up   | yes       | approx | stored              |
+| `CAMERA`       | metres          | —    | yes       | yes    | **Phase 8, absent** |
+| `WORLD`        | metres          | —    | yes       | yes    | **Phase 9, absent** |
+
+`IMAGE` is what a pose estimator emits and a bad frame to measure in, for two
+reasons that both fail silently: it is **anisotropic** (x divided by the frame
+width and y by its height, so on a 1080x1920 clip the same displacement measures
+0.5625 times as much vertically, and a line genuinely at 45° reads as 29.4°) and
+its **y points down** (so a missing flip inverts the top of the backswing into
+the bottom).
+
+`FRAME_WIDTHS` fixes both, and the conversion happens **once, below the filter**.
+That placement is the point. A consumer cannot forget it — before Phase 6 the
+correction lived above phase detection, which therefore measured hand travel in
+the uncorrected frame — and the derivatives come out right for free, because the
+filter is linear and a flip applied to positions before fitting emerges correctly
+signed in the velocity.
+
+`CAMERA` and `WORLD` are named without being implemented, which is the one place
+this project declares what it cannot do. A later phase should add the
+_capability_, not the concept; asking for either today raises an error naming the
+phase that supplies it.
+
+**Camera views are a separate question, and the one that decides what a number
+means.** The view is measured from the projected width of the shoulder line at
+address, in torso lengths — 0.83 on the face-on reference clip against 0.10 on
+the down-the-line one. Every metric carries the view it was measured in and an
+`interpretation` saying what it corresponds to on the body from there.
+
+Spine tilt is the worked example. The identical computation gives **+4.6° of
+lateral side bend** face-on and **+35.5° of forward posture angle** down the
+line. Neither is interpretable without knowing where the camera stood.
+
+Metrics a view cannot support are refused rather than relabelled: shoulder turn,
+pelvis turn and X-factor down the line, hand depth face-on. An oblique camera is
+reported as `UNKNOWN` rather than rounded to the nearer label, and then nothing
+is blocked by the view alone — each metric's own conditions decide.
+
+## 11. Biomechanics methodology
+
+Every metric carries a name, a value, a unit, the swing event or phase it was
+measured at, the frames it came from, a three-part confidence, and a methodology
+in words that is never omitted. It also carries a **basis**, and that field is
+the one doing the real work.
+
+Everything measured so far comes from a single uncalibrated camera, which
+flattens three dimensions into two. No arithmetic afterwards puts the third one
+back. So rather than a disclaimer in a document, the kind of claim a number
+represents is a typed field on the contract:
+
+| basis                 | what the number is                                  |
+| --------------------- | --------------------------------------------------- |
+| `temporal`            | a duration, or a ratio of durations                 |
+| `image_plane`         | a distance or speed between two points in the frame |
+| `projected_angle`     | the angle between two segments as they appear       |
+| `foreshortened_angle` | rotation inferred from how much a segment shortened |
+
+`temporal` is the only one of the four that measures the body rather than a
+picture of it. A consumer that wants to say "your shoulders turned 50 degrees"
+has to go past a field saying it is a foreshortening estimate. Full reasoning in
+[ADR-0010](docs/decisions/ADR-0010-projected-biomechanics.md).
+
+**Rotation is measured, not assumed.** A shoulder line of fixed real width
+projects to less as it turns away from the camera, by the cosine of the turn, so
+`arccos(span / span_at_address)` recovers the angle from two lengths in the same
+image — focal length, distance and sensor size all cancel in the ratio. It
+cannot tell a turn from its mirror image, so values are magnitudes; and it is
+ill-conditioned near zero, where `dθ/d(span)` goes as `1/sin θ`, which is
+exactly why `sin θ` is the confidence factor rather than a number someone chose.
+
+**The method's premise is checked rather than trusted.** Foreshortening needs
+the player square to the camera at address. If the body line projects more than
+1.25× wider anywhere in the clip than it did at address, that did not happen,
+and the rotation metrics are refused with the measured ratio in the reason. On
+the reference footage the two cases are not close: 1.12× face-on against 7.2×
+down-the-line.
+
+**Confidence is three measured factors and their product**, matching how Phase 4
+reports an event:
+
+| factor        | what it measures                                              |
+| ------------- | ------------------------------------------------------------- |
+| `observation` | reported visibility of the landmarks used, on the frames used |
+| `anchor`      | the Phase 4 confidence of the event or phase measured at      |
+| `method`      | how sharply the method itself pins the quantity down          |
+
+None of the three is a policy constant. `method` is computed from the data for
+each basis: the fraction of a duration that is not frame-rate quantisation, the
+fraction of a segment lying in the image plane, or the sine of the angle the
+arccos returned. The factors answer _how well this method determined this
+quantity as defined_ — not how close it is to an anatomical truth, which is what
+`basis` is for. Mixing the two into one scalar would make it uninterpretable,
+because "the landmark was blurry" and "a camera cannot see rotation" have
+completely different fixes.
+
+**Lengths are in torso lengths**, not pixels or frame widths. A frame width
+halves when the camera is moved twice as far away; the player's torso does not.
+It is not a metric unit and does not pretend to be one.
+
+**Lead and trail arms are worked out from the video.** Which physical arm leads
+depends on handedness, which no pose sequence states, and assuming right-handed
+would silently mislabel every left-handed player. At the top of the backswing
+the hands sit over the _trail_ shoulder, so projecting their offset from the
+chest onto the shoulder line names the side. Down the line that line points
+nearly at the camera and the projection is noise — so no side is named and the
+lead/trail metrics are refused, which is correct, because that view does not
+show it.
+
+Twenty quantities are registered: spine tilt, left and right knee flex, hip
+sway, head sway and lift; shoulder turn, pelvis turn, X-factor, shoulder and
+pelvis tilt; hand path length, peak hand speed, lead and trail arm angle; and
+backswing, downswing, follow-through and takeaway-to-impact durations with the
+tempo ratio. Each is declared once, with its unit and basis, so a unit written
+next to a computation cannot drift from the one in the documentation.
+
+## 12. Model architecture
 
 _No model is trained — Phase 12._ No accuracy figure will be published without a
 real labelled evaluation set with session- and player-grouped splits.
@@ -224,21 +455,20 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
-## 12. Testing
+## 13. Testing
 
 ```bash
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                |
-| ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| pytest     | 407   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                            |
-| Vitest     | 60    | IPC error normalisation, health screen, video metadata rendering, extraction panel                   |
-| Playwright | 15    | UI layout, engine-data rendering, import flow, failure panels                                        |
+| Suite      | Count | Scope                                                                                                                                                       |
+| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 758   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                   |
+| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                |
+| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                          |
 
-All 494 pass as of Phase 3. (The counts above are what the suites report today;
-earlier revisions of this table understated them.)
+All 831 pass as of Phase 7.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -276,11 +506,39 @@ shifts position and leaves derivatives alone, shifting all timestamps changes
 nothing, and reversing time negates velocity while preserving acceleration —
 which is the property that catches a sign error in the local coordinate.
 
+Phase detection is judged the same way, against synthetic swings built from a
+_velocity profile_ that is integrated into a trajectory, so the instants the
+detector is meant to find are inputs rather than things read off a plot
+afterwards. The hands travel a circular arc rather than a vertical line, because
+the simpler fixture gets impact wrong in a way that matters: on a real swing the
+hands are at the bottom of their arc and moving horizontally at impact, so peak
+speed and lowest position coincide, and a vertical fixture separates them and
+makes the corroboration check meaningless. That fixture caught a defect the
+reference footage did not — the takeaway search finding the pause at the top of
+the backswing instead of the address, which the face-on clip survived only
+because its speed at the top was 0.130 against a 0.131 threshold.
+
+The biomechanics tests take the same line one step further: the synthetic body
+is written in **plane coordinates** — x rightwards, y upwards, both in frame
+widths — and converted backwards into the normalised image coordinates an
+estimator would have produced, on a deliberately non-square 1080x1920 frame. The
+engine then has to undo the aspect ratio and the y flip to get back to the
+numbers the body was built with. A fixture written directly in image coordinates
+could not tell a correct engine from one that skipped both.
+
+The expected angles are facts rather than agreements. A knee built at 25 degrees
+of flex must read 25; an arm whose elbow sits on the segment between shoulder
+and wrist must read 180; an arm whose elbow sits on the circle with that segment
+as its diameter must read 90, by Thales' theorem. Turn schedules are held
+constant across the instants they are measured at, because a local polynomial
+fit reproduces a constant exactly — so the recovered shoulder turn is the
+constructed one, not whatever the smoothing of a curve happened to leave.
+
 CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
 
-## 13. Performance benchmarks
+## 14. Performance benchmarks
 
 Measured on the reference machine. Every figure here came out of a script in
 `scripts/`; none is estimated.
@@ -369,10 +627,128 @@ Throughput: 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
 17.5 ms for a 240-frame clip, against ~1.2 s to extract poses for the same 68
 frames. Filtering is not a bottleneck, which is why nothing is cached.
 
-No figures exist yet for metrics, because they do not exist yet. A general
-benchmark harness arrives in Phase 17.
+**Biomechanics** (2026-09-16, `scripts/benchmark_metrics.py`, median of 9, on
+the two reference swings at a 0.15 s window):
 
-## 14. Limitations
+| Clip           | Frames | Filter  | Phases | Metrics | Produced | Refused |
+| -------------- | ------ | ------- | ------ | ------- | -------- | ------- |
+| PW_face-on.mp4 | 68     | 17.8 ms | 0.3 ms | 2.1 ms  | 39       | 1       |
+| iron_dtl.mp4   | 96     | 19.9 ms | 0.3 ms | 1.8 ms  | 35       | 3       |
+
+Against ~1.3 s to extract poses for the same clip. Filtering dominates the three
+because it fits a polynomial at every sample of 33 landmarks, while the metric
+layer reads a few dozen frames of a result already in memory. Nothing downstream
+of extraction is cached, for the same measured reason as Phase 3.
+
+The last two columns are the more interesting measurement, and they run both
+ways. The down-the-line clip refuses shoulder turn, pelvis turn and X-factor,
+because that view does not contain them; the face-on clip refuses hand depth,
+because the axis it measures along runs along the target line there and is a
+different quantity under the same name. Each clip measures what its camera
+position supports and says what it cannot.
+
+### Two-camera synchronisation
+
+`scripts/benchmark_sync.py`. **Against known offsets, not against ground truth.**
+No simultaneous two-camera recording exists in this project, so what is measured
+is one synthetic swing sampled by two simulated cameras with the offset as an
+input. That establishes the method recovers what was put in; it does not
+establish that a real pair works, because the simulated cameras see the same
+projection of the same body and two real cameras do not.
+
+Median absolute error over 9 seeds, at the landmark noise measured from real
+footage in Phase 3:
+
+| Pair          | Frame-rate floor | Recovered offset error |
+| ------------- | ---------------- | ---------------------- |
+| 240 + 240 fps | 1.7 ms           | **0.5 ms**             |
+| 120 + 120 fps | 3.4 ms           | **0.4 – 4.2 ms**       |
+| 120 + 30 fps  | 9.9 ms           | **0.3 ms**             |
+| 30 + 30 fps   | 13.6 ms          | **0.5 ms**             |
+
+The floor is what the two frame rates permit for a single located instant. The
+correlation beats it because it averages hundreds of samples; anchoring on the
+four swing events instead gives 14–27 ms on the same pairs, which is what decided
+the design. Aligning two 312-frame clips costs 0.5 ms.
+
+### Camera calibration
+
+`scripts/benchmark_calibration.py`. **A floor, not an estimate.** The camera is
+an input — a synthetic one at fx = 1400 px on a 1920x1080 frame with k1 = −0.28
+— and a Charuco board is rendered through it and detected by the real detector.
+What the renderer does not contain is everything that makes real calibration
+footage hard: motion blur, rolling shutter, defocus, JPEG ringing on the marker
+borders, and a printed sheet that has bowed off flat.
+
+The headline sweep, over the one thing a person controls. Median of 3 seeds, 14
+board views each:
+
+| tilt spread | RMS px | reported σ(fx) | **true fx error** |
+| ----------- | ------ | -------------- | ----------------- |
+| ±0°         | 0.220  | 0.012%         | **6.33%**         |
+| ±2°         | 0.210  | 0.012%         | **10.04%**        |
+| ±10°        | 0.269  | 1.22%          | **23.25%**        |
+| ±20°        | 0.245  | 0.656%         | 0.10%             |
+| ±35°        | 0.218  | 0.314%         | **0.05%**         |
+
+The reprojection error is flat across a range over which the focal length error
+moves by a factor of four hundred, and the uncertainty the fit reports about
+itself is thirty times *smaller* where the answer is worst. That is why coverage
+is the gate: it is the only one of the three that describes the capture rather
+than the fit. [ADR-0012](docs/decisions/ADR-0012-calibration-coverage.md).
+
+Frame coverage and the distortion model, measured as error at the frame edge —
+the quantity a landmark actually inherits:
+
+| capture         | model   | fx err | error at the frame edge |
+| --------------- | ------- | ------ | ----------------------- |
+| corners reached | rt4     | 0.05%  | **2.1 px**              |
+| corners reached | rt5     | 0.05%  | 9.5 px                  |
+| corners reached | pinhole | 9.64%  | 202.3 px                |
+| centred only    | rt4     | 0.14%  | 34.4 px                 |
+| centred only    | rt5     | 0.13%  | **180.6 px**            |
+
+OpenCV's fifth distortion coefficient is worth a factor of four at the edge on a
+good capture, and a factor of five in the other direction on a poor one, because
+a term the data does not determine takes whatever value cancels the residual
+where the board was and diverges where it was not. Four is the default.
+
+What the lens does to a landmark, which is what a calibration buys a
+single-camera user:
+
+| lens                  | at the frame edge | worst  | h-fov |
+| --------------------- | ----------------- | ------ | ----- |
+| phone main (k1 −0.28) | 171.5 px          | 199 px | 68.9° |
+| phone wide (k1 −0.42) | 219.9 px          | 248 px | 93.7° |
+| mild (k1 −0.10)       | 34.0 px           | 41 px  | 56.1° |
+| long lens (k1 −0.02)  | 2.5 px            | 3.0 px | 35.5° |
+
+On the reference swing `data/face-on/PW_face-on.mp4`, undistorting with a
+plausible phone lens moves the trail arm angle at the top by +1.19°, shoulder
+turn at impact by +0.87°, and peak hand speed by 3.0% — and moves **no swing
+event**, because phase detection reads the shape of a speed curve and a smooth
+radial correction does not move its extrema. That lens is assumed rather than
+measured, so the table says how large the correction is on real footage, not
+what the corrected numbers are.
+
+Stereo extrinsics, both cameras at 30 fps with their clocks related to 12 ms:
+
+| board             | pairing error | usable pairs | baseline error | rotation error |
+| ----------------- | ------------- | ------------ | -------------- | -------------- |
+| held 1 s          | 0.00 px       | 7            | **0.104%**     | **0.031°**     |
+| held **3 frames** | 0.00 px       | 7            | 0.104%         | 0.031°         |
+| held 2 frames     | —             | 2            | refused        | —              |
+| never stops       | —             | 0            | refused        | —              |
+
+Three frames of stillness — a tenth of a second at 30 fps — is the entire
+requirement, and the images are equally sharp in every row.
+
+Cost: 3.7 ms per frame to detect the board at 1920x1080, and 13.5 ms to fit
+intrinsics from 14 views.
+
+A general benchmark harness arrives in Phase 17.
+
+## 15. Limitations
 
 - **macOS/Apple silicon only, so far.** Nothing is known to be Windows- or
   Linux-incompatible, but neither has been tested, and the MediaPipe wheel
@@ -384,6 +760,54 @@ benchmark harness arrives in Phase 17.
   `tauri-driver` and a platform WebDriver, which is not set up.
 - **Engine requests are serialised.** A mutex guards the worker; concurrent
   request multiplexing is not implemented because nothing needs it yet.
+- **Nothing can tell that two clips show the same swing.** Synchronisation
+  aligns swing-shaped signals, and two _different_ swings align just as happily.
+  What they cannot do is agree about phase durations, so the disagreement
+  survives as a residual — and that residual is the only evidence on the
+  question. On the only two-angle pair in this repository it is 40x the
+  frame-rate floor, which is the correct verdict and is reported as a confidence
+  of 0.10.
+- **No calibration has ever been checked against a real camera.** Every
+  published calibration figure comes from a synthetic camera whose parameters
+  were inputs to the renderer that produced the board images. That establishes
+  the *shape* of the relationship the gate rests on — that the reprojection
+  error is blind to a degeneracy and coverage is not — and it does not establish
+  what any real phone will achieve. The renderer has no motion blur, no rolling
+  shutter, no defocus and no sheet bowed off flat, so every error published is a
+  floor. `benchmark_calibration.py --real <dir>` runs the same pipeline over real
+  board footage and scores nothing, because there is nothing to score it against.
+- **A calibration is silently invalidated by anything but a resolution change.**
+  It belongs to a camera at one zoom, one lens and one capture setting. Frame
+  size is the only part of that a video file records, and a mismatch there is
+  refused; a different zoom, a switch to the ultra-wide, or digital
+  stabilisation being left on leave no trace at all and produce a plausible
+  wrong answer. `--notes` records what the file cannot, which is a convention
+  rather than a check.
+- **Calibrating one camera does not make it see depth, and the word
+  "calibrated" invites believing it does.** A calibrated pixel is a direction.
+  `CalibrationStatus` keeps `intrinsics` and `stereo` apart for that reason and
+  the metric layer gates on it — but the gate blocks nothing today, because no
+  metric in this build claims three dimensions. It is machinery waiting for
+  Phase 9 rather than machinery currently refusing anything.
+- **Neither camera may move between the board capture and the swing**, and
+  nothing detects that one was nudged. The extrinsics describe where the cameras
+  stood; a bumped tripod makes every triangulated point wrong with no symptom.
+- **Stereo pairing can alias.** Board positions spaced regularly in time, with a
+  clock offset wrong by exactly that spacing, pair each frame with its
+  neighbour: simultaneous to the millisecond and showing the board in two
+  different places. The fit's residual catches it, which is why stereo gates on
+  reprojection error where intrinsics deliberately do not — but the pairing's own
+  numbers look perfect.
+- **Synchronisation has never been checked against real ground truth.** That
+  needs two cameras that genuinely filmed one swing at once, with their clocks
+  related by something outside this system — a clapperboard, a flash, a genlock.
+  The published figures are recoveries of offsets that were put in
+  synthetically, which is a weaker claim and is labelled as one.
+- **Two clips share one smoothing window, so the coarser sets it.** Smoothing
+  them differently would shift the features an alignment keys on by an amount
+  nothing measures. A 30 fps camera therefore cannot support the 0.10 s default
+  for either clip; the engine refuses and names the window that rate would
+  support.
 - **No packaging story yet.** `npm run dev` runs from the repository and
   resolves the Python project by walking up from the working directory. A
   bundled app needs the engine shipped as a sidecar; that is not built.
@@ -408,6 +832,87 @@ benchmark harness arrives in Phase 17.
   used during development are 24–30 fps, so this is the ordinary case rather than
   an edge one, and it is the first quantitative backing for the ≥120 fps the
   capture protocol asks for.
+- **Impact is inferred from the hands, and runs marginally early.** Hand speed
+  peaks slightly before the club reaches the ball, so the reported frame is a
+  kinematic estimate with a known bias in a known direction. It is corroborated
+  against the lowest point of the hand arc, and Phases 10-11 will replace that
+  with club and ball evidence.
+- **Rotation is unreliable on a full turn, and now says so.** Once a player
+  turns far enough for the far shoulder to pass behind the torso, MediaPipe
+  infers its position from a body prior — and reports a visibility of 1.00 while
+  doing it. On tour-pro footage the implied shoulder turn varies by 27 degrees
+  across frames where the player barely moves. Stability is now measured from
+  the geometry and reported as an uncertainty in degrees, and a turn is refused
+  above a bound; but the underlying landmark is still a guess, and a wide
+  uncertainty is a warning rather than a correction.
+- **An uncertainty needs enough frames to measure.** At 30 fps the stability
+  window holds three frames, which cannot separate a jumping landmark from a
+  turning body, so the uncertainty is reported as unknown. Slow-motion footage
+  and high frame rates are where it becomes available.
+- **Slow motion has to be declared.** Nothing in a conformed file records the
+  playback rate, so a slow-motion clip is refused until `--slow-motion` is
+  supplied. The factor is not a relabelling of the clock: the smoothing window
+  is in real seconds too, so it decides how many frames that window holds and
+  therefore where events land.
+- **Impact is estimated worse than its own corroboration, on the one clip
+  where that can be checked.** The ball leaves the tee between two known frames
+  in the tour-pro face-on clip. Peak hand speed — Phase 4's primary estimate —
+  lands 17 to 40 frames away; the lowest point of the hand arc, carried only as
+  corroboration, lands within 4 and is stable across the assumed slow-motion
+  factor. One clip is not enough to change the estimator, and Phase 11 should
+  evaluate it first.
+- **Nothing here is metric.** Lengths are in torso lengths and the frame they
+  are measured in is the frame's own width. The same swing filmed from twice the
+  distance gives the same torso-length numbers and different frame-width ones,
+  which is the point — but neither is centimetres, and nothing here can produce
+  centimetres until a calibrated camera does in Phase 8.
+- **The camera view is inferred from one measurement.** The shoulder line's
+  projected width at address separates face-on from down-the-line by a factor of
+  eight on the reference clips, which is a wide margin, but it is one signal and
+  its thresholds rest on an anatomical assumption — that shoulder width is a
+  fairly stable multiple of torso length — rather than on a labelled set.
+- **`DOWN_THE_LINE` does not say which end of the target line.** A camera behind
+  the player and one in front foreshorten the shoulder line identically. The
+  measurable consequences are the same, but the sign of anything measured along
+  the frame's horizontal axis is therefore an image direction rather than an
+  anatomical one.
+- **Nothing in the metric layer sees three dimensions.** Every angle is a
+  projection and every distance is an image-plane distance, including the ones
+  named after 3D quantities. Motion directly towards or away from the camera
+  contributes nothing to any of them. This is recorded per metric in the `basis`
+  field rather than left to a reader to remember, but it is a limitation of the
+  input and no amount of labelling removes it. Phases 8 and 9 do.
+- **Shoulder and pelvis turn are magnitudes with no direction.** Foreshortening
+  is a cosine, and a cosine is even, so a turn one way and its mirror image
+  produce the same number. Recovering the sign needs depth.
+- **Rotation needs a face-on recording, and refuses without one.** The
+  foreshortening baseline is the body line's projected width at address, which
+  only stands in for its true width if the player was square to the camera
+  there. Down-the-line clips fail that and have their rotation metrics refused;
+  they keep tilts, posture, hand and timing metrics. The baseline is also only a
+  lower bound on the true width in general — a player never quite square to the
+  camera has every turn under-reported by an amount nothing here can measure.
+- **Metric thresholds are structural, not golf norms.** As in Phase 4, the
+  numbers in `MetricConfig` exist to decide when a measurement is too
+  ill-conditioned to report, not to describe what a swing should look like.
+- **Biomechanics is validated on one swing and one synthetic body.** The
+  synthetic fixture pins the arithmetic against angles known by construction,
+  and every value on the face-on reference clip was checked against the frame it
+  came from with `scripts/overlay_metrics.py`. Neither is ground truth: nobody
+  has measured this player's actual shoulder turn. That needs the labelled set
+  Phase 12 builds.
+- **Phase detection is validated on two swings.** The face-on reference clip is
+  the only recording here containing a swing the pipeline can see; the
+  face-on and iron down-the-line reference clips both detect cleanly; the driver
+  down-the-line clip is 24 fps and loses the wrists to motion blur through the
+  part where the swing happens, so it is refused. Every event was checked by
+  hand against the signal, which is not the same as being checked against ground
+  truth — that needs the labelled set Phase 12 builds.
+- **Detection thresholds are structural bounds, not golf norms.** They exist to
+  reject motion that cannot be a swing (a two-second descent, hands that never
+  travel further than a fraction of the subject's torso), and are deliberately
+  loose. Numbers tight enough to describe what a swing _should_ look like would
+  need a labelled set.
 - **Filter accuracy is measured against models of swing motion, not a swing.**
   The trajectories in the benchmark have exact derivatives, which real footage
   cannot until Phase 12 provides labelled landmarks. They were chosen to resemble
@@ -418,14 +923,25 @@ benchmark harness arrives in Phase 17.
   prefer.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
-## 15. Future work
+## 16. Future work
 
-Phases 1-20: video ingestion, pose extraction, temporal filtering, swing phase
-detection, biomechanics metrics, DTL analysis, two-camera synchronisation,
-camera calibration, 3D reconstruction, club tracking, ball detection, temporal
-ML, the coaching engine, desktop visualisation, 3D rendering, swing comparison,
-performance work, and documentation. Sequencing, deliverables, and exit criteria
-per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 8-20: camera calibration, 3D reconstruction, club tracking, ball
+detection, temporal ML, the coaching engine, desktop visualisation, 3D
+rendering, swing comparison, performance work, model management, test hardening
+and documentation. Sequencing, deliverables, and exit criteria per phase are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+Phase 7 began the two-camera work that eventually makes the projections in §11
+unnecessary, and settled the first of the two things a second view needs: the
+relation between the cameras' clocks, with the error in it carried rather than
+assumed away. Phase 8 settles the second — where the cameras were — and only
+with both can Phase 9 claim a measurement about a body rather than about a
+picture of one.
+
+Two open items carry forward. Synchronisation has never been checked against a
+genuinely simultaneous pair, because none exists here; and Phase 4's event
+confidence does not detect a badly located event, which Phase 7 measured and
+deliberately did not fix.
 
 ## Licence
 

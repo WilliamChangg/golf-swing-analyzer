@@ -1,0 +1,578 @@
+{
+  "$defs": {
+    "BodySide": {
+      "enum": [
+        "left",
+        "right"
+      ],
+      "title": "BodySide",
+      "type": "string"
+    },
+    "CalibrationStatus": {
+      "description": "What this build may claim about the geometry of a recording.\n\nThe honesty gate of Phases 8 and 9, as a type. It is ordered, and\n`at_least` is how a consumer asks the question it actually has -- \"may I\ntriangulate\" -- rather than enumerating the values that permit it and\nforgetting one when a fourth is added.\n\nNONE\n    No calibration. Every measurement is a statement about the image plane,\n    which is what Phases 5 and 6 produce and label as such. The lens's\n    distortion is present in every landmark and unmeasured.\nINTRINSICS\n    One camera's focal lengths, optical centre and distortion are measured.\n    Landmarks can be undistorted, so projected measurements improve, and a\n    pixel becomes a known direction. **Still no depth, so still no\n    metric-scale 3D claim.**\nSTEREO\n    Both cameras are calibrated and their relative pose is measured, so two\n    views of one instant give an intersection rather than two directions.\n    This is what Phase 9 triangulates with.",
+      "enum": [
+        "none",
+        "intrinsics",
+        "stereo"
+      ],
+      "title": "CalibrationStatus",
+      "type": "string"
+    },
+    "CameraView": {
+      "description": "Where the camera stood relative to the player.\n\nThe single fact that decides what a projected measurement *means*. The same\nspine tilt is lateral side bend seen face-on and forward posture angle seen\ndown the line; the same hip displacement is a slide towards the target in one\nand a move towards the ball in the other. Nothing in the arithmetic\ndistinguishes them, so the view is measured and carried on every metric, and\nthe anatomical reading is stated per view rather than assumed.\n\nFACE_ON\n    Perpendicular to the target line, looking at the player. The shoulder\n    line lies across the frame, so rotation is measurable by foreshortening\n    and left and right are distinguishable.\nDOWN_THE_LINE\n    Along the target line. The shoulder line points towards the camera and\n    collapses, so rotation about the spine is not recoverable, and the\n    frame's horizontal axis runs towards and away from the ball.\n\n    **Which end of the target line is not determined.** A camera behind the\n    player and one in front of them foreshorten the shoulder line\n    identically, and nothing else here separates them. The measurable\n    consequences are the same either way, which is why one label covers\n    both; what it costs is the sign of anything measured along the frame's\n    horizontal axis, so those quantities are reported as image directions\n    rather than as \"towards the player\" or \"away from them\". The reference\n    clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.\nUNKNOWN\n    Oblique, or too little of the body tracked at address to tell. Not a\n    failure: an oblique camera genuinely supports some measurements and not\n    others, and saying so beats picking the nearer label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "unknown"
+      ],
+      "title": "CameraView",
+      "type": "string"
+    },
+    "FrameGeometry": {
+      "description": "The displayed pixel dimensions IMAGE landmarks were normalised against.\n\nCarried with the landmarks because IMAGE space is **anisotropic** and\nnothing downstream can discover that on its own. x is divided by the frame\nwidth and y by the frame height, so on a 1080x1920 clip one pixel of\nvertical travel becomes 1/1920 while one pixel of horizontal travel becomes\n1/1080: the same displacement in pixels counts for 0.5625 as much going down\nas going across. Any Euclidean quantity that mixes the two -- a distance, a\nspeed, an angle -- is wrong by an amount that depends only on the shape of\nthe frame, and nothing about the result looks wrong.\n\nOne number fixes it, and it is not recoverable from the landmarks: the\naspect ratio. It is recorded here, at the point where it is still known,\nrather than re-derived later by probing a video file that may have moved.",
+      "properties": {
+        "width": {
+          "description": "Displayed frame width in pixels, after rotation.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "height": {
+          "description": "Displayed frame height in pixels, after rotation.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "FrameGeometry",
+      "type": "object"
+    },
+    "LeadSide": {
+      "description": "Which side of the body leads the swing, and how that was decided.\n\nNeeded because \"lead arm\" and \"trail arm\" are not \"left arm\" and \"right\narm\": they swap between a right- and a left-handed player, and nothing in a\npose sequence declares which is which.\n\nIt is inferred from a measurement rather than configured: at the top of the\nbackswing the hands sit over the **trail** shoulder, for either handedness\nand from either side of the player. Projecting the hand position onto the\nshoulder line therefore names the trail side directly, and the size of that\nprojection says how confidently.",
+      "properties": {
+        "side": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BodySide"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The leading side, or None when the evidence was too weak to name one."
+        },
+        "margin": {
+          "description": "How far the hands sat towards one shoulder at the top, as a fraction of half the shoulder span. 1.0 means directly over a shoulder, 0.0 means over the middle of the chest and therefore undecidable.",
+          "type": "number"
+        },
+        "shoulder_span_ratio": {
+          "description": "Projected shoulder span at the top, in torso lengths. A down-the-line camera sees the shoulders nearly end-on, which makes this small and the side undecidable -- correctly, because that view genuinely does not show it.",
+          "type": "number"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "side",
+        "margin",
+        "shoulder_span_ratio",
+        "methodology"
+      ],
+      "title": "LeadSide",
+      "type": "object"
+    },
+    "Metric": {
+      "description": "One measured quantity, with everything needed to interpret it.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MetricName"
+        },
+        "group": {
+          "$ref": "#/$defs/MetricGroup"
+        },
+        "label": {
+          "description": "Human-readable name, including the instant it was measured at.",
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        },
+        "basis": {
+          "$ref": "#/$defs/MetricBasis"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The instant this was measured at, for metrics taken at one."
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingPhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The interval this was measured over, for metrics spanning one."
+        },
+        "source_frames": {
+          "description": "Every frame whose landmarks entered this value, so it can be checked against the video rather than taken on trust.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "view": {
+          "$ref": "#/$defs/CameraView",
+          "description": "The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing."
+        },
+        "interpretation": {
+          "description": "What the number means anatomically from this view, in words. Separate from `methodology`, which says how it was computed: the arithmetic is the same from every camera position and the meaning is not.",
+          "type": "string"
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Measured uncertainty in the value, in the metric's own unit, where the method admits one. None means it was not quantified -- which is not a claim that the value is exact.\n\nReported separately rather than folded into `confidence` on purpose. The three confidence factors are dimensionless and multiply; an uncertainty has a unit and a meaning, and 'shoulder turn 53 degrees, give or take 6' tells a reader something no score between 0 and 1 can. Mapping it into one would need a scale nobody has measured."
+        },
+        "confidence": {
+          "$ref": "#/$defs/MetricConfidence"
+        },
+        "methodology": {
+          "description": "How this number was produced, in words. Never omitted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "group",
+        "label",
+        "value",
+        "unit",
+        "basis",
+        "source_frames",
+        "view",
+        "interpretation",
+        "confidence",
+        "methodology"
+      ],
+      "title": "Metric",
+      "type": "object"
+    },
+    "MetricBasis": {
+      "description": "What kind of claim a metric's value is.\n\nTEMPORAL\n    A duration, or a ratio of durations. Depends on the clock and nothing\n    else, so it is unaffected by where the camera stood. The only basis in\n    this phase that measures the body rather than a picture of it.\n\nIMAGE_PLANE\n    A distance or a speed between two points as they appear in the frame,\n    divided by the subject's torso length. Exact as a statement about the\n    image; it under-reports any motion that ran towards or away from the\n    camera, which it cannot see at all.\n\nPROJECTED_ANGLE\n    The angle between two segments as they appear in the frame. Equal to the\n    real joint angle only when both segments lie in the image plane, and\n    smaller than it otherwise. Never a 3D joint angle.\n\nFORESHORTENED_ANGLE\n    A rotation about the vertical inferred from how much a body segment\n    shortened in the image: a shoulder line seen at 60% of its full width\n    has turned about 53 degrees away from the camera. It assumes the segment\n    was square to the camera at its reference frame, and it is blind to\n    direction -- a turn and its mirror image shorten identically -- so the\n    value is a magnitude.",
+      "enum": [
+        "temporal",
+        "image_plane",
+        "projected_angle",
+        "foreshortened_angle"
+      ],
+      "title": "MetricBasis",
+      "type": "string"
+    },
+    "MetricConfidence": {
+      "description": "Why a metric is or is not trustworthy, decomposed.\n\nThree factors and their product, matching how Phase 4 reports an event's\nconfidence -- for the same reason. A single number says a metric is worth\n0.3 without saying whether the fix is a better camera angle, a brighter\nroom, or a faster shutter.",
+      "properties": {
+        "overall": {
+          "description": "Product of the three factors below.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "observation": {
+          "description": "Mean reported visibility of the landmarks this metric used, over the frames it used them on.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "anchor": {
+          "description": "Confidence of the swing event or phase this metric is measured at, propagated from phase detection. A perfectly measured angle at an instant that is not really the top of the backswing is not a measurement of anything.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "method": {
+          "description": "How well the method itself pins the quantity down, measured rather than assumed. For a duration, how finely the frame rate divides it. For a projected angle, the fraction of the segment lying in the image plane -- a segment seen nearly end-on subtends a noisy angle. For a foreshortened rotation, the sine of the angle found, which is how sharply the arccos converts a length into an angle there.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "overall",
+        "observation",
+        "anchor",
+        "method"
+      ],
+      "title": "MetricConfidence",
+      "type": "object"
+    },
+    "MetricConfig": {
+      "additionalProperties": false,
+      "description": "Policy for the biomechanics engine.\n\nAs in Phase 4, these are **structural bounds, not golf norms.** Nothing here\nstates what a good swing looks like. They exist to decide when a measurement\nis too ill-conditioned to report at all, and the thresholds are stated policy\nrather than measured optima, because no labelled set exists until Phase 12.",
+      "properties": {
+        "min_shoulder_span_ratio": {
+          "default": 0.35,
+          "description": "Projected shoulder span at the top, in torso lengths, below which the shoulder line is too foreshortened to read a direction from -- which is what naming the lead side depends on. Measured at the top rather than at address, and so a different question from the one the view thresholds answer: a down-the-line clip has the shoulders nearly square at the top even though they were end-on at address.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_lead_side_margin": {
+          "default": 0.25,
+          "description": "How far towards one shoulder the hands must sit at the top before the lead side is named. Below it, no side is reported and the metrics that need one are refused rather than assigned to a coin flip.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "face_on_span_ratio": {
+          "default": 0.55,
+          "description": "Projected shoulder width at address, in torso lengths, at or above which the camera is treated as face-on. The basis is anatomical rather than measured here: an adult's shoulder width is a fairly stable multiple of the distance from their shoulders to their hips, so a shoulder line spanning more than half of it cannot be pointing at the camera. The reference face-on clip measures 0.83.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "down_the_line_span_ratio": {
+          "default": 0.3,
+          "description": "Projected shoulder width at address, in torso lengths, at or below which the camera is treated as down-the-line. The reference down-the-line clip measures 0.10. Between this and `face_on_span_ratio` the view is reported as unknown rather than rounded to the nearer label -- an oblique camera is a real thing to have recorded, and it supports some measurements and not others.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "stability_window_s": {
+          "default": 0.06,
+          "description": "Half-width, in **real** seconds, of the window a rotation's stability is measured over. The body turns smoothly, so a shoulder line that jumps about within a window this short is the estimator guessing an occluded landmark rather than the player moving. Real seconds, so a slow-motion clip supplies proportionally more frames rather than a proportionally longer look at the swing.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_stability_frames": {
+          "default": 5,
+          "description": "Frames the stability window must contain before an uncertainty is quantified at all. A 30 fps recording supplies three, which is too few to separate a jumping landmark from a turning body -- so the uncertainty is reported as unknown rather than as a small number computed from almost nothing.",
+          "minimum": 3,
+          "type": "integer"
+        },
+        "max_rotation_uncertainty_deg": {
+          "default": 15.0,
+          "description": "Uncertainty above which a foreshortening rotation is refused rather than reported. Stated policy, not a measured optimum: it is roughly the point past which the number stops distinguishing a full turn from a half one, which is the distinction it exists to make.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_reference_excess": {
+          "default": 1.25,
+          "description": "How much wider than its address baseline a body line may project somewhere in the clip before the recording is judged not to be face-on and its rotations refused. Above 1 because landmark noise alone moves the maximum a little past address -- it reaches 1.12 on the face-on reference clip. A down-the-line recording, where the shoulders start end-on and open through the backswing, exceeds it by a wide margin rather than a marginal one.",
+          "exclusiveMinimum": 1.0,
+          "type": "number"
+        },
+        "min_torso_length": {
+          "default": 1e-06,
+          "description": "Torso length, in frame widths, below which the subject is too small or too poorly tracked to divide by. A guard against producing an enormous ratio from a torso that collapsed to a point.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "MetricConfig",
+      "type": "object"
+    },
+    "MetricGroup": {
+      "description": "Which family a metric belongs to. Presentation, not semantics.",
+      "enum": [
+        "posture",
+        "rotation",
+        "arms",
+        "timing"
+      ],
+      "title": "MetricGroup",
+      "type": "string"
+    },
+    "MetricName": {
+      "description": "Every quantity this engine knows how to measure.\n\nNamed per *quantity*, not per quantity-and-instant: `SPINE_TILT` at the top\nand at impact are the same measurement made twice, and they carry the same\nunit, basis and methodology. Which instant a particular value belongs to is\non the metric's `event` field, so the set of names does not grow by\nmultiplication every time another anchor becomes interesting.",
+      "enum": [
+        "spine_tilt",
+        "left_knee_flex",
+        "right_knee_flex",
+        "hip_sway",
+        "head_sway",
+        "head_lift",
+        "shoulder_turn",
+        "pelvis_turn",
+        "x_factor",
+        "shoulder_tilt",
+        "pelvis_tilt",
+        "hand_depth",
+        "hand_path_length",
+        "peak_hand_speed",
+        "lead_arm_angle",
+        "trail_arm_angle",
+        "backswing_duration",
+        "downswing_duration",
+        "follow_through_duration",
+        "takeaway_to_impact",
+        "tempo_ratio"
+      ],
+      "title": "MetricName",
+      "type": "string"
+    },
+    "MetricUnit": {
+      "description": "What a metric's value is in.\n\n`TORSO_LENGTHS` is the length unit throughout, rather than frame widths or\npixels. A distance in frame widths halves when the camera is moved twice as\nfar away; the same distance in the subject's own torso lengths does not. It\nis not a metric unit and does not pretend to be one -- it is a ratio of two\nmeasured image distances, which is exactly what survives an unknown camera.",
+      "enum": [
+        "degrees",
+        "seconds",
+        "ratio",
+        "torso_lengths",
+        "torso_lengths_per_s"
+      ],
+      "title": "MetricUnit",
+      "type": "string"
+    },
+    "RefusedMetric": {
+      "description": "A metric that was asked for and deliberately not produced.\n\nReported rather than silently omitted. An absent metric and a metric that\ncould not honestly be computed look identical in a list of results, and they\ncall for different responses: one is a gap in the engine, the other is a fact\nabout the recording that the person holding the camera can fix.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MetricName"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "reason"
+      ],
+      "title": "RefusedMetric",
+      "type": "object"
+    },
+    "RotationReference": {
+      "description": "The baseline a foreshortening rotation is measured against, and its check.\n\nA rotation here is a comparison of a body line's projected length against its\nlength when square to the camera. That baseline is taken **at address**,\nbecause that is where the method's premise says the player is square: they\nare set up to the ball with the camera in front of them.\n\nTaking it instead as the widest view anywhere in the clip was tried and is\nworse, for a reason the reference footage demonstrated. A maximum over a\nwhole clip is a maximum over that clip's landmark noise too, so it selects\nthe single frame where the estimator most overstated the span -- on the\nface-on reference clip, a frame just past impact where the shoulders read 12%\nwider than the player can physically be. Every rotation in the clip is then\nmeasured against an error.\n\nThe premise is still checked, by the fields below: if some frame mid-swing\nprojects substantially wider than address did, the player was not square\nthere, and this is not a face-on recording.",
+      "properties": {
+        "landmarks": {
+          "description": "Which segment: 'shoulders' or 'hips'.",
+          "type": "string"
+        },
+        "span": {
+          "description": "Median projected length over the address phase, in torso lengths.",
+          "type": "number"
+        },
+        "frames": {
+          "description": "The address frames the baseline was taken over.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "widest_span": {
+          "description": "Largest projected length anywhere in the clip, in torso lengths.",
+          "type": "number"
+        },
+        "widest_frame": {
+          "type": "integer"
+        },
+        "excess": {
+          "description": "widest_span / span. At most slightly above 1 on a face-on recording, where address is the squarest the line ever is. Far above it when the line is seen end-on at address and opens up through the swing, which is what a down-the-line camera sees.",
+          "type": "number"
+        },
+        "square_at_address": {
+          "description": "Whether `excess` is within the configured tolerance.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "landmarks",
+        "span",
+        "frames",
+        "widest_span",
+        "widest_frame",
+        "excess",
+        "square_at_address"
+      ],
+      "title": "RotationReference",
+      "type": "object"
+    },
+    "SwingEvent": {
+      "description": "The instants that divide a swing.\n\nTAKEAWAY - the hands begin moving away from the ball.\nTOP      - the backswing reverses; the hands are momentarily near rest.\nIMPACT   - estimated from hand kinematics, not observed. See module docstring.\nFINISH   - the hands come back to rest after the follow-through.",
+      "enum": [
+        "takeaway",
+        "top",
+        "impact",
+        "finish"
+      ],
+      "title": "SwingEvent",
+      "type": "string"
+    },
+    "SwingPhase": {
+      "description": "The intervals between events.",
+      "enum": [
+        "address",
+        "backswing",
+        "downswing",
+        "follow_through"
+      ],
+      "title": "SwingPhase",
+      "type": "string"
+    },
+    "ViewEstimate": {
+      "description": "Which view a clip was shot from, and the measurements behind the verdict.\n\nDecided from the **projected width of the shoulder line at address**, in\ntorso lengths. Seen face-on the shoulders lie broadside and span most of a\ntorso length or more; seen down the line they point at the camera and\ncollapse to almost nothing. On the reference clips the two are 0.83 and 0.10,\nwhich is a margin of eight times rather than a close call.\n\n`openness` corroborates it from an independent direction, the way Phase 4\ncorroborates impact: the address span divided by the widest the line was ever\nseen in the clip is the cosine of how far off broadside it was at address. A\nswing turns the shoulders through about a right angle, so both views contain\na frame where the line is nearly square, and the two signals should agree.\nThey are kept separate because the second depends on the clip containing that\nframe and the first does not.",
+      "properties": {
+        "view": {
+          "$ref": "#/$defs/CameraView"
+        },
+        "confidence": {
+          "description": "How far clear of ambiguity the measurement sits, as a fraction of the band between the two thresholds. 1.0 is a full band clear.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "shoulder_span_ratio": {
+          "description": "Projected shoulder width at address, in torso lengths. The verdict.",
+          "type": "number"
+        },
+        "hip_span_ratio": {
+          "description": "Projected hip width at address, in torso lengths. Reported, not used.",
+          "type": "number"
+        },
+        "openness": {
+          "description": "Address shoulder span divided by the widest in the clip: the cosine of how far off broadside the shoulders were at address. Corroboration.",
+          "type": "number"
+        },
+        "frames": {
+          "description": "The address frames the spans were measured over.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "view",
+        "confidence",
+        "shoulder_span_ratio",
+        "hip_span_ratio",
+        "openness",
+        "methodology"
+      ],
+      "title": "ViewEstimate",
+      "type": "object"
+    }
+  },
+  "description": "Everything the biomechanics engine concluded about one clip.\n\n`computed` is false when no swing was detected, and then `metrics` is empty\nrather than populated from arbitrary frames. Metrics are anchored to swing\nevents; without events there is nothing to anchor them to, and measuring a\n\"spine tilt at the top\" on a clip with no top would be inventing the instant\nand then measuring it carefully.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "computed": {
+      "type": "boolean"
+    },
+    "metrics": {
+      "items": {
+        "$ref": "#/$defs/Metric"
+      },
+      "type": "array"
+    },
+    "refused": {
+      "items": {
+        "$ref": "#/$defs/RefusedMetric"
+      },
+      "type": "array"
+    },
+    "view": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ViewEstimate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "lead_side": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LeadSide"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "references": {
+      "items": {
+        "$ref": "#/$defs/RotationReference"
+      },
+      "type": "array"
+    },
+    "torso_length": {
+      "description": "Median shoulder-midpoint to hip-midpoint distance, in frame widths.",
+      "type": "number"
+    },
+    "geometry": {
+      "$ref": "#/$defs/FrameGeometry"
+    },
+    "frames": {
+      "type": "integer"
+    },
+    "calibration": {
+      "$ref": "#/$defs/CalibrationStatus",
+      "default": "none",
+      "description": "What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.\n\n`none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`."
+    },
+    "slow_motion_factor": {
+      "default": 1.0,
+      "description": "How many times slower than real time the clip plays, as supplied by the caller. 1.0 is an ordinary recording. Timestamps here are **real seconds**, already divided by it, so they no longer index into the video file -- frame numbers do. Nothing in a conformed slow-motion clip records this, so it cannot be measured and is not guessed.",
+      "exclusiveMinimum": 0.0,
+      "type": "number"
+    },
+    "config": {
+      "$ref": "#/$defs/MetricConfig"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "computed",
+    "torso_length",
+    "geometry",
+    "frames",
+    "config"
+  ],
+  "title": "MetricSet",
+  "type": "object"
+}

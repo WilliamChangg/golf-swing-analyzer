@@ -30,7 +30,13 @@ from analyzer.contracts.cache import ContentKey
 
 # Bump on any breaking change to the models in this module. A persisted pose
 # sequence carrying a different version is refused rather than reinterpreted.
-POSE_SCHEMA_VERSION = 1
+#
+# 2 - added `PoseSequence.geometry`. A file written before it cannot supply the
+#     frame's aspect ratio, and without that every distance mixing x and y in
+#     IMAGE space is anisotropically wrong (see `FrameGeometry`). Reading such a
+#     file and defaulting the aspect to 1 would produce exactly the silent error
+#     the field exists to remove, so those files are refused instead.
+POSE_SCHEMA_VERSION = 2
 
 
 class Landmark(IntEnum):
@@ -103,17 +109,93 @@ POSE_CONNECTIONS: tuple[tuple[Landmark, Landmark], ...] = (
 
 
 class LandmarkSpace(StrEnum):
-    """Which coordinate space a set of landmarks is expressed in.
+    """Which reference frame a set of landmarks is expressed in.
 
-    IMAGE      - normalised to the displayed frame, x and y in [0, 1]. The only
-                 space that can be drawn on a video frame.
-    HIP_LOCAL  - approximate metres, centred on the hip midpoint, oriented to
-                 the body. MediaPipe calls these "world landmarks"; they are not
-                 calibrated world coordinates and carry no camera geometry.
+    The full vocabulary, including the frames this build cannot yet produce, so
+    that a later phase adds the capability rather than the concept and nothing
+    in between can claim a frame it does not have. `analyzer/coordinates.py`
+    holds the conversions and `docs/coordinate-systems.md` the conventions.
+
+    IMAGE
+        Normalised to the displayed frame: x divided by the width and y by the
+        height, both in [0, 1], y increasing downward. **Anisotropic** -- see
+        `FrameGeometry`. As stored by the pose estimator, and the frame a
+        landmark is drawn in.
+    FRAME_WIDTHS
+        Both axes divided by the frame *width*, y increasing upward, origin at
+        the bottom-left of the displayed frame. Isotropic, so a distance means
+        the same whichever way it points, and an angle is the angle in the
+        picture. **The frame every measurement is taken in.** Derived from
+        IMAGE and `FrameGeometry`; never stored.
+    HIP_LOCAL
+        Approximate metres, centred on the hip midpoint and oriented to the
+        body. MediaPipe calls these "world landmarks"; they are not calibrated
+        world coordinates and carry no camera geometry.
+    CAMERA
+        Metres in three dimensions, centred on the camera. Needs intrinsics,
+        which arrive with calibration in Phase 8. **Not produced by this build.**
+    WORLD
+        Metres in three dimensions, in a frame fixed to the scene. Needs a
+        calibrated stereo pair, which arrives in Phase 9. **Not produced by this
+        build.**
     """
 
     IMAGE = "image"
+    FRAME_WIDTHS = "frame_widths"
     HIP_LOCAL = "hip_local"
+    CAMERA = "camera"
+    WORLD = "world"
+
+
+# The frames a pose estimator writes into a stored sequence. Everything else is
+# either derived from these on read or not reachable yet, and keeping the set
+# explicit is what stops the store growing a column for a frame nothing fills.
+STORED_SPACES: tuple[LandmarkSpace, ...] = (LandmarkSpace.IMAGE, LandmarkSpace.HIP_LOCAL)
+
+# What a frame this build cannot produce is waiting for. Consulted when a caller
+# asks for one, so the error names the phase rather than saying "unsupported".
+UNREACHABLE_SPACES: dict[LandmarkSpace, str] = {
+    LandmarkSpace.CAMERA: (
+        "camera coordinates need the intrinsic matrix and distortion "
+        "coefficients that calibration produces in Phase 8"
+    ),
+    LandmarkSpace.WORLD: (
+        "world coordinates need triangulation against a calibrated stereo "
+        "pair, which arrives in Phase 9"
+    ),
+}
+
+
+class FrameGeometry(BaseModel):
+    """The displayed pixel dimensions IMAGE landmarks were normalised against.
+
+    Carried with the landmarks because IMAGE space is **anisotropic** and
+    nothing downstream can discover that on its own. x is divided by the frame
+    width and y by the frame height, so on a 1080x1920 clip one pixel of
+    vertical travel becomes 1/1920 while one pixel of horizontal travel becomes
+    1/1080: the same displacement in pixels counts for 0.5625 as much going down
+    as going across. Any Euclidean quantity that mixes the two -- a distance, a
+    speed, an angle -- is wrong by an amount that depends only on the shape of
+    the frame, and nothing about the result looks wrong.
+
+    One number fixes it, and it is not recoverable from the landmarks: the
+    aspect ratio. It is recorded here, at the point where it is still known,
+    rather than re-derived later by probing a video file that may have moved.
+    """
+
+    width: int = Field(gt=0, description="Displayed frame width in pixels, after rotation.")
+    height: int = Field(gt=0, description="Displayed frame height in pixels, after rotation.")
+
+    @property
+    def aspect_ratio(self) -> float:
+        """Displayed height divided by displayed width.
+
+        The factor a normalised y must be multiplied by to put it in the same
+        units as a normalised x. Both are then in **frame widths**, which is an
+        isotropic unit: a displacement of n pixels measures the same whichever
+        way it points.
+        """
+        return self.height / self.width
 
 
 class LandmarkPoint(BaseModel):
@@ -198,6 +280,9 @@ class PoseSequence(BaseModel):
     schema_version: int = POSE_SCHEMA_VERSION
     video_path: str
     video_content_key: ContentKey
+    geometry: FrameGeometry = Field(
+        description="Displayed frame size the IMAGE landmarks are normalised against."
+    )
     model: PoseModelInfo
     extracted_at: datetime
     stats: PoseExtractionStats

@@ -15,9 +15,34 @@ fooled into bridging an absence it could not see.
 from __future__ import annotations
 
 import numpy as np
+from numpy.typing import NDArray
 
 from analyzer.contracts.filtering import ConfidenceGate, StageReport
 from analyzer.filtering.signal import Signal
+
+
+def below_threshold(signal: Signal, gate: ConfidenceGate) -> NDArray[np.bool_]:
+    """Samples whose reported confidence falls short of the policy.
+
+    Written as `~(x >= threshold)` rather than `x < threshold` so that a NaN
+    confidence gates the sample out. NaN compares False either way, and the
+    difference is whether an unknown confidence is treated as acceptable or as
+    unacceptable. Unknown is not evidence of visibility.
+    """
+    return ~(signal.visibility >= gate.min_visibility) | ~(signal.presence >= gate.min_presence)
+
+
+def gated_observations(signal: Signal, gate: ConfidenceGate) -> NDArray[np.bool_]:
+    """Frames the estimator saw well enough for the gate to keep.
+
+    Exported because callers need this question answered about the *input* to
+    filtering, and `Signal.observed` on the pipeline's output cannot answer it:
+    by then `value` holds fitted numbers, so the mask reports where the fit
+    succeeded rather than where the estimator looked. The two differ at the ends
+    of every clip, and conflating them turns a window-width problem into a
+    reported camera problem.
+    """
+    return ~np.isnan(signal.value) & ~below_threshold(signal, gate)
 
 
 class ConfidenceGateStage:
@@ -32,14 +57,7 @@ class ConfidenceGateStage:
 
     def apply(self, signal: Signal) -> tuple[Signal, StageReport]:
         present = ~np.isnan(signal.value)
-
-        # Written as `~(x >= threshold)` rather than `x < threshold` so that a
-        # NaN confidence gates the sample out. NaN compares False either way,
-        # and the difference is whether an unknown confidence is treated as
-        # acceptable or as unacceptable. Unknown is not evidence of visibility.
-        below = ~(signal.visibility >= self._gate.min_visibility) | ~(
-            signal.presence >= self._gate.min_presence
-        )
+        below = below_threshold(signal, self._gate)
         rejected = present & below
 
         value = np.where(rejected, np.nan, signal.value)

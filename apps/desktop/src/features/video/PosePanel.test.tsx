@@ -300,9 +300,7 @@ describe("PosePanel", () => {
     );
 
     expect(await screen.findByText(/worker died/)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /extract pose/i }),
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: /extract pose/i })).toBeEnabled();
   });
 
   it("unsubscribes even when extraction fails", async () => {
