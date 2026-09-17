@@ -24,7 +24,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::doctor,
             commands::probe_video,
-            commands::extract_poses
+            commands::extract_poses,
+            commands::detect_phases
         ])
         .run(tauri::generate_context!())
         .expect("error while running the application");

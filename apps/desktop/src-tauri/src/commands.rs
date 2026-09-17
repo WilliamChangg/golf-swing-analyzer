@@ -71,3 +71,32 @@ pub async fn extract_poses(
         },
     )
 }
+
+/// Locate the swing events in a clip's already-extracted landmarks.
+///
+/// Fast enough to be synchronous from the UI's point of view — filtering a clip
+/// is milliseconds — but it still reports progress, because it filters all 33
+/// landmarks on the way and a long clip is long enough to be worth a bar.
+///
+/// `detected: false` is a successful result, not an error. A clip with no swing
+/// in it is an answer, and returning it as a failure would put "no swing here"
+/// in the same place as "the worker crashed".
+#[tauri::command]
+pub async fn detect_phases(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    path: String,
+    model: Option<String>,
+    window_s: Option<f64>,
+) -> Result<Value, EngineError> {
+    let mut params = json!({ "path": path, "model": model });
+    if let Some(window) = window_s {
+        params["filter"] = json!({ "smoothing": { "window_s": window } });
+    }
+
+    engine.request_with_notifications("detect_phases", params, &|method, params| {
+        if method == PROGRESS_NOTIFICATION {
+            let _ = app.emit(PROGRESS_EVENT, params.clone());
+        }
+    })
+}

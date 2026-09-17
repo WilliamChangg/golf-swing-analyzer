@@ -13,6 +13,7 @@ import type {
   EnvironmentReport,
   PoseExtractionResult,
   ProgressUpdate,
+  SwingPhases,
   VideoMetadata,
 } from "@gsa/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -23,6 +24,7 @@ const COMMANDS = {
   doctor: "doctor",
   probeVideo: "probe_video",
   extractPoses: "extract_poses",
+  detectPhases: "detect_phases",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -162,6 +164,33 @@ export function extractPoses(
   return call<PoseExtractionResult>(COMMANDS.extractPoses, {
     path,
     model: options.model ?? null,
+  });
+}
+
+/**
+ * Locate the takeaway, top, impact and finish in a clip's extracted landmarks.
+ *
+ * Requires `extractPoses` to have run for the clip; the engine resolves the
+ * landmarks through its content-keyed cache and returns an error naming the
+ * extract command when there are none.
+ *
+ * **`detected: false` is a success.** A clip with no swing in it is an answer
+ * the engine can give, and it arrives with warnings explaining what it found
+ * instead. Treating it as a failure would file "nobody swung" alongside "the
+ * worker crashed".
+ *
+ * `windowS` overrides the filter's smoothing window. Worth exposing because a
+ * clip below about 60 fps cannot support the default, and the engine's own
+ * message names the width that clip's frame rate would support.
+ */
+export function detectPhases(
+  path: string,
+  options: { model?: string; windowS?: number } = {},
+): Promise<EngineResult<SwingPhases>> {
+  return call<SwingPhases>(COMMANDS.detectPhases, {
+    path,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
   });
 }
 

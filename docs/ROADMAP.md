@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-3 complete (4 / 21).**
+**Progress: Phases 0-4 complete (5 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -12,8 +12,8 @@ advance past a broken phase.
 | 1   | Video ingestion       | ✅ **Done** | Correct metadata on VFR and rotated fixtures               |
 | 2   | Single-camera pose    | ✅ **Done** | Landmarks persisted and reloadable; estimator swappable    |
 | 3   | Temporal filtering    | ✅ **Done** | Error bounds met against analytical trajectories           |
-| 4   | Swing phase detection | ⬜ Next     | Phases correct on real swings, inspectable frame-by-frame  |
-| 5   | Biomechanics engine   | ⬜          | Metrics carry units, confidence, methodology               |
+| 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame  |
+| 5   | Biomechanics engine   | ⬜ Next     | Metrics carry units, confidence, methodology               |
 | 6   | DTL + coordinates     | ⬜          | Conventions documented and tested                          |
 | 7   | Two-camera sync       | ⬜          | Measured sync residual in ms                               |
 | 8   | Camera calibration    | ⬜          | Reprojection error reported; status gates claims           |
@@ -302,18 +302,96 @@ frames), against ~1.2 s for pose extraction on the same 68 frames.
   `.pth` files, which CPython's `site` module skips. `chflags nohidden` fixes it;
   reinstalling only appeared to, by rewriting the file.
 
-## Phase 4 — Swing phase detection ⬜
+## Phase 4 — Swing phase detection ✅
 
-Deterministic, no ML. Confidence from signal margin and landmark visibility — a
-computed number, not a constant.
+`python/analyzer/phases/{signals,detect}.py`
 
-- [ ] 4.1 Signals: wrist speed, hand height, shoulder/hip line angles
-- [ ] 4.2 Rule-based events + `SwingPhases` contract
-- [ ] 4.3 Per-phase confidence
-- [ ] 4.4 `scripts/plot_phases.py` debug plots + per-frame CSV
-- [ ] 4.5 In-app frame-by-frame inspector
-- [ ] 4.6 Tests: synthetic signals, truncated clip, no swing, double swing
-- [ ] 4.7 Validate against recorded swings; commit
+The first golf-specific package; everything below it is general computer vision.
+Deterministic, no ML — the events are defined by the shape of the hand-speed
+signal (one minimum between two maxima, with the minimum at the highest point
+the hands reach), and a rule that can be read is a rule that can be argued with.
+Phase 12 trains a detector and compares it against this one, which is only
+meaningful because a readable baseline exists first.
+
+- [x] **4.1 Signals** — hand speed and height, shoulder and hip line angles.
+      Image y points down, so height is converted once and the raw y never used
+      again; line angles are folded onto (−90, 90] because a shoulder line has
+      an orientation, not a direction
+- [x] **4.2 Rule-based events** — `SwingPhases` contract; four events bounding
+      four phases. Searches are nested (impact, then the top before it, then the
+      takeaway before that), so a misordering is impossible by construction
+- [x] **4.3 Per-event confidence** — margin × visibility × resolution, each
+      reported separately because "0.3" is not actionable and "the frame rate
+      cannot resolve this" is
+- [x] **4.4 `scripts/plot_phases.py`** — three-panel plot with phase shading and
+      event markers, plus a per-frame CSV
+- [x] **4.5 In-app inspector** — scrubbable phase timeline, frame stepping,
+      event jump targets, and the current frame's phase always on screen
+- [x] **4.6 Tests** — 60 added (42 pytest, 12 Vitest, 6 Playwright): synthetic
+      swings with known event times, truncated clip, no swing, double swing
+- [x] **4.7 Validated on recorded swings; commit**
+
+**Measured** on `data/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
+window). Every event matches a hand reading of the signal:
+
+| Event    | Frame | Time    | Confidence | margin | visibility | resolution |
+| -------- | ----- | ------- | ---------- | ------ | ---------- | ---------- |
+| takeaway | 13    | 0.433 s | 0.97       | 1.00   | 0.97       | 1.00       |
+| top      | 38    | 1.267 s | 0.64       | 0.84   | 0.92       | 0.83       |
+| impact   | 48    | 1.600 s | 0.67       | 1.00   | 0.81       | 0.83       |
+| finish   | 65    | 2.167 s | 0.00       | 0.00   | 0.63       | 1.00       |
+
+Impact is corroborated by an independent signal — the lowest point the hands
+reach after the top — which lands on frame 47, one frame (33 ms) away. The
+finish scores zero because the clip ends before the hands stop, which is a fact
+about the recording rather than about the detector.
+
+**The down-the-line clip is refused, and the refusal is the useful part.** Its
+descent takes 2.13 s, over the 1 s a downswing can last — a club falls faster
+than that unaided, so that motion is someone lowering it. The detector also
+reports that the hands were untracked for 1.92 s from 8.05 s, which at 24 fps
+with a slow shutter is almost certainly where the real swing is: motion blur
+smears the wrists exactly when they move fastest, and pose estimation loses them.
+
+**Deliberate deviations from the original plan:**
+
+- **Four events, not five.** `ADDRESS` is a phase with no event of its own,
+  because its last frame _is_ the frame before the takeaway. An address event
+  would sit one frame from the takeaway and imply a precision the signal does
+  not carry.
+- **The "is this a swing" gate is hand travel in torso lengths, not a speed
+  ratio.** Peak hand speed against the speed seen while still was tried first
+  and reports a swing on a clip of someone standing motionless — on pure noise
+  that ratio compares the largest spike with the median and comfortably exceeds
+  ten. A noise-based gate was tried second and is worse: the filter's residual
+  is _exactly zero_ whenever the smoothing window holds as many samples as the
+  polynomial has coefficients, which is every clip below about 60 fps at the
+  shipped defaults. Judging travel against the subject's own torso is
+  independent of framing and always available.
+- **The takeaway search is bounded by the backswing's speed peak, not by the
+  top.** The hands come almost to rest at the top, so a search for the last
+  still stretch before the top finds that pause and reports a backswing of a few
+  frames. The face-on clip only avoided this by luck — its speed at the top was
+  0.130 against a 0.131 threshold. Found by a synthetic fixture, not by the real
+  footage.
+- **An upper bound on the downswing was added** (`max_downswing_s`). The lower
+  bounds alone accept a two-second descent as a swing, which is what the DTL
+  clip contains.
+- **Tempo is not computed here.** The backswing-to-downswing ratio is a
+  biomechanics metric and belongs to Phase 5, where it acquires a unit, a
+  confidence and a methodology. Computing it here would put one number in two
+  places with two provenances.
+- **`FilteredLandmark` gained `visibility` and `observed`** (a Phase 3 type).
+  Confidence needs per-frame visibility around an event, which a clip-wide mean
+  cannot give, and the tracking diagnostic needs to distinguish "the estimator
+  saw nothing" from "the filter had too little support at the clip edge" — one
+  is a camera problem and the other a window-width one.
+- **`matplotlib` is now a declared dev dependency.** It arrives transitively
+  through mediapipe today, and a dependency that works by accident stops working
+  without warning.
+- **The debug plot found a defect on its first run**, which is the argument for
+  4.4 existing: the projected shoulder and hip angles were wrapping between
+  ±180° every time the line crossed level.
 
 ## Phase 5 — Biomechanics engine ⬜
 

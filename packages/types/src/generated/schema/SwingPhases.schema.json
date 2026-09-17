@@ -1,0 +1,323 @@
+{
+  "$defs": {
+    "DetectedEvent": {
+      "description": "One located instant, with how it was found and what corroborates it.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/SwingEvent"
+        },
+        "frame_index": {
+          "type": "integer"
+        },
+        "timestamp_s": {
+          "type": "number"
+        },
+        "confidence": {
+          "$ref": "#/$defs/EventConfidence"
+        },
+        "methodology": {
+          "description": "The rule that produced this frame, in words. Never omitted.",
+          "type": "string"
+        },
+        "corroboration_frame": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Frame an independent signal put this event at, where a second signal exists. None means no corroboration was available -- which is not the same as the two agreeing."
+        },
+        "corroboration_delta_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Seconds between this event and its corroborating estimate."
+        }
+      },
+      "required": [
+        "event",
+        "frame_index",
+        "timestamp_s",
+        "confidence",
+        "methodology"
+      ],
+      "title": "DetectedEvent",
+      "type": "object"
+    },
+    "DetectedPhase": {
+      "description": "One interval between events.\n\n`start_frame` is inclusive and `end_frame` exclusive, so consecutive phases\ntile the clip without overlapping and `end_frame - start_frame` is the frame\ncount. `duration_s` is measured from timestamps rather than derived from the\nframe count, because on variable-rate footage those disagree.",
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/SwingPhase"
+        },
+        "start_frame": {
+          "type": "integer"
+        },
+        "end_frame": {
+          "description": "Exclusive.",
+          "type": "integer"
+        },
+        "start_s": {
+          "type": "number"
+        },
+        "end_s": {
+          "type": "number"
+        },
+        "duration_s": {
+          "type": "number"
+        },
+        "confidence": {
+          "description": "The weaker of the confidences of the two events bounding this phase.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "phase",
+        "start_frame",
+        "end_frame",
+        "start_s",
+        "end_s",
+        "duration_s",
+        "confidence"
+      ],
+      "title": "DetectedPhase",
+      "type": "object"
+    },
+    "EventConfidence": {
+      "description": "Why an event is or is not trustworthy, decomposed.\n\n`overall` is the product of the three factors: an event needs all of them,\nand a product says so where an average would let a strong factor cover for a\nfatal one. The factors are reported individually because \"0.3\" is not\nactionable while \"the landmark was barely visible\" is.",
+      "properties": {
+        "overall": {
+          "description": "Product of the three factors below.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "margin": {
+          "description": "How clearly the signal singles this instant out -- peak prominence for IMPACT, depth of the speed minimum for TOP, crossing sharpness for TAKEAWAY and FINISH.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "visibility": {
+          "description": "Mean reported visibility of the hand landmark around this event.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "resolution": {
+          "description": "Whether the capture and smoothing can resolve an event of this duration at all. Falls towards zero as the smoothing window approaches the length of the phase being measured.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "overall",
+        "margin",
+        "visibility",
+        "resolution"
+      ],
+      "title": "EventConfidence",
+      "type": "object"
+    },
+    "HandSignalInfo": {
+      "description": "What the hand trajectory was built from, and how well it stands out.\n\n`travel_ratio` is the measurement that decides whether there is a swing here\nat all: how far the hands ranged, measured in the subject's own torso\nlengths. Judging against the body rather than against the frame makes it\nindependent of where the camera was put \u2014 the same swing filmed twice as far\naway halves every distance in frame, torso included, and leaves the ratio\nunchanged.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/HandSource"
+        },
+        "valid_frames": {
+          "type": "integer"
+        },
+        "total_frames": {
+          "type": "integer"
+        },
+        "peak_speed": {
+          "description": "In the filtered signal's velocity unit.",
+          "type": "number"
+        },
+        "travel": {
+          "description": "Diagonal of the box the hands stayed inside, in frame widths.",
+          "type": "number"
+        },
+        "torso_length": {
+          "description": "Median shoulder-midpoint to hip-midpoint distance, in frame widths.",
+          "type": "number"
+        },
+        "travel_ratio": {
+          "description": "travel / torso_length.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source",
+        "valid_frames",
+        "total_frames",
+        "peak_speed",
+        "travel",
+        "torso_length",
+        "travel_ratio"
+      ],
+      "title": "HandSignalInfo",
+      "type": "object"
+    },
+    "HandSource": {
+      "description": "Which landmark(s) the hand trajectory was taken from.\n\nChosen once for a clip rather than per frame. Switching between a two-wrist\nmidpoint and a single wrist partway through would move the tracked point by\nhalf the distance between the hands, and the differentiator would read that\nstep as a velocity spike -- in the middle of a swing, plausibly at the very\ninstant being measured.",
+      "enum": [
+        "midpoint",
+        "left_wrist",
+        "right_wrist"
+      ],
+      "title": "HandSource",
+      "type": "string"
+    },
+    "PhaseConfig": {
+      "additionalProperties": false,
+      "description": "Policy for phase detection.\n\nThese are **structural sanity bounds, not golf norms.** Nothing here claims\nthat a backswing lasts a particular time; the durations exist to reject\nmotion that cannot be a swing at all, and are set loose enough that a slow\npractice swing and a fast one both pass. Numbers tight enough to encode what\na swing \"should\" look like would need a labelled set, which is Phase 12.",
+      "properties": {
+        "moving_fraction": {
+          "default": 0.05,
+          "description": "Fraction of peak hand speed above which the hands count as moving. Expressed as a fraction because absolute speed has no fixed meaning in normalised frame coordinates.",
+          "exclusiveMaximum": 1.0,
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_travel_ratio": {
+          "default": 0.5,
+          "description": "The hands must range at least this many torso lengths before a swing is reported. Half a torso is a long way below a full swing, which sweeps them through more than one; the bound is there to exclude a subject standing still, not to describe what a swing looks like.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_phase_travel_ratio": {
+          "default": 0.15,
+          "description": "The backswing and the downswing must each move the hands at least this many torso lengths. Without it a clip that is still except for one brief twitch yields a top on whichever still frame noise made highest, and a long backswing containing no movement at all.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_backswing_s": {
+          "default": 0.2,
+          "description": "Below this the motion is not treated as a backswing.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_downswing_s": {
+          "default": 0.06,
+          "description": "Below this the motion is not treated as a downswing.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_downswing_s": {
+          "default": 1.0,
+          "description": "Above this the motion is not treated as a downswing. A club falling under gravity alone covers the distance far quicker than a second, so a slower descent is someone lowering the club rather than swinging it.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "transition_search_s": {
+          "default": 0.25,
+          "description": "How far either side of the highest hand position to look for the speed minimum that marks the top.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "confidence_window_s": {
+          "default": 0.1,
+          "description": "Span around an event over which visibility and margin are measured.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_still_s": {
+          "default": 0.1,
+          "description": "How long the hands must stay below the moving threshold before that counts as being still. Without a minimum, the momentary pause at the top of the backswing reads as the hands having stopped, and the takeaway is found there instead of at address.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_tracking_gap_s": {
+          "default": 0.15,
+          "description": "A stretch in which the estimator saw no hand is reported once it lasts this long, because by then it could be concealing the fastest part of a swing. Shorter stretches are ordinary and reporting them would be noise.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "PhaseConfig",
+      "type": "object"
+    },
+    "SwingEvent": {
+      "description": "The instants that divide a swing.\n\nTAKEAWAY - the hands begin moving away from the ball.\nTOP      - the backswing reverses; the hands are momentarily near rest.\nIMPACT   - estimated from hand kinematics, not observed. See module docstring.\nFINISH   - the hands come back to rest after the follow-through.",
+      "enum": [
+        "takeaway",
+        "top",
+        "impact",
+        "finish"
+      ],
+      "title": "SwingEvent",
+      "type": "string"
+    },
+    "SwingPhase": {
+      "description": "The intervals between events.",
+      "enum": [
+        "address",
+        "backswing",
+        "downswing",
+        "follow_through"
+      ],
+      "title": "SwingPhase",
+      "type": "string"
+    }
+  },
+  "description": "Everything detection concluded about one clip.\n\n`detected` is false whenever no swing was found, and then `events` and\n`phases` are empty rather than populated with guesses. A caller that checks\nonly for events therefore cannot mistake an undetected swing for one at\nframe zero.\n\nDurations are here; ratios are not. Tempo -- the backswing-to-downswing\nratio -- is a biomechanics metric and belongs to Phase 5, which is also\nwhere it acquires a unit, a confidence and a methodology. Computing it here\nwould put the same number in two places with two different provenances.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "detected": {
+      "type": "boolean"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/DetectedEvent"
+      },
+      "type": "array"
+    },
+    "phases": {
+      "items": {
+        "$ref": "#/$defs/DetectedPhase"
+      },
+      "type": "array"
+    },
+    "hand": {
+      "$ref": "#/$defs/HandSignalInfo"
+    },
+    "frames": {
+      "type": "integer"
+    },
+    "config": {
+      "$ref": "#/$defs/PhaseConfig"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "detected",
+    "hand",
+    "frames",
+    "config"
+  ],
+  "title": "SwingPhases",
+  "type": "object"
+}

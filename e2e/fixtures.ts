@@ -207,3 +207,152 @@ export async function stubEngine(
     };
   }, commands);
 }
+
+/**
+ * A detected swing, shaped like the face-on reference clip.
+ *
+ * Frame numbers and confidences are the ones the engine actually produces on
+ * `data/face-on/PW_face-on.mp4` with a 0.15 s window, so the inspector is
+ * exercised against a real swing's proportions rather than round numbers — and
+ * against a truncated finish, which is what that clip really has.
+ */
+export const SWING_PHASES = {
+  schema_version: 1,
+  detected: true,
+  events: [
+    {
+      event: "takeaway",
+      frame_index: 13,
+      timestamp_s: 0.433,
+      confidence: {
+        overall: 0.97,
+        margin: 1.0,
+        visibility: 0.97,
+        resolution: 1.0,
+      },
+      methodology:
+        "End of the last stretch in which hand speed stayed below 5% of its peak before the top of the backswing.",
+      corroboration_frame: null,
+      corroboration_delta_s: null,
+    },
+    {
+      event: "top",
+      frame_index: 38,
+      timestamp_s: 1.267,
+      confidence: {
+        overall: 0.64,
+        margin: 0.84,
+        visibility: 0.92,
+        resolution: 0.83,
+      },
+      methodology:
+        "Minimum hand speed within 0.25 s of the highest point the hands reached before impact.",
+      corroboration_frame: null,
+      corroboration_delta_s: null,
+    },
+    {
+      event: "impact",
+      frame_index: 48,
+      timestamp_s: 1.6,
+      confidence: {
+        overall: 0.67,
+        margin: 1.0,
+        visibility: 0.81,
+        resolution: 0.83,
+      },
+      methodology:
+        "Maximum hand speed. A kinematic estimate: nothing here observes the ball or the club.",
+      corroboration_frame: 47,
+      corroboration_delta_s: -0.033,
+    },
+    {
+      event: "finish",
+      frame_index: 65,
+      timestamp_s: 2.167,
+      confidence: {
+        overall: 0.0,
+        margin: 0.0,
+        visibility: 0.63,
+        resolution: 1.0,
+      },
+      methodology: "Not reached: the clip ended first.",
+      corroboration_frame: null,
+      corroboration_delta_s: null,
+    },
+  ],
+  phases: [
+    {
+      phase: "address",
+      start_frame: 0,
+      end_frame: 13,
+      start_s: 0.0,
+      end_s: 0.4,
+      duration_s: 0.4,
+      confidence: 0.97,
+    },
+    {
+      phase: "backswing",
+      start_frame: 13,
+      end_frame: 38,
+      start_s: 0.433,
+      end_s: 1.233,
+      duration_s: 0.8,
+      confidence: 0.64,
+    },
+    {
+      phase: "downswing",
+      start_frame: 38,
+      end_frame: 48,
+      start_s: 1.267,
+      end_s: 1.567,
+      duration_s: 0.3,
+      confidence: 0.64,
+    },
+    {
+      phase: "follow_through",
+      start_frame: 48,
+      end_frame: 66,
+      start_s: 1.6,
+      end_s: 2.167,
+      duration_s: 0.567,
+      confidence: 0.0,
+    },
+  ],
+  hand: {
+    source: "right_wrist",
+    valid_frames: 64,
+    total_frames: 68,
+    peak_speed: 2.624,
+    travel: 0.338,
+    torso_length: 0.088,
+    travel_ratio: 3.86,
+  },
+  frames: 68,
+  config: {
+    moving_fraction: 0.05,
+    min_travel_ratio: 0.5,
+    min_phase_travel_ratio: 0.15,
+    min_backswing_s: 0.2,
+    min_downswing_s: 0.06,
+    max_downswing_s: 1.0,
+    transition_search_s: 0.25,
+    confidence_window_s: 0.1,
+    min_still_s: 0.1,
+    min_tracking_gap_s: 0.15,
+  },
+  warnings: [
+    "The hands had not come to rest when the clip ended, so the finish is reported at the last tracked frame rather than located. Its confidence is reduced accordingly.",
+  ],
+};
+
+/** The same clip with no swing in it: a result, not an error. */
+export const NO_SWING = {
+  ...SWING_PHASES,
+  detected: false,
+  events: [],
+  phases: [],
+  hand: { ...SWING_PHASES.hand, travel: 0.004, travel_ratio: 0.04 },
+  warnings: [
+    "No swing detected. The hands ranged over 0.04 torso lengths, below the 0.5 a swing requires. Either the clip contains no swing, or the hands were not tracked through the part where one happened.",
+  ],
+};

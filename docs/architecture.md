@@ -107,15 +107,16 @@ environment/    hardware, tooling, model probing
 ingestion/      container inspection and frame decoding
 pose/           landmark estimation, storage, per-landmark series
 filtering/      smoothing, gap policy, derivatives
+phases/         swing event detection
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `phases`, `biomechanics`, `coaching` as sibling packages with
+Later phases add `biomechanics` and `coaching` as sibling packages with
 Protocol-typed seams (`ClubDetector`, `BallDetector`), following `ingestion`'s
 `FrameSource`, `pose`'s `PoseEstimator` and `filtering`'s `FilterStage`.
-Golf-specific reasoning is confined to `biomechanics`, `phases`, and `coaching`;
-everything below is general computer vision.
+Golf-specific reasoning is confined to `phases`, `biomechanics` and `coaching`;
+everything below is general computer vision that would serve any moving body.
 
 ## Video ingestion
 
@@ -248,6 +249,60 @@ report names the minimum window its measured rate would support. That is the
 same rule as everywhere else in this system — report what was measured, refuse
 what was not — applied to a case where the honest answer is unhelpful.
 
+## Swing phase detection
+
+The first layer that knows what a golf swing is. It reduces filtered
+trajectories to a handful of scalar signals and reads four events off their
+shape — deterministically, with no model, because the shape is not subtle and a
+rule that can be read is a rule that can be argued with.
+
+```
+hand speed |          ___                    /\
+           |      ___/   \__  <- top        /  \   <- impact
+           |  ___/          \__          __/    \___
+           |_/                  \_______/           \____
+            address   backswing      downswing   follow-through
+```
+
+**Searches are nested rather than sequential.** Impact is found first, being the
+clearest feature in the signal; the top is then found _before_ impact, the
+takeaway _before_ the top, the finish _after_ impact. Each search is bounded by
+an event already located, so a rule cannot place the top after impact — that
+ordering is impossible by construction rather than checked afterwards.
+
+**Two sign conventions are handled once, here.** Image y increases downward, so
+a larger y is a _lower_ hand; it is converted into an explicitly named upward
+`height` at the boundary and the raw y is never used again. And a shoulder line
+has an orientation rather than a direction, so its angle is folded onto
+(−90, 90] — taken as a vector angle, a nearly level line sits beside the ±180
+discontinuity and flips the full 360 every time the tilt crosses zero, which for
+shoulders and hips is most of a swing.
+
+**Confidence is three measured factors, reported separately.** Margin (how
+clearly the signal singles the instant out), visibility (how well the landmark
+was seen _around that instant_, which a clip-wide mean cannot answer), and
+resolution — whether the smoothing window the clip's frame rate forced is short
+enough to resolve an event of that duration at all. Their product is the
+headline, but the factors are what make a low score actionable: "0.3" is not,
+and "the frame rate cannot resolve this" is.
+
+Resolution is the factor that stops a 24 fps clip reporting a confident impact.
+Such a clip forces a smoothing window about as long as a downswing, and no
+amount of clarity in the resulting curve makes that measurable.
+
+**Refusal is measured, not assumed.** A clip produces no events at all unless
+the hands ranged far enough — judged in the subject's own torso lengths, so the
+verdict does not depend on where the camera was put. The same test is applied to
+the backswing and downswing separately, because a clip that is still except for
+one twitch can otherwise be organised into a swing shape made almost entirely of
+noise.
+
+Impact is a kinematic estimate rather than an observation: nothing at this layer
+sees the ball or the club, and hand speed peaks slightly before the club reaches
+the ball. It is corroborated against an independent signal — the lowest point
+the hands reach after the top — and Phases 10 and 11 replace that corroboration
+with real evidence.
+
 ## Progress
 
 Long methods report through a `ProgressReporter` and have no idea what is on the
@@ -378,12 +433,12 @@ No figures exist yet for metrics, because they do not exist yet.
 
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                        |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (407)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                               |
-| IPC wrappers, component rendering     | Vitest (60)     | error normalisation, status rendering, remediation display, metadata panels, failure states                                                                   |
-| UI flows                              | Playwright (15) | layout, engine data rendering, import flow, screen switching, failure panel                                                                                   |
+| Layer                                 | Tool            | Covers                                                                                                                                                                         |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Contracts, probes, dispatch, protocol | pytest (449)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                |
+| IPC wrappers, component rendering     | Vitest (73)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection                                                         |
+| UI flows                              | Playwright (21) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing                                                                          |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

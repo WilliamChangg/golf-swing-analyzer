@@ -11,3 +11,4 @@ export * from "./EnvironmentReport";
 export * from "./VideoMetadata";
 export * from "./PoseExtractionResult";
 export * from "./ProgressUpdate";
+export * from "./SwingPhases";

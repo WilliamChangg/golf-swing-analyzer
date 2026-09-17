@@ -6,11 +6,11 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-3 of 21 complete.** The foundation, typed engine boundary,
-> environment health check, video ingestion, single-camera pose extraction, and
-> temporal filtering are built and verified. No phase detection, metrics, or
-> coaching exist yet. Sections below marked _Not yet implemented_ say so rather
-> than describing features that do not exist. See
+> **Status: Phases 0-4 of 21 complete.** The foundation, typed engine boundary,
+> environment health check, video ingestion, single-camera pose extraction,
+> temporal filtering, and swing phase detection are built and verified. No
+> metrics or coaching exist yet. Sections below marked _Not yet implemented_ say
+> so rather than describing features that do not exist. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
@@ -93,9 +93,10 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 4-13 outstanding._ A clip can be imported,
-inspected, run through pose estimation, and filtered into trajectories with
-derivatives — from the app's **Video** screen or from a terminal:
+_Partially implemented — Phases 5-13 outstanding._ A clip can be imported,
+inspected, run through pose estimation, filtered into trajectories with
+derivatives, and segmented into swing phases — from the app's **Video** screen
+or from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -103,6 +104,7 @@ uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
 uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
 uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
 uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyorder 4
+uv run --project python analyzer phases  path/to/swing.mov   # takeaway/top/impact/finish
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -113,10 +115,18 @@ Filtering reads those landmarks back and produces position, velocity and
 acceleration per landmark, along with an account of what it refused: detections
 below the confidence gate, gaps too long to bridge, and windows without enough
 support to fit. Nothing is persisted — filtering a clip costs milliseconds
-against seconds of extraction. No metrics or coaching consume it yet.
+against seconds of extraction.
 
-The engine methods are `doctor`, `probe_video`, `extract_poses` and
-`filter_poses`.
+Phase detection locates the takeaway, top, impact and finish, and reports a
+confidence for each built from three measured factors. A clip with no swing in
+it produces no events and an explanation, rather than events at frame zero. The
+app's **Swing phases** panel adds a scrubbable timeline for stepping through the
+clip frame by frame, which is the only way to actually check whether an event
+landed where it should. `scripts/plot_phases.py` writes the same signals as a
+plot and a per-frame CSV.
+
+The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`
+and `detect_phases`.
 
 ## 6. Supported video formats
 
@@ -166,7 +176,7 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 4-11 outstanding._ Three stages are built.
+_Partially implemented — Phases 5-11 outstanding._ Four stages are built.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -192,8 +202,22 @@ mutually consistent. Low-confidence detections become absences, absences longer
 than the gap policy stay absent, and windows without enough observations emit
 nothing at all. See [ADR-0009](docs/decisions/ADR-0009-local-polynomial-filtering.md).
 
-Phase detection, club and ball tracking are not built. Planned stages and their
-ordering are in [docs/ROADMAP.md](docs/ROADMAP.md).
+**Swing phases.** The first golf-specific layer: everything under it would serve
+any moving body. Four events — takeaway, top, impact, finish — are located from
+the shape of the hand-speed signal, deterministically and without a model. Each
+carries a confidence built from three measured factors (how clearly the signal
+singles the instant out, how well the landmark was seen around it, and whether
+the frame rate can resolve an event of that duration at all), reported
+separately because a single number hides which of them was weak.
+
+Impact is a **kinematic estimate, not an observation** — nothing here sees the
+ball or the club — and it is corroborated against an independent signal, the
+lowest point the hands reach after the top. On the reference clip the two agree
+to within one frame. Phases 10 and 11 replace the corroboration with real
+evidence.
+
+Club and ball tracking are not built. Planned stages and their ordering are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## 9. 3D reconstruction methodology
 
@@ -230,15 +254,14 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                |
-| ---------- | ----- | ---------------------------------------------------------------------------------------------------- |
-| pytest     | 407   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                            |
-| Vitest     | 60    | IPC error normalisation, health screen, video metadata rendering, extraction panel                   |
-| Playwright | 15    | UI layout, engine-data rendering, import flow, failure panels                                        |
+| Suite      | Count | Scope                                                                                                        |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------ |
+| pytest     | 449   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                    |
+| Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector          |
+| Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection               |
 
-All 494 pass as of Phase 3. (The counts above are what the suites report today;
-earlier revisions of this table understated them.)
+All 555 pass as of Phase 4.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -275,6 +298,18 @@ Hypothesis covers the invariants a worked example would miss: adding a constant
 shifts position and leaves derivatives alone, shifting all timestamps changes
 nothing, and reversing time negates velocity while preserving acceleration —
 which is the property that catches a sign error in the local coordinate.
+
+Phase detection is judged the same way, against synthetic swings built from a
+_velocity profile_ that is integrated into a trajectory, so the instants the
+detector is meant to find are inputs rather than things read off a plot
+afterwards. The hands travel a circular arc rather than a vertical line, because
+the simpler fixture gets impact wrong in a way that matters: on a real swing the
+hands are at the bottom of their arc and moving horizontally at impact, so peak
+speed and lowest position coincide, and a vertical fixture separates them and
+makes the corroboration check meaningless. That fixture caught a defect the
+reference footage did not — the takeaway search finding the pause at the top of
+the backswing instead of the address, which the face-on clip survived only
+because its speed at the top was 0.130 against a 0.131 threshold.
 
 CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
@@ -408,6 +443,22 @@ benchmark harness arrives in Phase 17.
   used during development are 24–30 fps, so this is the ordinary case rather than
   an edge one, and it is the first quantitative backing for the ≥120 fps the
   capture protocol asks for.
+- **Impact is inferred from the hands, and runs marginally early.** Hand speed
+  peaks slightly before the club reaches the ball, so the reported frame is a
+  kinematic estimate with a known bias in a known direction. It is corroborated
+  against the lowest point of the hand arc, and Phases 10-11 will replace that
+  with club and ball evidence.
+- **Phase detection is validated on one swing.** The face-on reference clip is
+  the only recording here containing a swing the pipeline can see; the
+  down-the-line clip is 24 fps and loses the wrists to motion blur through the
+  part where the swing happens. Every event in it was checked by hand against
+  the signal, which is not the same as being checked against ground truth —
+  that needs the labelled set Phase 12 builds.
+- **Detection thresholds are structural bounds, not golf norms.** They exist to
+  reject motion that cannot be a swing (a two-second descent, hands that never
+  travel further than a fraction of the subject's torso), and are deliberately
+  loose. Numbers tight enough to describe what a swing _should_ look like would
+  need a labelled set.
 - **Filter accuracy is measured against models of swing motion, not a swing.**
   The trajectories in the benchmark have exact derivatives, which real footage
   cannot until Phase 12 provides labelled landmarks. They were chosen to resemble

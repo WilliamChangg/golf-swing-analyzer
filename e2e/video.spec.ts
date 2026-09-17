@@ -1,7 +1,13 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { POSE_RESULT, stubEngine, VFR_ROTATED_METADATA } from "./fixtures";
+import {
+  NO_SWING,
+  POSE_RESULT,
+  SWING_PHASES,
+  VFR_ROTATED_METADATA,
+  stubEngine,
+} from "./fixtures";
 
 /** The file picker and the engine both travel over the Tauri bridge. */
 function importFlow(metadata: unknown) {
@@ -9,6 +15,15 @@ function importFlow(metadata: unknown) {
     "plugin:dialog|open": { result: VFR_ROTATED_METADATA.path },
     probe_video: { result: metadata },
   };
+}
+
+/** Load a clip, then hand back a page sitting on its metadata. */
+async function loadClip(page: Page, extra = {}) {
+  await stubEngine(page, { ...importFlow(VFR_ROTATED_METADATA), ...extra });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Video" }).click();
+  await page.getByRole("button", { name: /Choose video/ }).click();
+  await expect(page.getByText("Frame timing")).toBeVisible();
 }
 
 test.describe("video import", () => {
@@ -107,15 +122,6 @@ test.describe("video import", () => {
 });
 
 test.describe("pose extraction", () => {
-  /** Load a clip, then hand back a page sitting on its metadata. */
-  async function loadClip(page: Page, extra = {}) {
-    await stubEngine(page, { ...importFlow(VFR_ROTATED_METADATA), ...extra });
-    await page.goto("/");
-    await page.getByRole("button", { name: "Video" }).click();
-    await page.getByRole("button", { name: /Choose video/ }).click();
-    await expect(page.getByText("Frame timing")).toBeVisible();
-  }
-
   test("offers extraction only once a clip is loaded", async ({ page }) => {
     await stubEngine(page);
     await page.goto("/");
@@ -184,5 +190,90 @@ test.describe("pose extraction", () => {
 
     await expect(page.getByText(/No pose was detected/)).toBeVisible();
     await expect(page.getByText("not measured")).toBeVisible();
+  });
+});
+
+test.describe("swing phase detection", () => {
+  test("detects nothing until asked", async ({ page }) => {
+    await loadClip(page);
+    await expect(page.getByText("Nothing detected yet.")).toBeVisible();
+  });
+
+  test("shows the located events and their confidence factors", async ({
+    page,
+  }) => {
+    await loadClip(page, { detect_phases: { result: SWING_PHASES } });
+    await page.getByRole("button", { name: /Detect swing/ }).click();
+
+    await expect(page.getByText("Swing detected.")).toBeVisible();
+    const events = page.getByRole("table");
+    await expect(events.getByText("Impact")).toBeVisible();
+    await expect(events.getByText("1.600s")).toBeVisible();
+    // The truncated finish keeps its frame and loses its confidence.
+    await expect(events.getByText("Finish")).toBeVisible();
+  });
+
+  test("steps frame by frame across a phase boundary", async ({ page }) => {
+    // The whole point of the inspector: a frame number for an event is only
+    // checkable by watching where the phase actually changes.
+    await loadClip(page, { detect_phases: { result: SWING_PHASES } });
+    await page.getByRole("button", { name: /Detect swing/ }).click();
+
+    await page.getByRole("button", { name: "Top", exact: true }).click();
+    const status = page.getByRole("status");
+    await expect(status).toContainText("Downswing");
+
+    await page.getByRole("button", { name: "Previous frame" }).click();
+    await expect(status).toContainText("Backswing");
+    await expect(status).toContainText("frame 37");
+  });
+
+  test("opens the inspector on impact", async ({ page }) => {
+    await loadClip(page, { detect_phases: { result: SWING_PHASES } });
+    await page.getByRole("button", { name: /Detect swing/ }).click();
+
+    await expect(page.getByLabel("Frame", { exact: true })).toHaveValue("48");
+  });
+
+  test("reports a clip with no swing as a finding rather than a failure", async ({
+    page,
+  }) => {
+    await loadClip(page, { detect_phases: { result: NO_SWING } });
+    await page.getByRole("button", { name: /Detect swing/ }).click();
+
+    await expect(
+      page.getByText("No swing detected in this clip."),
+    ).toBeVisible();
+    // The measurement that decided it, and the reason, are both on screen.
+    // Scoped to the field, because the same figure appears in the explanation.
+    await expect(page.locator('dd[title="0.04 torso lengths"]')).toBeVisible();
+    await expect(
+      page.getByText(/below the 0.5 a swing requires/),
+    ).toBeVisible();
+    // No inspector, because there is nothing to inspect.
+    await expect(page.getByLabel("Frame", { exact: true })).toHaveCount(0);
+  });
+
+  test("renders a missing extraction with the engine's remedy", async ({
+    page,
+  }) => {
+    await loadClip(page, {
+      detect_phases: {
+        error: {
+          kind: "method",
+          message:
+            "No extracted poses for faceon.mov with model 'pose_landmarker_full'.",
+          code: -31001,
+          data: {
+            remediation:
+              "Run: analyzer extract faceon.mov --model pose_landmarker_full",
+          },
+        },
+      },
+    });
+    await page.getByRole("button", { name: /Detect swing/ }).click();
+
+    await expect(page.getByText(/No extracted poses/)).toBeVisible();
+    await expect(page.getByText(/analyzer extract/)).toBeVisible();
   });
 });

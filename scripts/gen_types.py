@@ -37,6 +37,7 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.video", "VideoMetadata"),
     ("analyzer.contracts.pose", "PoseExtractionResult"),
     ("analyzer.contracts.progress", "ProgressUpdate"),
+    ("analyzer.contracts.phases", "SwingPhases"),
 )
 
 BANNER = """\

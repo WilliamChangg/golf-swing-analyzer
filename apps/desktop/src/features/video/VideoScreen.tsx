@@ -25,6 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PhasesPanel } from "@/features/video/PhasesPanel";
 import { PosePanel } from "@/features/video/PosePanel";
 import { probeVideo } from "@/lib/ipc";
 
@@ -331,6 +332,10 @@ export function VideoScreen() {
           <StreamPanel metadata={state.metadata} />
           <PosePanel
             key={state.metadata.path}
+            videoPath={state.metadata.path}
+          />
+          <PhasesPanel
+            key={`phases-${state.metadata.path}`}
             videoPath={state.metadata.path}
           />
         </>
