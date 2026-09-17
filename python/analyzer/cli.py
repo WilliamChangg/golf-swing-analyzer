@@ -27,6 +27,7 @@ from rich.table import Table
 from analyzer import __version__
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.rpc import EngineError
@@ -388,6 +389,144 @@ def filter_poses(
     # Non-zero when the clip yielded nothing usable, so a script driving this
     # learns that no trajectory came out rather than reading an empty table.
     if report.mean_valid_fraction == 0.0:
+        raise typer.Exit(code=1)
+
+
+_PHASE_STYLE: dict[str, str] = {
+    "address": "blue",
+    "backswing": "cyan",
+    "downswing": "magenta",
+    "follow_through": "green",
+}
+
+
+def _render_phases(result: SwingPhases) -> None:
+    hand = result.hand
+
+    summary = Table(title="Swing detection", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.detected else "[yellow]NO[/yellow]"
+    summary.add_row("swing detected", verdict)
+    summary.add_row("frames", str(result.frames))
+    summary.add_row(
+        "hand tracked from", f"{hand.source.value} ({hand.valid_frames}/{hand.total_frames} frames)"
+    )
+    summary.add_row("hand travel", f"{hand.travel:.3f} frame widths")
+    summary.add_row("torso length", f"{hand.torso_length:.3f} frame widths")
+    summary.add_row("travel", f"{hand.travel_ratio:.2f} torso lengths")
+    summary.add_row("peak hand speed", f"{hand.peak_speed:.3f} frame widths/s")
+    console.print(summary)
+
+    if result.detected:
+        events = Table(title="Events", title_justify="left", expand=True)
+        for column in (
+            "event",
+            "frame",
+            "time",
+            "confidence",
+            "margin",
+            "visibility",
+            "resolution",
+        ):
+            events.add_column(column, no_wrap=True)
+        events.add_column("corroboration", no_wrap=True)
+
+        for entry in result.events:
+            factors = entry.confidence
+            style = (
+                "green" if factors.overall >= 0.6 else "yellow" if factors.overall > 0 else "red"
+            )
+            corroboration = (
+                "-"
+                if entry.corroboration_delta_s is None
+                else f"frame {entry.corroboration_frame} ({entry.corroboration_delta_s * 1000:+.0f} ms)"
+            )
+            events.add_row(
+                entry.event.value,
+                str(entry.frame_index),
+                f"{entry.timestamp_s:.3f} s",
+                f"[{style}]{factors.overall:.2f}[/{style}]",
+                f"{factors.margin:.2f}",
+                f"{factors.visibility:.2f}",
+                f"{factors.resolution:.2f}",
+                corroboration,
+            )
+        console.print(events)
+
+        intervals = Table(title="Phases", title_justify="left", expand=True)
+        for column in ("phase", "frames", "start", "duration", "confidence"):
+            intervals.add_column(column, no_wrap=True)
+        for interval in result.phases:
+            style = _PHASE_STYLE.get(interval.phase.value, "white")
+            intervals.add_row(
+                f"[{style}]{interval.phase.value}[/{style}]",
+                f"{interval.start_frame}-{interval.end_frame}",
+                f"{interval.start_s:.3f} s",
+                f"{interval.duration_s:.3f} s",
+                f"{interval.confidence:.2f}",
+            )
+        console.print(intervals)
+
+        console.print(
+            "[dim]Impact is estimated from hand kinematics; nothing here sees the ball "
+            "or the club. Confidence is margin x visibility x resolution.[/dim]"
+        )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def phases(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    polyorder: Annotated[
+        int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Locate the takeaway, top, impact and finish in a clip."""
+    smoothing: dict[str, object] = {}
+    if window is not None:
+        smoothing["window_s"] = window
+    if polyorder is not None:
+        smoothing["polyorder"] = polyorder
+
+    params: dict[str, object] = {"path": str(path), "model": model}
+    if smoothing:
+        params["filter"] = {"smoothing": smoothing}
+
+    try:
+        result = call("detect_phases", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, SwingPhases)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_phases(result)
+
+    # Non-zero when no swing was found, so a script driving this learns that no
+    # events came out rather than reading an empty table as success.
+    if not result.detected:
         raise typer.Exit(code=1)
 
 

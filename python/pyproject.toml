@@ -29,6 +29,10 @@ analyzer = "analyzer.cli:app"
 
 [dependency-groups]
 dev = [
+    # Only used by scripts/plot_phases.py. Declared rather than relied on
+    # transitively: it arrives today through mediapipe, and a dependency that
+    # works by accident stops working without warning.
+    "matplotlib~=3.11",
     "pytest~=9.1",
     "pytest-cov~=7.1",
     "hypothesis~=6.168",

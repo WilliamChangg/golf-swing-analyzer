@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from analyzer.contracts.filtering import FilterConfig
+from analyzer.contracts.phases import PhaseConfig
 from analyzer.contracts.pose import LandmarkSpace
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.environment.doctor import run_doctor
@@ -190,11 +191,66 @@ def _filter_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMod
     return result.report
 
 
+class DetectPhasesParams(BaseModel, extra="forbid"):
+    """Parameters for `detect_phases`."""
+
+    path: str = Field(
+        description=(
+            "A pose Parquet file, or the video it was extracted from -- in which "
+            "case the content-keyed cache is consulted for its landmarks."
+        )
+    )
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction to use. Only used when `path` is a video.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy. Detection reads the window from it when scoring events.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description="Structural bounds a motion must satisfy to be reported as a swing.",
+    )
+
+
+def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Locate the swing events in a clip's stored landmarks."""
+    parsed = DetectPhasesParams.model_validate(params)
+
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    # Detection always reads IMAGE space: hand height in HIP_LOCAL is measured
+    # from an origin that moves with the body, so "the highest the hands reached"
+    # would mean something other than what the rules assume.
+    filtered = filter_sequence(sequence, parsed.filter, reporter=reporter)
+    try:
+        return detect_phases(filtered, parsed.phases)
+    except SignalError as exc:
+        raise _unsupported_input(exc, None) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
     "probe_video": _probe_video,
     "extract_poses": _extract_poses,
     "filter_poses": _filter_poses,
+    "detect_phases": _detect_phases,
 }
 
 

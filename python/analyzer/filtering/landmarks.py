@@ -33,6 +33,7 @@ from analyzer.contracts.filtering import (
     unit_for,
 )
 from analyzer.contracts.pose import Landmark, LandmarkSpace, PoseSequence
+from analyzer.filtering.gating import gated_observations
 from analyzer.filtering.pipeline import FilterPipeline, default_pipeline
 from analyzer.filtering.signal import Signal, signal_from_arrays
 from analyzer.pose.series import LandmarkSeries, landmark_series
@@ -50,6 +51,19 @@ class FilteredLandmark:
     `position`, `velocity` and `acceleration` are (frames, 3) arrays, NaN
     wherever no value is supported. `valid` is the mask of frames carrying a
     complete position -- the only frames a metric may be computed from.
+
+    `visibility` is what the estimator reported per frame, carried through
+    rather than collapsed into the report's averages: Phase 4 weighs an event's
+    confidence by how well the landmark was seen *around that instant*, which a
+    clip-wide mean cannot answer. It is the raw reported value, including on
+    frames the gate rejected — averaging only the frames that survived the gate
+    would raise the score precisely where the landmark was least visible.
+
+    `observed` is the separate question of whether a frame carried a real
+    observation that survived the gate. It differs from `valid` at the ends of
+    every clip, where the estimator saw the landmark perfectly well but the fit
+    had too little support to emit anything, and the difference matters: one is
+    a capture problem and the other a window-width one.
     """
 
     landmark: Landmark
@@ -59,6 +73,8 @@ class FilteredLandmark:
     velocity: NDArray[np.float64]
     acceleration: NDArray[np.float64]
     valid: NDArray[np.bool_]
+    visibility: NDArray[np.float64]
+    observed: NDArray[np.bool_]
     report: LandmarkFilterReport
 
     def __len__(self) -> int:
@@ -180,6 +196,11 @@ def filter_landmark(
         velocity=velocity,
         acceleration=acceleration,
         valid=valid,
+        visibility=outputs["x"].visibility,
+        # Asked of the pipeline's *input*, not its output: after the fit,
+        # `value` holds fitted numbers and the mask would report where the fit
+        # succeeded rather than where the estimator saw the landmark.
+        observed=gated_observations(signals["x"], resolved.gate),
         report=_landmark_report(series, reports, valid),
     )
 
