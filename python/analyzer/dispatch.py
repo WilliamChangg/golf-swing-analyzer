@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError
 
 from analyzer.contracts.filtering import FilterConfig
+from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
 from analyzer.contracts.pose import LandmarkSpace
 from analyzer.contracts.rpc import EngineError, ErrorCode
@@ -245,12 +246,76 @@ def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
         raise _unsupported_input(exc, None) from exc
 
 
+class ComputeMetricsParams(BaseModel, extra="forbid"):
+    """Parameters for `compute_metrics`."""
+
+    path: str = Field(
+        description=(
+            "A pose Parquet file, or the video it was extracted from -- in which "
+            "case the content-keyed cache is consulted for its landmarks."
+        )
+    )
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction to use. Only used when `path` is a video.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy, applied before phases are detected and metrics measured.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description="Structural bounds a motion must satisfy to be reported as a swing.",
+    )
+    metrics: MetricConfig = Field(
+        default_factory=MetricConfig,
+        description="When a measurement is too ill-conditioned to report at all.",
+    )
+
+
+def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Measure the biomechanics metrics for a clip's stored landmarks.
+
+    Runs the whole chain rather than taking a detection as input: filtering is
+    milliseconds and detection is cheaper still, so recomputing them here costs
+    nothing measurable and removes the possibility of metrics being measured
+    against a detection produced under a different filter configuration.
+    """
+    parsed = ComputeMetricsParams.model_validate(params)
+
+    from analyzer.biomechanics import BodyError, compute_metrics
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    filtered = filter_sequence(sequence, parsed.filter, reporter=reporter)
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+        return compute_metrics(filtered, detected, parsed.metrics)
+    except (SignalError, BodyError) as exc:
+        raise _unsupported_input(exc, None) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
     "probe_video": _probe_video,
     "extract_poses": _extract_poses,
     "filter_poses": _filter_poses,
     "detect_phases": _detect_phases,
+    "compute_metrics": _compute_metrics,
 }
 
 

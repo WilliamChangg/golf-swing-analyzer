@@ -31,6 +31,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from analyzer.contracts.cache import ContentKey
 from analyzer.contracts.pose import (
     POSE_SCHEMA_VERSION,
+    FrameGeometry,
     LandmarkPoint,
     LandmarkSpace,
     PoseExtractionStats,
@@ -48,6 +49,7 @@ _KEY_CONTENT_KEY = _META_PREFIX + b"video_content_key"
 _KEY_MODEL = _META_PREFIX + b"model"
 _KEY_EXTRACTED_AT = _META_PREFIX + b"extracted_at"
 _KEY_STATS = _META_PREFIX + b"stats"
+_KEY_GEOMETRY = _META_PREFIX + b"geometry"
 
 # float32 throughout: landmark coordinates are normalised model outputs with far
 # fewer than seven significant digits of real precision, so float64 would store
@@ -118,6 +120,7 @@ def to_table(sequence: PoseSequence, *, landmark_count: int) -> pa.Table:
         _KEY_SCHEMA_VERSION: str(sequence.schema_version).encode(),
         _KEY_VIDEO_PATH: sequence.video_path.encode(),
         _KEY_CONTENT_KEY: sequence.video_content_key.model_dump_json().encode(),
+        _KEY_GEOMETRY: sequence.geometry.model_dump_json().encode(),
         _KEY_MODEL: sequence.model.model_dump_json().encode(),
         _KEY_EXTRACTED_AT: sequence.extracted_at.isoformat().encode(),
         _KEY_STATS: sequence.stats.model_dump_json().encode(),
@@ -183,6 +186,7 @@ def read_sequence(path: Path) -> PoseSequence:
     model = PoseModelInfo.model_validate_json(_require(metadata, _KEY_MODEL, path))
     content_key = ContentKey.model_validate_json(_require(metadata, _KEY_CONTENT_KEY, path))
     stats = PoseExtractionStats.model_validate_json(_require(metadata, _KEY_STATS, path))
+    geometry = FrameGeometry.model_validate_json(_require(metadata, _KEY_GEOMETRY, path))
     extracted_at = _require(metadata, _KEY_EXTRACTED_AT, path).decode()
     video_path = _require(metadata, _KEY_VIDEO_PATH, path).decode()
 
@@ -190,6 +194,7 @@ def read_sequence(path: Path) -> PoseSequence:
         schema_version=version,
         video_path=video_path,
         video_content_key=content_key,
+        geometry=geometry,
         model=model,
         extracted_at=extracted_at,  # type: ignore[arg-type]  # pydantic parses the ISO string
         stats=stats,

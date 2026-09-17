@@ -237,18 +237,27 @@ def longest_run(mask: NDArray[np.bool_]) -> int:
 def _line_angle_deg(
     start: FilteredLandmark | None, end: FilteredLandmark | None, count: int
 ) -> NDArray[np.float64]:
-    """Tilt of the line through two landmarks, in degrees, positive end-up.
+    """Tilt of the line through two landmarks away from level, in degrees, on [-90, 90].
 
-    Negated relative to raw image coordinates so that a positive angle means the
-    `end` point is *higher* in the frame, matching how the rest of this module
-    speaks about the body. Zero is level.
+    A shoulder line has an **orientation, not a direction**, so the answer must
+    not depend on which landmark was passed first. It is made canonical by
+    measuring left to right *across the frame*: whichever landmark has the
+    smaller x is treated as the start. **Positive means the landmark further
+    right in the frame is the higher one.** Zero is level.
 
-    Folded onto (-90, 90] because a shoulder line has an **orientation, not a
-    direction**. Taken as a vector angle, a nearly level line sits beside the
-    ±180 discontinuity, and the signal flips the full 360 between consecutive
-    frames every time the tilt crosses zero -- which for shoulders and hips is
-    most of a swing. Folding moves the discontinuity to vertical, where these
-    lines never go.
+    The y sign is flipped first, because image y grows downward and every
+    statement in this module is about the body as it is seen.
+
+    This convention is shared with `biomechanics.geometry.line_tilt_deg` and the
+    two must not diverge: a reader comparing a plotted shoulder angle against a
+    reported metric should not have to work out which sign each used.
+
+    An earlier version folded the plain vector angle onto (-90, 90], which fixes
+    the +-180 jump a near-level line otherwise produces and quietly redefines the
+    sign while doing it -- folding reverses any leftward vector, so "positive
+    means `end` is higher" held only while `end` was on the right of the frame.
+    A player facing the camera has their right shoulder on the frame's left, so
+    the stated meaning inverted for precisely the footage this system reads.
     """
     angles = np.full(count, np.nan, dtype=np.float64)
     if start is None or end is None:
@@ -256,8 +265,14 @@ def _line_angle_deg(
 
     delta = end.position - start.position
     usable = start.valid & end.valid
-    directed = np.degrees(np.arctan2(-delta[usable, 1], delta[usable, 0]))
-    angles[usable] = (directed + 90.0) % 180.0 - 90.0
+    dx = delta[usable, 0]
+    dy = -delta[usable, 1]
+    # Point the segment rightwards across the frame, so the tilt describes the
+    # line rather than the order the landmarks arrived in.
+    leftwards = dx < 0.0
+    angles[usable] = np.degrees(
+        np.arctan2(np.where(leftwards, -dy, dy), np.where(leftwards, -dx, dx))
+    )
     return angles
 
 

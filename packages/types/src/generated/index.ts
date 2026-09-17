@@ -7,8 +7,9 @@
  */
 
 
-export * from "./EnvironmentReport";
-export * from "./VideoMetadata";
-export * from "./PoseExtractionResult";
-export * from "./ProgressUpdate";
-export * from "./SwingPhases";
+export type { HealthStatus, EnvironmentReport, PlatformInfo, ComponentStatus, ComputeInfo } from "./EnvironmentReport";
+export type { HashAlgorithm, TimestampSource, VideoMetadata, ContentKey, VideoStreamInfo, VideoTiming, IntervalStats } from "./VideoMetadata";
+export type { PoseExtractionResult, PoseModelInfo, PoseExtractionStats } from "./PoseExtractionResult";
+export type { ProgressUpdate } from "./ProgressUpdate";
+export type { SwingEvent, SwingPhase, HandSource, SwingPhases, DetectedEvent, EventConfidence, DetectedPhase, HandSignalInfo, PhaseConfig } from "./SwingPhases";
+export type { MetricName, MetricGroup, MetricUnit, MetricBasis, BodySide, MetricSet, Metric, MetricConfidence, RefusedMetric, LeadSide, RotationReference, FrameGeometry, MetricConfig } from "./MetricSet";

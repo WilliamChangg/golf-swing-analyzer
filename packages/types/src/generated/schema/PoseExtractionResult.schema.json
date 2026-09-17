@@ -91,7 +91,7 @@
   "description": "What the desktop app is told about a completed extraction.\n\nDeliberately excludes the landmarks themselves. A 240 fps clip carries tens\nof thousands of frames of 33 landmarks in two spaces, which belongs in a\ncolumnar file on disk rather than in a JSON-RPC response; the app is given\nthe path to read and the numbers to display.",
   "properties": {
     "schema_version": {
-      "default": 1,
+      "default": 2,
       "type": "integer"
     },
     "video_path": {

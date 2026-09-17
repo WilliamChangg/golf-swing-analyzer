@@ -40,6 +40,7 @@ from analyzer.contracts.pose import (
 )
 from analyzer.filtering.landmarks import filter_sequence
 from analyzer.phases import SignalError, detect_phases, swing_signals
+from tests.conftest import SQUARE_FRAME
 
 FPS = 120.0
 
@@ -184,6 +185,7 @@ def _sequence(
         video_content_key=ContentKey(
             algorithm=HashAlgorithm.SHA256_SAMPLED, digest="f" * 64, size_bytes=1
         ),
+        geometry=SQUARE_FRAME,
         model=PoseModelInfo(
             name="fake",
             variant="fake",

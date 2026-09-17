@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-4 complete (5 / 21).**
+**Progress: Phases 0-5 complete (6 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -13,8 +13,8 @@ advance past a broken phase.
 | 2   | Single-camera pose    | ✅ **Done** | Landmarks persisted and reloadable; estimator swappable    |
 | 3   | Temporal filtering    | ✅ **Done** | Error bounds met against analytical trajectories           |
 | 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame  |
-| 5   | Biomechanics engine   | ⬜ Next     | Metrics carry units, confidence, methodology               |
-| 6   | DTL + coordinates     | ⬜          | Conventions documented and tested                          |
+| 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology               |
+| 6   | DTL + coordinates     | ⬜ Next     | Conventions documented and tested                          |
 | 7   | Two-camera sync       | ⬜          | Measured sync residual in ms                               |
 | 8   | Camera calibration    | ⬜          | Reprojection error reported; status gates claims           |
 | 9   | 3D reconstruction     | ⬜          | Reconstruction error measured on synthetic ground truth    |
@@ -407,38 +407,138 @@ smears the wrists exactly when they move fastest, and pose estimation loses them
   4.4 existing: the projected shoulder and hip angles were wrapping between
   ±180° every time the line crossed level.
 
-## Phase 5 — Biomechanics engine ⬜
+## Phase 5 — Biomechanics engine ✅
 
-Every result is a `Metric{name, value, unit, phase, confidence, source_frames,
-methodology}`. From one 2D camera, shoulder/pelvis rotation are _projected_
-angles under an assumed viewing geometry — labelled as such, with X-factor
-flagged as an approximation.
+`python/analyzer/biomechanics/{geometry,body,anchors,registry,posture,rotation,arms,timing,compute}.py`
 
-- [ ] 5.1 Vector/angle primitives + tests
-- [ ] 5.2 Posture: spine angle, knee flexion, hip position, head position
-- [ ] 5.3 Rotation: shoulder, pelvis, separation, X-factor (2D-projected)
-- [ ] 5.4 Hand/arm: hand path, lead/trail arm angles
-- [ ] 5.5 Timing: backswing/downswing duration, tempo ratio, transition→impact
-- [ ] 5.6 `Metric` contract + registry + confidence propagation
-- [ ] 5.7 Tests with hand-computed expected angles
-- [ ] 5.8 Commit
+Every result is a `Metric{name, value, unit, basis, event/phase, confidence,
+source_frames, methodology}`. The field that does the most work is `basis`,
+which says what **kind** of claim the number is — a duration, an image-plane
+distance, a projected angle, or a rotation inferred from foreshortening. From
+one uncalibrated camera nothing here sees three dimensions, and that is carried
+in the type rather than in a disclaimer. See
+[ADR-0010](decisions/ADR-0010-projected-biomechanics.md).
+
+- [x] **5.1 Primitives** — plane coordinates (the aspect fix and the y flip,
+      both applied exactly once), interior and unsigned angles, tilt from
+      vertical, line tilt, foreshortening, projection onto a direction
+- [x] **5.2 Posture** — spine tilt, left/right knee flex, hip sway, head sway
+      and head lift, the last three measured from the median address pose
+- [x] **5.3 Rotation** — shoulder turn, pelvis turn, X-factor by foreshortening
+      against an address baseline; shoulder and pelvis tilt, which need no
+      baseline and survive any view
+- [x] **5.4 Hand/arm** — hand path summed along the arc, peak hand speed in
+      torso lengths per second, lead and trail arm angles with the lead side
+      **measured** rather than assumed
+- [x] **5.5 Timing** — backswing, downswing, follow-through, takeaway-to-impact
+      and the tempo ratio; the only metrics here a camera position cannot spoil
+- [x] **5.6 Contract + registry + propagation** — `Metric`, `MetricSet`,
+      `RefusedMetric`; one declaration per quantity so a unit cannot drift from
+      its documentation; `Anchor` carries Phase 4's confidence into every metric
+      measured at it
+- [x] **5.7 Tests** — 93 added (all pytest): primitives against 3-4-5 triangles
+      and Thales' theorem, metrics against a body built from known angles on a
+      deliberately non-square frame
+- [x] **5.8 Verified on recorded swings; commit**
+
+**Measured** on `data/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
+window), at the top of the backswing. Every value was checked against the frame
+it came from using `scripts/overlay_metrics.py`:
+
+| Metric         | Value    | Confidence | obs  | anchor | method |
+| -------------- | -------- | ---------- | ---- | ------ | ------ |
+| Shoulder turn  | 50.2°    | 0.49       | 1.00 | 0.64   | 0.77   |
+| Pelvis turn    | 35.3°    | 0.37       | 1.00 | 0.64   | 0.58   |
+| X-factor       | 14.9°    | 0.37       | 1.00 | 0.64   | 0.58   |
+| Spine tilt     | +3.6°    | 0.50       | 1.00 | 0.64   | 0.79   |
+| Lead arm angle | 134.9°   | 0.39       | 0.98 | 0.64   | 0.62   |
+| Tempo ratio    | 2.67 : 1 | 0.57       | 1.00 | 0.64   | 0.89   |
+
+39 metrics produced, none refused. Lead side inferred as **left** (margin 1.00),
+which the overlay confirms: the player sets up with the left hand above the
+right and takes the club over their right shoulder.
+
+`data/dtl/iron_dtl.mp4` produces 33 metrics and **refuses 3**. Its shoulders
+project 0.07 torso lengths at address and 10.61× that mid-swing, so shoulder
+turn, pelvis turn and X-factor are refused as not measurable from that view —
+which is correct, because a down-the-line camera does not contain the
+measurement. Tilts, posture, hands and timing all survive.
+
+**Cost** (`scripts/benchmark_metrics.py`, median of 9):
+
+| Clip           | Frames | Filter  | Phases | Metrics |
+| -------------- | ------ | ------- | ------ | ------- |
+| PW_face-on.mp4 | 68     | 17.9 ms | 0.3 ms | 1.9 ms  |
+| iron_dtl.mp4   | 96     | 20.5 ms | 0.3 ms | 1.6 ms  |
+
+Against ~1.3 s to extract poses for the same clip. Nothing is cached, for the
+same measured reason as Phase 3.
+
+**Deliberate deviations from the original plan:**
+
+- **Phase 6.1a was pulled forward, partly.** The plan left the anisotropic-
+  distance defect to Phase 6, and also said Phase 5's angles and lengths would
+  not survive it — both of which are true, so the phase could not be done
+  honestly without it. `PoseSequence` gains `FrameGeometry` (pose schema
+  version 1 → 2, so cached extractions are refused and re-run), `FilteredSequence`
+  carries it, and `biomechanics.geometry.plane_coordinates` applies the
+  correction once. On the reference clips the aspect ratio is 1.7778, so a true
+  45° line was reading as 29.4°. **What remains for Phase 6** is pushing the
+  correction below the biomechanics layer so Phase 4's own travel ratios get it
+  too, and re-measuring its thresholds against that.
+- **The rotation baseline is the address pose, not the widest view in the clip.**
+  The latter was built first and is worse; the reference footage broke it on the
+  first run. See ADR-0010 — a maximum over a clip is a maximum over its noise.
+- **`line_tilt_deg` orders its points by image x rather than folding onto
+  (−90, 90].** The fold, carried over from Phase 4, reverses any leftward vector
+  and so silently redefines the sign: "positive means the right shoulder is
+  higher" held only while the player's right shoulder was on the right of the
+  frame, and a player facing the camera has it on the left. Found by two of the
+  engine's own outputs disagreeing about handedness on the reference clip.
+  `phases/signals.py` was corrected to the same convention so the two cannot
+  diverge; no Phase 4 detection rule reads those angles, so no event moved.
+- **Lead and trail arms are measured, not configured.** At the top the hands sit
+  over the trail shoulder; projecting their offset onto the shoulder line names
+  the side. Where the view does not show it the side is `None` and those metrics
+  are refused, rather than assuming the player is right-handed.
+- **Rotation is not reported at address.** Address is the baseline it is
+  measured against, so the value there is zero by construction — a restatement
+  of the method rather than a measurement of the swing.
+- **"Transition → impact" is not emitted.** The transition is the top, so it is
+  the downswing duration under another name. Reporting it twice would give a
+  reader two numbers that can never disagree and no way to know that in advance.
+  Same reasoning that kept tempo out of Phase 4.
+- **No confidence factor is a chosen constant.** Every `method` value is
+  computed from something measured — frame-rate quantisation, the in-plane
+  fraction of a segment, or the sine of the angle the arccos returned.
+- **No UI.** Phase 4 built an inspector because checking an event's _timing_
+  needs the video frame by frame. A metric is checked by drawing it on the frame
+  it came from, which `scripts/overlay_metrics.py` does; the app's metric
+  presentation belongs with the rest of the workflow in Phase 14.
+- **`python -m analyzer.cli` was missing commands.** `if __name__ == "__main__":
+app()` sat mid-file, so Typer never registered the commands defined below it
+  under the module entry point while the installed `analyzer` script had them
+  all. Moved to the bottom, with a comment saying why it stays there.
 
 ## Phase 6 — DTL + coordinate systems ⬜
 
-**Carried in from Phase 4: IMAGE space is anisotropic and distances taken in it
-are wrong.** x is normalised by frame width and y by frame height, so on the
-1080x1920 clips here a vertical distance is under-weighted by 0.5625 against a
-horizontal one. Every Euclidean quantity that mixes the two — hand speed, hand
-travel, torso length — carries that distortion today. Phase 4 survives it because
-its gate is a _ratio_ of two such distances, which partly cancels, and because
-locating a maximum tolerates an anisotropic scaling; Phase 5's angles and
-lengths will not. The fix needs the display aspect ratio at the filtering layer,
-which the pose sequence does not currently carry: `PoseSequence` gains the
-display dimensions, or distances move into a space normalised by width alone.
+**Half of the carried-in anisotropy defect is fixed; half is not.** Phase 5
+added `FrameGeometry` to `PoseSequence` and `FilteredSequence` and applies the
+aspect correction in `biomechanics.geometry.plane_coordinates`, so every metric
+is computed in isotropic frame widths. **Phase 4 still is not.** Its hand speed,
+hand travel and torso length are all taken in raw IMAGE space, where a vertical
+distance is under-weighted by 0.5625 on a landscape clip and over-weighted by
+1.7778 on a portrait one. It survives because its gate is a _ratio_ of two such
+distances, which partly cancels, and because locating a maximum tolerates an
+anisotropic scaling — but its numbers are not geometry, and `SwingPhases.hand`
+reports a `torso_length` that differs from `MetricSet.torso_length` on the same
+clip for exactly this reason.
 
 - [ ] 6.1 Image / normalized / camera / world frame types + `docs/coordinate-systems.md`
-- [ ] 6.1a Fix the anisotropic-distance defect above; re-measure Phase 4's
-      travel ratios against it
+- [ ] 6.1a Move the aspect correction below the biomechanics layer so Phase 4
+      reads isotropic distances too; re-measure its travel ratios and
+      `min_travel_ratio` / `min_phase_travel_ratio` against it, and reconcile
+      the two `torso_length` figures
 - [ ] 6.2 DTL metrics: hand depth, spine angle, shaft orientation, club path, head movement
 - [ ] 6.3 View-tagged metrics so face-on and DTL never conflate
 - [ ] 6.4 Tests: round-trip conversions, known-projection fixtures

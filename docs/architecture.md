@@ -108,15 +108,24 @@ ingestion/      container inspection and frame decoding
 pose/           landmark estimation, storage, per-landmark series
 filtering/      smoothing, gap policy, derivatives
 phases/         swing event detection
+biomechanics/   measured metrics, with units, confidence and methodology
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `biomechanics` and `coaching` as sibling packages with
-Protocol-typed seams (`ClubDetector`, `BallDetector`), following `ingestion`'s
-`FrameSource`, `pose`'s `PoseEstimator` and `filtering`'s `FilterStage`.
-Golf-specific reasoning is confined to `phases`, `biomechanics` and `coaching`;
-everything below is general computer vision that would serve any moving body.
+Later phases add `coaching` as a sibling package, and Protocol-typed seams
+(`ClubDetector`, `BallDetector`) following `ingestion`'s `FrameSource`, `pose`'s
+`PoseEstimator` and `filtering`'s `FilterStage`. Golf-specific reasoning is
+confined to `phases`, `biomechanics` and `coaching`; everything below is general
+computer vision that would serve any moving body.
+
+`biomechanics` has one entry point, `compute_metrics(filtered, phases)`, and one
+internal rule that keeps it honest: nothing above `geometry.py` touches a raw
+landmark coordinate. IMAGE space is anisotropic and its y points downward, and
+both corrections are applied in `plane_coordinates` exactly once. A metric
+module that reached back into the filtered sequence for a coordinate would
+reintroduce both silently — no exception, no implausible number, just angles
+wrong by a factor that depends on the shape of the frame.
 
 ## Video ingestion
 

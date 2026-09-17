@@ -6,12 +6,12 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-4 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-5 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
-> temporal filtering, and swing phase detection are built and verified. No
-> metrics or coaching exist yet. Sections below marked _Not yet implemented_ say
-> so rather than describing features that do not exist. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> temporal filtering, swing phase detection, and the biomechanics metric engine
+> are built and verified. No club tracking, 3D reconstruction or coaching exists
+> yet. Sections below marked _Not yet implemented_ say so rather than describing
+> features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -93,10 +93,10 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 5-13 outstanding._ A clip can be imported,
+_Partially implemented — Phases 6-13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
-derivatives, and segmented into swing phases — from the app's **Video** screen
-or from a terminal:
+derivatives, segmented into swing phases, and measured — the first four from the
+app's **Video** screen, and all of them from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -105,6 +105,7 @@ uv run --project python analyzer extract path/to/swing.mov --model pose_landmark
 uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
 uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyorder 4
 uv run --project python analyzer phases  path/to/swing.mov   # takeaway/top/impact/finish
+uv run --project python analyzer metrics path/to/swing.mov   # biomechanics
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -125,8 +126,15 @@ clip frame by frame, which is the only way to actually check whether an event
 landed where it should. `scripts/plot_phases.py` writes the same signals as a
 plot and a per-frame CSV.
 
-The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`
-and `detect_phases`.
+Metrics turn those phases into measured quantities — posture, rotation, hands
+and arms, timing — each with a unit, the frames it came from, a decomposed
+confidence and a methodology. Metrics that cannot honestly be computed from a
+given recording are listed as refusals with the reason, rather than omitted.
+`scripts/overlay_metrics.py` draws each value on the frame it was measured from,
+which is the only way to tell a correct angle from a plausible one.
+
+The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
+`detect_phases` and `compute_metrics`.
 
 ## 6. Supported video formats
 
@@ -176,7 +184,8 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 5-11 outstanding._ Four stages are built.
+_Partially implemented — Phases 6-11 outstanding._ Four stages are built; what
+sits on top of them is in §10.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -227,9 +236,80 @@ metric-scale claims without stereo calibration.
 
 ## 10. Biomechanics methodology
 
-_Not yet implemented — Phase 5._ Every metric will carry name, value, unit,
-phase, confidence, source frames, and methodology. Angles derived from a single
-2D camera will be labelled as projected, not true 3D rotation.
+Every metric carries a name, a value, a unit, the swing event or phase it was
+measured at, the frames it came from, a three-part confidence, and a methodology
+in words that is never omitted. It also carries a **basis**, and that field is
+the one doing the real work.
+
+Everything measured so far comes from a single uncalibrated camera, which
+flattens three dimensions into two. No arithmetic afterwards puts the third one
+back. So rather than a disclaimer in a document, the kind of claim a number
+represents is a typed field on the contract:
+
+| basis                 | what the number is                                  |
+| --------------------- | --------------------------------------------------- |
+| `temporal`            | a duration, or a ratio of durations                 |
+| `image_plane`         | a distance or speed between two points in the frame |
+| `projected_angle`     | the angle between two segments as they appear       |
+| `foreshortened_angle` | rotation inferred from how much a segment shortened |
+
+`temporal` is the only one of the four that measures the body rather than a
+picture of it. A consumer that wants to say "your shoulders turned 50 degrees"
+has to go past a field saying it is a foreshortening estimate. Full reasoning in
+[ADR-0010](docs/decisions/ADR-0010-projected-biomechanics.md).
+
+**Rotation is measured, not assumed.** A shoulder line of fixed real width
+projects to less as it turns away from the camera, by the cosine of the turn, so
+`arccos(span / span_at_address)` recovers the angle from two lengths in the same
+image — focal length, distance and sensor size all cancel in the ratio. It
+cannot tell a turn from its mirror image, so values are magnitudes; and it is
+ill-conditioned near zero, where `dθ/d(span)` goes as `1/sin θ`, which is
+exactly why `sin θ` is the confidence factor rather than a number someone chose.
+
+**The method's premise is checked rather than trusted.** Foreshortening needs
+the player square to the camera at address. If the body line projects more than
+1.25× wider anywhere in the clip than it did at address, that did not happen,
+and the rotation metrics are refused with the measured ratio in the reason. On
+the reference footage the two cases are not close: 1.12× face-on against 10.61×
+down-the-line.
+
+**Confidence is three measured factors and their product**, matching how Phase 4
+reports an event:
+
+| factor        | what it measures                                              |
+| ------------- | ------------------------------------------------------------- |
+| `observation` | reported visibility of the landmarks used, on the frames used |
+| `anchor`      | the Phase 4 confidence of the event or phase measured at      |
+| `method`      | how sharply the method itself pins the quantity down          |
+
+None of the three is a policy constant. `method` is computed from the data for
+each basis: the fraction of a duration that is not frame-rate quantisation, the
+fraction of a segment lying in the image plane, or the sine of the angle the
+arccos returned. The factors answer _how well this method determined this
+quantity as defined_ — not how close it is to an anatomical truth, which is what
+`basis` is for. Mixing the two into one scalar would make it uninterpretable,
+because "the landmark was blurry" and "a camera cannot see rotation" have
+completely different fixes.
+
+**Lengths are in torso lengths**, not pixels or frame widths. A frame width
+halves when the camera is moved twice as far away; the player's torso does not.
+It is not a metric unit and does not pretend to be one.
+
+**Lead and trail arms are worked out from the video.** Which physical arm leads
+depends on handedness, which no pose sequence states, and assuming right-handed
+would silently mislabel every left-handed player. At the top of the backswing
+the hands sit over the _trail_ shoulder, so projecting their offset from the
+chest onto the shoulder line names the side. Down the line that line points
+nearly at the camera and the projection is noise — so no side is named and the
+lead/trail metrics are refused, which is correct, because that view does not
+show it.
+
+Twenty quantities are registered: spine tilt, left and right knee flex, hip
+sway, head sway and lift; shoulder turn, pelvis turn, X-factor, shoulder and
+pelvis tilt; hand path length, peak hand speed, lead and trail arm angle; and
+backswing, downswing, follow-through and takeaway-to-impact durations with the
+tempo ratio. Each is declared once, with its unit and basis, so a unit written
+next to a computation cannot drift from the one in the documentation.
 
 ## 11. Model architecture
 
@@ -254,14 +334,14 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                        |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------ |
-| pytest     | 449   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                    |
-| Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector          |
-| Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection               |
+| Suite      | Count | Scope                                                                                                                      |
+| ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 542   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                  |
+| Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector                        |
+| Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection                             |
 
-All 555 pass as of Phase 4.
+All 648 pass as of Phase 5.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -310,6 +390,22 @@ makes the corroboration check meaningless. That fixture caught a defect the
 reference footage did not — the takeaway search finding the pause at the top of
 the backswing instead of the address, which the face-on clip survived only
 because its speed at the top was 0.130 against a 0.131 threshold.
+
+The biomechanics tests take the same line one step further: the synthetic body
+is written in **plane coordinates** — x rightwards, y upwards, both in frame
+widths — and converted backwards into the normalised image coordinates an
+estimator would have produced, on a deliberately non-square 1080x1920 frame. The
+engine then has to undo the aspect ratio and the y flip to get back to the
+numbers the body was built with. A fixture written directly in image coordinates
+could not tell a correct engine from one that skipped both.
+
+The expected angles are facts rather than agreements. A knee built at 25 degrees
+of flex must read 25; an arm whose elbow sits on the segment between shoulder
+and wrist must read 180; an arm whose elbow sits on the circle with that segment
+as its diameter must read 90, by Thales' theorem. Turn schedules are held
+constant across the instants they are measured at, because a local polynomial
+fit reproduces a constant exactly — so the recovered shoulder turn is the
+constructed one, not whatever the smoothing of a curve happened to leave.
 
 CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
@@ -404,8 +500,25 @@ Throughput: 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
 17.5 ms for a 240-frame clip, against ~1.2 s to extract poses for the same 68
 frames. Filtering is not a bottleneck, which is why nothing is cached.
 
-No figures exist yet for metrics, because they do not exist yet. A general
-benchmark harness arrives in Phase 17.
+**Biomechanics** (2026-09-16, `scripts/benchmark_metrics.py`, median of 9, on
+the two reference swings at a 0.15 s window):
+
+| Clip           | Frames | Filter  | Phases | Metrics | Produced | Refused |
+| -------------- | ------ | ------- | ------ | ------- | -------- | ------- |
+| PW_face-on.mp4 | 68     | 17.9 ms | 0.3 ms | 1.9 ms  | 39       | 0       |
+| iron_dtl.mp4   | 96     | 20.5 ms | 0.3 ms | 1.6 ms  | 33       | 3       |
+
+Against ~1.3 s to extract poses for the same clip. Filtering dominates the three
+because it fits a polynomial at every sample of 33 landmarks, while the metric
+layer reads a few dozen frames of a result already in memory. Nothing downstream
+of extraction is cached, for the same measured reason as Phase 3.
+
+The last two columns are the more interesting measurement. The down-the-line
+clip refuses shoulder turn, pelvis turn and X-factor, because its shoulders
+project 0.07 torso lengths at address and 10.61 times that mid-swing — that view
+does not contain the measurement, and the count says so.
+
+A general benchmark harness arrives in Phase 17.
 
 ## 14. Limitations
 
@@ -448,13 +561,42 @@ benchmark harness arrives in Phase 17.
   kinematic estimate with a known bias in a known direction. It is corroborated
   against the lowest point of the hand arc, and Phases 10-11 will replace that
   with club and ball evidence.
-- **Distances in IMAGE space are anisotropic, and slightly wrong.** x is
-  normalised by frame width and y by frame height, so on a 1080x1920 clip a
-  vertical distance counts for 0.5625 of a horizontal one of the same size in
-  pixels. Hand speed, hand travel and torso length all mix the two. Phase 4's
-  swing gate is a ratio of two such distances, which partly cancels the
-  distortion, and locating a maximum tolerates it — but the figures are not
-  geometry and should not be read as such. Phase 6 owns the fix.
+- **Phase 4's own distances are still anisotropic.** IMAGE space normalises x by
+  frame width and y by frame height, so on a 1080x1920 clip a vertical distance
+  counts for 0.5625 of a horizontal one of the same size in pixels. Phase 5
+  fixed this for everything it measures — `PoseSequence` now carries the display
+  dimensions and the biomechanics layer works in isotropic frame widths — but
+  the correction has not been pushed below it, so hand speed, hand travel and
+  torso length as reported by phase detection still mix the two. Phase 4
+  survives it because its gate is a ratio of two such distances, which partly
+  cancels, and because locating a maximum tolerates an anisotropic scaling. One
+  visible consequence: `SwingPhases.hand.torso_length` and
+  `MetricSet.torso_length` disagree on the same clip. Phase 6.1a reconciles them.
+- **Nothing in the metric layer sees three dimensions.** Every angle is a
+  projection and every distance is an image-plane distance, including the ones
+  named after 3D quantities. Motion directly towards or away from the camera
+  contributes nothing to any of them. This is recorded per metric in the `basis`
+  field rather than left to a reader to remember, but it is a limitation of the
+  input and no amount of labelling removes it. Phases 8 and 9 do.
+- **Shoulder and pelvis turn are magnitudes with no direction.** Foreshortening
+  is a cosine, and a cosine is even, so a turn one way and its mirror image
+  produce the same number. Recovering the sign needs depth.
+- **Rotation needs a face-on recording, and refuses without one.** The
+  foreshortening baseline is the body line's projected width at address, which
+  only stands in for its true width if the player was square to the camera
+  there. Down-the-line clips fail that and have their rotation metrics refused;
+  they keep tilts, posture, hand and timing metrics. The baseline is also only a
+  lower bound on the true width in general — a player never quite square to the
+  camera has every turn under-reported by an amount nothing here can measure.
+- **Metric thresholds are structural, not golf norms.** As in Phase 4, the
+  numbers in `MetricConfig` exist to decide when a measurement is too
+  ill-conditioned to report, not to describe what a swing should look like.
+- **Biomechanics is validated on one swing and one synthetic body.** The
+  synthetic fixture pins the arithmetic against angles known by construction,
+  and every value on the face-on reference clip was checked against the frame it
+  came from with `scripts/overlay_metrics.py`. Neither is ground truth: nobody
+  has measured this player's actual shoulder turn. That needs the labelled set
+  Phase 12 builds.
 - **Phase detection is validated on two swings.** The face-on reference clip is
   the only recording here containing a swing the pipeline can see; the
   face-on and iron down-the-line reference clips both detect cleanly; the driver
@@ -479,12 +621,18 @@ benchmark harness arrives in Phase 17.
 
 ## 15. Future work
 
-Phases 1-20: video ingestion, pose extraction, temporal filtering, swing phase
-detection, biomechanics metrics, DTL analysis, two-camera synchronisation,
-camera calibration, 3D reconstruction, club tracking, ball detection, temporal
-ML, the coaching engine, desktop visualisation, 3D rendering, swing comparison,
-performance work, and documentation. Sequencing, deliverables, and exit criteria
-per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 6-20: DTL analysis and explicit coordinate systems, two-camera
+synchronisation, camera calibration, 3D reconstruction, club tracking, ball
+detection, temporal ML, the coaching engine, desktop visualisation, 3D
+rendering, swing comparison, performance work, model management, test hardening
+and documentation. Sequencing, deliverables, and exit criteria per phase are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
+The next one carries a debt from this one: the aspect-ratio correction that
+makes distances isotropic is applied in the biomechanics layer, not below it, so
+phase detection still measures in a space where vertical and horizontal
+distances count differently. Phase 6.1a moves it down and re-measures Phase 4's
+thresholds against the result.
 
 ## Licence
 

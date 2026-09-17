@@ -32,7 +32,7 @@ from analyzer.contracts.filtering import (
     StageReport,
     unit_for,
 )
-from analyzer.contracts.pose import Landmark, LandmarkSpace, PoseSequence
+from analyzer.contracts.pose import FrameGeometry, Landmark, LandmarkSpace, PoseSequence
 from analyzer.filtering.gating import gated_observations
 from analyzer.filtering.pipeline import FilterPipeline, default_pipeline
 from analyzer.filtering.signal import Signal, signal_from_arrays
@@ -93,11 +93,19 @@ class FilteredLandmark:
 
 @dataclass(frozen=True)
 class FilteredSequence:
-    """Every landmark of one clip, filtered."""
+    """Every landmark of one clip, filtered.
+
+    `geometry` is carried through untouched from the pose sequence. Nothing in
+    this layer uses it -- filtering is per-axis and an anisotropic scaling
+    commutes with every stage of it -- but the biomechanics layer above cannot
+    compute a distance or an angle without it, and this is the only path by
+    which it can arrive there.
+    """
 
     space: LandmarkSpace
     t: NDArray[np.float64]
     landmarks: dict[Landmark, FilteredLandmark]
+    geometry: FrameGeometry
     report: SequenceFilterReport
 
     def __getitem__(self, landmark: Landmark) -> FilteredLandmark:
@@ -289,6 +297,7 @@ def filter_sequence(
         space=space,
         t=timestamps,
         landmarks=filtered,
+        geometry=sequence.geometry,
         report=SequenceFilterReport(
             config=resolved,
             space=space,

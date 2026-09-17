@@ -18,9 +18,22 @@ from pathlib import Path
 
 import pytest
 
-from analyzer.contracts.pose import LANDMARK_COUNT, LandmarkPoint, PoseFrame, PoseModelInfo
+from analyzer.contracts.pose import (
+    LANDMARK_COUNT,
+    FrameGeometry,
+    LandmarkPoint,
+    PoseFrame,
+    PoseModelInfo,
+)
 from analyzer.ingestion.reader import VideoFrame
 from analyzer.paths import ENV_CACHE_DIR, models_dir
+
+# The frame shape synthetic fixtures are written against. Square on purpose: the
+# aspect correction is then the identity, so a fixture's coordinates mean the
+# same thing in the file and in frame widths, and a test asserting on a distance
+# is asserting on the number it wrote. Tests that exercise the correction itself
+# pass a deliberately non-square geometry instead.
+SQUARE_FRAME = FrameGeometry(width=1000, height=1000)
 
 VIDEO_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "video"
 

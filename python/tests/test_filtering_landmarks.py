@@ -35,6 +35,7 @@ from analyzer.contracts.pose import (
 from analyzer.filtering.landmarks import filter_landmark, filter_sequence, signals_from_series
 from analyzer.pose.series import landmark_series
 from analyzer.progress import RecordingReporter
+from tests.conftest import SQUARE_FRAME
 
 FPS = 120.0
 
@@ -81,6 +82,7 @@ def _sequence(
         video_content_key=ContentKey(
             algorithm=HashAlgorithm.SHA256_SAMPLED, digest="d" * 64, size_bytes=1
         ),
+        geometry=SQUARE_FRAME,
         model=PoseModelInfo(
             name="fake",
             variant="fake",

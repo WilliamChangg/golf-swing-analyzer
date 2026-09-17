@@ -27,6 +27,13 @@ from rich.table import Table
 from analyzer import __version__
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.metrics import (
+    Metric,
+    MetricBasis,
+    MetricGroup,
+    MetricSet,
+    MetricUnit,
+)
 from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
@@ -530,14 +537,173 @@ def phases(
         raise typer.Exit(code=1)
 
 
+_BASIS_NOTE: dict[MetricBasis, str] = {
+    MetricBasis.TEMPORAL: "from the clock; unaffected by where the camera stood",
+    MetricBasis.IMAGE_PLANE: "measured in the image plane; blind to motion towards the camera",
+    MetricBasis.PROJECTED_ANGLE: "an angle in the image, not a 3D joint angle",
+    MetricBasis.FORESHORTENED_ANGLE: "rotation inferred from foreshortening; a magnitude only",
+}
+
+_GROUP_TITLES: dict[MetricGroup, str] = {
+    MetricGroup.POSTURE: "Posture",
+    MetricGroup.ROTATION: "Rotation",
+    MetricGroup.ARMS: "Hands and arms",
+    MetricGroup.TIMING: "Timing",
+}
+
+
+def _format_value(metric: Metric) -> str:
+    """Render a value with its unit, at a precision the measurement can support."""
+    if metric.unit is MetricUnit.DEGREES:
+        return f"{metric.value:+.1f} deg"
+    if metric.unit is MetricUnit.SECONDS:
+        return f"{metric.value:.3f} s"
+    if metric.unit is MetricUnit.RATIO:
+        return f"{metric.value:.2f} : 1"
+    if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
+        return f"{metric.value:.2f} torso/s"
+    return f"{metric.value:+.3f} torso"
+
+
+def _render_metrics(result: MetricSet) -> None:
+    summary = Table(title="Biomechanics", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("metrics computed", f"{len(result.metrics)}")
+    summary.add_row("refused", f"{len(result.refused)}")
+    summary.add_row("frames", str(result.frames))
+    summary.add_row(
+        "frame geometry",
+        f"{result.geometry.width}x{result.geometry.height} "
+        f"(aspect {result.geometry.aspect_ratio:.4f})",
+    )
+    summary.add_row("torso length", f"{result.torso_length:.3f} frame widths")
+
+    lead = result.lead_side
+    if lead is not None:
+        named = lead.side.value if lead.side is not None else "[yellow]undetermined[/yellow]"
+        summary.add_row("lead side", f"{named} (margin {lead.margin:.2f})")
+    console.print(summary)
+
+    for reference in result.references:
+        verdict = (
+            "square at address"
+            if reference.square_at_address
+            else "[yellow]not square at address[/yellow]"
+        )
+        console.print(
+            f"[dim]{reference.landmarks}: {reference.span:.2f} torso lengths at address, "
+            f"widest {reference.widest_span:.2f} on frame {reference.widest_frame} "
+            f"({reference.excess:.2f}x) -- {verdict}[/dim]"
+        )
+
+    for group in MetricGroup:
+        entries = result.by_group(group)
+        if not entries:
+            continue
+        table = Table(title=_GROUP_TITLES[group], title_justify="left", expand=True)
+        for column in ("metric", "value", "confidence", "obs", "anchor", "method"):
+            table.add_column(column, no_wrap=True)
+        table.add_column("basis", overflow="fold")
+
+        for metric in entries:
+            factors = metric.confidence
+            style = (
+                "green" if factors.overall >= 0.6 else "yellow" if factors.overall > 0 else "red"
+            )
+            table.add_row(
+                metric.label,
+                _format_value(metric),
+                f"[{style}]{factors.overall:.2f}[/{style}]",
+                f"{factors.observation:.2f}",
+                f"{factors.anchor:.2f}",
+                f"{factors.method:.2f}",
+                _BASIS_NOTE[metric.basis],
+            )
+        console.print(table)
+
+    if result.refused:
+        refusals = Table(title="Refused", title_justify="left", expand=True)
+        refusals.add_column("metric", no_wrap=True)
+        refusals.add_column("why", overflow="fold")
+        # One row per distinct reason: a metric refused at three anchors for the
+        # same cause is one fact about the recording, not three.
+        seen: set[tuple[str, str]] = set()
+        for entry in result.refused:
+            key = (entry.name.value, entry.reason)
+            if key in seen:
+                continue
+            seen.add(key)
+            refusals.add_row(entry.name.value, entry.reason)
+        console.print(refusals)
+
+    console.print(
+        "[dim]Every angle here is a projection from one uncalibrated camera, not a 3D "
+        "body angle. Lengths are in torso lengths, which is framing-independent but not "
+        "metric. Confidence is observation x anchor x method.[/dim]"
+    )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def metrics(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    polyorder: Annotated[
+        int | None, typer.Option("--polyorder", help="Degree of the filter's local polynomial.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Measure the biomechanics metrics for a swing."""
+    smoothing: dict[str, object] = {}
+    if window is not None:
+        smoothing["window_s"] = window
+    if polyorder is not None:
+        smoothing["polyorder"] = polyorder
+
+    params: dict[str, object] = {"path": str(path), "model": model}
+    if smoothing:
+        params["filter"] = {"smoothing": smoothing}
+
+    try:
+        result = call("compute_metrics", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, MetricSet)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_metrics(result)
+
+    # Non-zero when nothing was measured, so a script driving this learns that no
+    # metrics came out rather than reading an empty set as success.
+    if not result.computed:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def version() -> None:
     """Print the engine version."""
     typer.echo(__version__)
-
-
-if __name__ == "__main__":
-    app()
 
 
 @app.command()
@@ -606,3 +772,13 @@ def extract(
     # run produced no usable landmarks, and an exit code is how it finds out.
     if result.stats.frames_detected == 0:
         raise typer.Exit(code=1)
+
+
+# Last in the file on purpose. Typer registers a command when its decorator
+# runs, so anything defined below this block is absent when the module is
+# executed as `python -m analyzer.cli` -- the commands exist under the installed
+# `analyzer` entry point, which imports the module fully first, and silently do
+# not under the module form. Keeping the two entry points equivalent means this
+# stays at the bottom.
+if __name__ == "__main__":
+    app()

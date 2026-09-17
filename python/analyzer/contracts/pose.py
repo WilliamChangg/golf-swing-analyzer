@@ -30,7 +30,13 @@ from analyzer.contracts.cache import ContentKey
 
 # Bump on any breaking change to the models in this module. A persisted pose
 # sequence carrying a different version is refused rather than reinterpreted.
-POSE_SCHEMA_VERSION = 1
+#
+# 2 - added `PoseSequence.geometry`. A file written before it cannot supply the
+#     frame's aspect ratio, and without that every distance mixing x and y in
+#     IMAGE space is anisotropically wrong (see `FrameGeometry`). Reading such a
+#     file and defaulting the aspect to 1 would produce exactly the silent error
+#     the field exists to remove, so those files are refused instead.
+POSE_SCHEMA_VERSION = 2
 
 
 class Landmark(IntEnum):
@@ -116,6 +122,38 @@ class LandmarkSpace(StrEnum):
     HIP_LOCAL = "hip_local"
 
 
+class FrameGeometry(BaseModel):
+    """The displayed pixel dimensions IMAGE landmarks were normalised against.
+
+    Carried with the landmarks because IMAGE space is **anisotropic** and
+    nothing downstream can discover that on its own. x is divided by the frame
+    width and y by the frame height, so on a 1080x1920 clip one pixel of
+    vertical travel becomes 1/1920 while one pixel of horizontal travel becomes
+    1/1080: the same displacement in pixels counts for 0.5625 as much going down
+    as going across. Any Euclidean quantity that mixes the two -- a distance, a
+    speed, an angle -- is wrong by an amount that depends only on the shape of
+    the frame, and nothing about the result looks wrong.
+
+    One number fixes it, and it is not recoverable from the landmarks: the
+    aspect ratio. It is recorded here, at the point where it is still known,
+    rather than re-derived later by probing a video file that may have moved.
+    """
+
+    width: int = Field(gt=0, description="Displayed frame width in pixels, after rotation.")
+    height: int = Field(gt=0, description="Displayed frame height in pixels, after rotation.")
+
+    @property
+    def aspect_ratio(self) -> float:
+        """Displayed height divided by displayed width.
+
+        The factor a normalised y must be multiplied by to put it in the same
+        units as a normalised x. Both are then in **frame widths**, which is an
+        isotropic unit: a displacement of n pixels measures the same whichever
+        way it points.
+        """
+        return self.height / self.width
+
+
 class LandmarkPoint(BaseModel):
     """One landmark in one space.
 
@@ -198,6 +236,9 @@ class PoseSequence(BaseModel):
     schema_version: int = POSE_SCHEMA_VERSION
     video_path: str
     video_content_key: ContentKey
+    geometry: FrameGeometry = Field(
+        description="Displayed frame size the IMAGE landmarks are normalised against."
+    )
     model: PoseModelInfo
     extracted_at: datetime
     stats: PoseExtractionStats

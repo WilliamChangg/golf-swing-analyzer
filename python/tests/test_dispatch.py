@@ -21,7 +21,7 @@ from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.video import VideoMetadata
 from analyzer.dispatch import ProbeVideoParams
 from analyzer.progress import ProgressReporter, ProgressTracker, RecordingReporter
-from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, requires_ffprobe
+from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, SQUARE_FRAME, requires_ffprobe
 
 # Parameters good enough to invoke each registered method once. Maintained by
 # hand on purpose: the table is what makes a newly-registered method visible.
@@ -31,6 +31,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "extract_poses": {"path": str(CFR_30FPS)},
     "filter_poses": {"path": "poses.parquet"},
     "detect_phases": {"path": "poses.parquet"},
+    "compute_metrics": {"path": "poses.parquet"},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -207,6 +208,7 @@ class TestFilterPoses:
             video_content_key=ContentKey(
                 algorithm=HashAlgorithm.SHA256_SAMPLED, digest="e" * 64, size_bytes=1
             ),
+            geometry=SQUARE_FRAME,
             model=PoseModelInfo(
                 name="fake",
                 variant="fake",
