@@ -106,12 +106,52 @@ body motion to a single-camera pipeline.
 - Clothing that contrasts with the background; avoid very loose garments, which
   hide joint positions.
 
+### Synchronising the two cameras
+
+Nothing relates two cameras' clocks for you, and everything above two views
+depends on that relation: triangulating a point is only meaningful for two views
+of the same instant. `analyzer sync` recovers the offset from the footage itself
+and reports how well it knows it, but two things about the capture bound what it
+can do.
+
+**Both cameras want the same frame rate, and both want to be fast.** An instant
+located to the nearest frame carries an error of about a third of a frame
+interval, and the two clips' errors add in quadrature, so the pair's floor is
+set by the _coarser_ camera:
+
+| Pair          | Best possible alignment |
+| ------------- | ----------------------- |
+| 30 + 30 fps   | 13.6 ms                 |
+| 30 + 240 fps  | 9.7 ms                  |
+| 240 + 240 fps | **1.7 ms**              |
+
+Upgrading one camera of a 30 fps pair is worth a factor of sqrt(2) at most —
+the slow one still contributes 9.6 ms on its own. Upgrading both is worth the
+whole ratio.
+
+A second consequence: both clips are smoothed with one window, because smoothing
+them differently shifts the features the alignment reads. The coarser clip sets
+it, and a 30 fps camera cannot support the default at all — so pairing a 240 fps
+phone with a 30 fps one degrades the fast clip too.
+
+**Get both slow-motion factors right, or discover which is wrong.** If both are
+supplied and the fit returns a clock rate far from 1.0, one of them is wrong by
+about that ratio: two real camera clocks do not differ by more than a fraction of
+a percent. This is the one thing a second camera can measure that a single clip
+cannot — nothing in one file records its own factor.
+
 ### Per-swing checklist
 
 1. Both cameras recording before address.
 2. Full swing to a held finish, then a pause before stopping.
 3. Ball visible at address in both views.
 4. Note club used and any range/course conditions.
+5. **One swing per pair of clips.** Nothing in the system can tell that two
+   recordings show the same swing — it aligns swing-shaped signals, and two
+   different swings align perfectly happily. The only evidence is that their
+   phase durations disagree, which shows up as a residual, and on two swings of
+   similar tempo that evidence is weak. Do not pair a face-on clip of one swing
+   with a down-the-line clip of another and expect to be told.
 
 ## Camera calibration (Phases 8-9)
 

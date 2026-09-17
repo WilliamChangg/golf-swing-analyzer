@@ -6,12 +6,14 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-6 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-7 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
-> temporal filtering, swing phase detection, the biomechanics metric engine, and
-> explicit coordinate frames with measured camera-view tagging are built and
-> verified. No club tracking, 3D reconstruction or coaching exists yet. Sections below marked _Not yet implemented_ say so rather than describing
-> features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
+> temporal filtering, swing phase detection, the biomechanics metric engine,
+> explicit coordinate frames with measured camera-view tagging, and two-camera
+> time alignment are built and verified. No camera calibration, club tracking, 3D
+> reconstruction or coaching exists yet. Sections below marked _Not yet
+> implemented_ say so rather than describing features that do not exist. See
+> [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -93,10 +95,11 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 7-13 outstanding._ A clip can be imported,
+_Partially implemented — Phases 8-13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
-derivatives, segmented into swing phases, and measured — the first four from the
-app's **Video** screen, and all of them from a terminal:
+derivatives, segmented into swing phases, measured, and aligned against a second
+camera — all of it from the app's **Video** screen except project management, and
+all of it from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -107,6 +110,18 @@ uv run --project python analyzer filter  path/to/swing.mov --window 0.15 --polyo
 uv run --project python analyzer phases  path/to/swing.mov   # takeaway/top/impact/finish
 uv run --project python analyzer metrics path/to/swing.mov   # biomechanics
 uv run --project python analyzer metrics path/to/swing.mov --slow-motion 8
+
+# Two cameras, one swing.
+uv run --project python analyzer sync faceon.mov dtl.mov     # relate their clocks
+uv run --project python analyzer sync faceon.mov dtl.mov --slow-motion-target 8
+uv run --project python analyzer sync faceon.mov dtl.mov --anchor impact=204:252
+
+# Sessions, which remember which clips belong together.
+uv run --project python analyzer project create "Tuesday range"
+uv run --project python analyzer project add 1 faceon.mov --role face_on
+uv run --project python analyzer project add 1 dtl.mov --role down_the_line --slow-motion 8
+uv run --project python analyzer project sync 1                # stored on the project
+uv run --project python analyzer project list
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -134,8 +149,26 @@ given recording are listed as refusals with the reason, rather than omitted.
 `scripts/overlay_metrics.py` draws each value on the frame it was measured from,
 which is the only way to tell a correct angle from a plausible one.
 
+Synchronisation relates two cameras' clocks, which everything above two views
+depends on: triangulating a point is only meaningful for two views of the same
+instant. It reports an offset with an uncertainty, a clock rate only when the
+evidence supports one, and — the number that matters most — how far the swing
+events in the two clips disagree, measured against the floor the two frame rates
+impose. **It cannot tell you that both cameras filmed the same swing**; it aligns
+swing-shaped signals, and two different swings align perfectly happily. What they
+cannot do is agree about phase durations, so that disagreement survives as
+residual, and a residual many times the floor is the system saying so.
+
+A **project** records which clips belong to one session and stores their
+alignment. It is the only state in this system that cannot be recomputed from the
+video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
+(`$XDG_DATA_HOME` elsewhere) rather than in the cache, and clips are identified by
+content so moving a file does not break the record of what it is.
+
 The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
-`detect_phases` and `compute_metrics`.
+`detect_phases`, `compute_metrics`, `sync_clips`, `sync_project`,
+`create_project`, `list_projects`, `get_project`, `delete_project`, `add_clip`,
+`remove_clip` and `relocate_clip`.
 
 ## 6. Supported video formats
 
@@ -234,6 +267,15 @@ Club and ball tracking are not built. Planned stages and their ordering are in
 _Not yet implemented — Phases 8-9._ The system will distinguish
 `UNCALIBRATED` / `INTRINSIC_ONLY` / `STEREO_CALIBRATED` and will refuse to make
 metric-scale claims without stereo calibration.
+
+The **first** prerequisite is built: triangulating a point from two views is only
+meaningful for two views of the same instant, so Phase 7 relates the two cameras'
+clocks and carries the error in that relation. An offset known to 3.4 ms on a
+120 fps pair bounds how much of the disagreement between two views is a real
+parallax and how much is one camera looking a frame later than the other —
+which is the difference between a reconstruction error and a timing error, and
+they are not separable after the fact. See
+[ADR-0011](docs/decisions/ADR-0011-affine-time-map.md).
 
 ## 10. Coordinate systems and camera views
 
@@ -383,14 +425,14 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                      |
-| ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 604   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                  |
-| Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector                        |
-| Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection                             |
+| Suite      | Count | Scope                                                                                                                                                       |
+| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 699   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                   |
+| Vitest     | 91    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment                                   |
+| Playwright | 29    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow                                              |
 
-All 710 pass as of Phase 6.
+All 831 pass as of Phase 7.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -569,6 +611,30 @@ because the axis it measures along runs along the target line there and is a
 different quantity under the same name. Each clip measures what its camera
 position supports and says what it cannot.
 
+### Two-camera synchronisation
+
+`scripts/benchmark_sync.py`. **Against known offsets, not against ground truth.**
+No simultaneous two-camera recording exists in this project, so what is measured
+is one synthetic swing sampled by two simulated cameras with the offset as an
+input. That establishes the method recovers what was put in; it does not
+establish that a real pair works, because the simulated cameras see the same
+projection of the same body and two real cameras do not.
+
+Median absolute error over 9 seeds, at the landmark noise measured from real
+footage in Phase 3:
+
+| Pair          | Frame-rate floor | Recovered offset error |
+| ------------- | ---------------- | ---------------------- |
+| 240 + 240 fps | 1.7 ms           | **0.5 ms**             |
+| 120 + 120 fps | 3.4 ms           | **0.4 – 4.2 ms**       |
+| 120 + 30 fps  | 9.9 ms           | **0.3 ms**             |
+| 30 + 30 fps   | 13.6 ms          | **0.5 ms**             |
+
+The floor is what the two frame rates permit for a single located instant. The
+correlation beats it because it averages hundreds of samples; anchoring on the
+four swing events instead gives 14–27 ms on the same pairs, which is what decided
+the design. Aligning two 312-frame clips costs 0.5 ms.
+
 A general benchmark harness arrives in Phase 17.
 
 ## 15. Limitations
@@ -583,6 +649,23 @@ A general benchmark harness arrives in Phase 17.
   `tauri-driver` and a platform WebDriver, which is not set up.
 - **Engine requests are serialised.** A mutex guards the worker; concurrent
   request multiplexing is not implemented because nothing needs it yet.
+- **Nothing can tell that two clips show the same swing.** Synchronisation
+  aligns swing-shaped signals, and two _different_ swings align just as happily.
+  What they cannot do is agree about phase durations, so the disagreement
+  survives as a residual — and that residual is the only evidence on the
+  question. On the only two-angle pair in this repository it is 40x the
+  frame-rate floor, which is the correct verdict and is reported as a confidence
+  of 0.10.
+- **Synchronisation has never been checked against real ground truth.** That
+  needs two cameras that genuinely filmed one swing at once, with their clocks
+  related by something outside this system — a clapperboard, a flash, a genlock.
+  The published figures are recoveries of offsets that were put in
+  synthetically, which is a weaker claim and is labelled as one.
+- **Two clips share one smoothing window, so the coarser sets it.** Smoothing
+  them differently would shift the features an alignment keys on by an amount
+  nothing measures. A 30 fps camera therefore cannot support the 0.10 s default
+  for either clip; the engine refuses and names the window that rate would
+  support.
 - **No packaging story yet.** `npm run dev` runs from the repository and
   resolves the Python project by walking up from the working directory. A
   bundled app needs the engine shipped as a sidecar; that is not built.
@@ -700,16 +783,23 @@ A general benchmark harness arrives in Phase 17.
 
 ## 16. Future work
 
-Phases 7-20: two-camera synchronisation, camera calibration, 3D reconstruction, club tracking, ball
+Phases 8-20: camera calibration, 3D reconstruction, club tracking, ball
 detection, temporal ML, the coaching engine, desktop visualisation, 3D
 rendering, swing comparison, performance work, model management, test hardening
 and documentation. Sequencing, deliverables, and exit criteria per phase are in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-Phase 6 cleared the debt Phase 5 carried: the aspect correction now happens once
-below the filter, so phase detection and the metric layer measure in the same
-isotropic frame and their two `torso_length` figures agree. Phase 7 begins the
-two-camera work that eventually makes the projections in §11 unnecessary.
+Phase 7 began the two-camera work that eventually makes the projections in §11
+unnecessary, and settled the first of the two things a second view needs: the
+relation between the cameras' clocks, with the error in it carried rather than
+assumed away. Phase 8 settles the second — where the cameras were — and only
+with both can Phase 9 claim a measurement about a body rather than about a
+picture of one.
+
+Two open items carry forward. Synchronisation has never been checked against a
+genuinely simultaneous pair, because none exists here; and Phase 4's event
+confidence does not detect a badly located event, which Phase 7 measured and
+deliberately did not fix.
 
 ## Licence
 

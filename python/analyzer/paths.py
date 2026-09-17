@@ -17,6 +17,7 @@ _ROOT_MARKERS = ("models/manifest.json", ".git")
 ENV_REPO_ROOT = "GSA_REPO_ROOT"
 ENV_MODELS_DIR = "GSA_MODELS_DIR"
 ENV_CACHE_DIR = "GSA_CACHE_DIR"
+ENV_DATA_DIR = "GSA_DATA_DIR"
 
 _APP_DIR_NAME = "golf-swing-analyzer"
 
@@ -70,3 +71,30 @@ def cache_dir() -> Path:
     xdg = os.environ.get("XDG_CACHE_HOME")
     base = Path(xdg).expanduser() if xdg else Path.home() / ".cache"
     return base / _APP_DIR_NAME
+
+
+def data_dir() -> Path:
+    """Directory for state that cannot be recomputed from source video.
+
+    The counterpart to ``cache_dir()``, and the distinction is the point: a
+    project records which two clips are the same swing, which is a decision
+    rather than a derivation. Putting it in the cache location would file
+    irreplaceable state under the one directory every backup tool is told to
+    skip, and the first time a user cleared their caches the projects would go
+    with them.
+    """
+    override = os.environ.get(ENV_DATA_DIR)
+    if override:
+        return Path(override).expanduser().resolve()
+
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / _APP_DIR_NAME
+
+    xdg = os.environ.get("XDG_DATA_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "share"
+    return base / _APP_DIR_NAME
+
+
+def projects_database_path() -> Path:
+    """The SQLite file holding projects, clips and stored syncs."""
+    return data_dir() / "projects.db"

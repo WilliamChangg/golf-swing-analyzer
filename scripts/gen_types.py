@@ -39,7 +39,14 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.progress", "ProgressUpdate"),
     ("analyzer.contracts.phases", "SwingPhases"),
     ("analyzer.contracts.metrics", "MetricSet"),
+    ("analyzer.contracts.sync", "SyncModel"),
 )
+
+# `Project` and `ProjectList` are deliberately *not* exported. They are reachable
+# over RPC and from `analyzer project`, but no UI renders them yet -- project
+# management is Phase 14.1 -- and exporting types nothing draws would make the
+# app's type surface a description of the plan rather than of the app. Same
+# reasoning that kept `SequenceFilterReport` out until Phase 4 built its panel.
 
 BANNER = """\
 /**

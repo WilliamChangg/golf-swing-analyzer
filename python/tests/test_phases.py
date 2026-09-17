@@ -10,17 +10,19 @@ a trajectory, so the instants the detector is supposed to find are inputs rather
 than things read off a plot afterwards. It is a swing only in the shape of its
 signal -- one speed minimum at the highest point, one speed maximum after it --
 which is exactly and only what the rules key on.
+
+The fixture itself lives in `tests/synthetic.py`, because Phase 7 needs the same
+swing sampled by two cameras with different clocks and a second copy of it would
+be a second definition of what a swing looks like.
 """
 
 from __future__ import annotations
 
 import itertools
-from datetime import UTC, datetime
 
 import numpy as np
 import pytest
 
-from analyzer.contracts.cache import ContentKey, HashAlgorithm
 from analyzer.contracts.filtering import ConfidenceGate, FilterConfig, SmoothingConfig
 from analyzer.contracts.phases import (
     HandSource,
@@ -29,34 +31,28 @@ from analyzer.contracts.phases import (
     SwingPhase,
 )
 from analyzer.contracts.pose import (
-    LANDMARK_COUNT,
     Landmark,
-    LandmarkPoint,
     LandmarkSpace,
-    PoseExtractionStats,
-    PoseFrame,
-    PoseModelInfo,
     PoseSequence,
 )
 from analyzer.filtering.landmarks import filter_sequence
 from analyzer.phases import SignalError, detect_phases, swing_signals
-from tests.conftest import SQUARE_FRAME
-
-FPS = 120.0
-
-# Event times the synthetic signal is built around.
-TAKEAWAY_S = 0.50
-TOP_S = 1.30
-IMPACT_S = 1.70
-# The descent and the follow-through are mirror images in the arc model below,
-# so the hands come to rest as long after impact as the top was before it.
-FINISH_S = TOP_S + 2 * (IMPACT_S - TOP_S)
-DURATION_S = 2.60
-
-# Radius and lowest point of the arc the hands travel, in frame widths.
-ARC_RADIUS = 0.22
-ARC_LOW_HEIGHT = 0.33
-ARC_TOP_ANGLE = 2.2
+from tests.synthetic import (
+    ARC_LOW_HEIGHT,
+    ARC_RADIUS,
+    ARC_TOP_ANGLE,
+    DURATION_S,
+    FINISH_S,
+    FPS,
+    IMPACT_S,
+    TAKEAWAY_S,
+    TOP_S,
+    TORSO_LENGTH,
+)
+from tests.synthetic import arc_angle as _arc_angle
+from tests.synthetic import hand_path as _hand_path
+from tests.synthetic import pose_sequence as _sequence
+from tests.synthetic import swing_sequence as _swing
 
 # Tolerance for a recovered event. Half the default smoothing window: an event
 # cannot be located more precisely than the filter that produced the signal.
@@ -70,153 +66,9 @@ TOLERANCE_S = SmoothingConfig().window_s / 2
 TAKEAWAY_LAG_S = 0.20
 
 
-def _arc_angle(t: np.ndarray) -> np.ndarray:
-    """Angle of the hands along their arc, zero at the bottom.
-
-    The hands are modelled on a circle rather than on a vertical line, because
-    the vertical model gets impact wrong in a way that matters. On a real swing
-    the hands are at the bottom of their arc at impact and moving horizontally,
-    so their *vertical* speed there is near zero while their total speed peaks.
-    A purely vertical fixture puts peak speed and lowest position at different
-    instants, and would make the corroboration check below meaningless.
-
-    Backswing eases in and out, so speed is zero at the takeaway and again at
-    the top. The descent and follow-through are one cosine sweep through the
-    bottom, which puts maximum angular speed exactly where the angle crosses
-    zero -- the lowest point of the arc, and the instant impact is defined to be.
-    """
-    angle = np.zeros_like(t)
-
-    rising = (t >= TAKEAWAY_S) & (t < TOP_S)
-    u = (t[rising] - TAKEAWAY_S) / (TOP_S - TAKEAWAY_S)
-    angle[rising] = ARC_TOP_ANGLE * np.sin(np.pi / 2 * u) ** 2
-
-    sweeping = (t >= TOP_S) & (t <= FINISH_S)
-    u = (t[sweeping] - TOP_S) / (FINISH_S - TOP_S)
-    angle[sweeping] = ARC_TOP_ANGLE * np.cos(np.pi * u)
-
-    after = t > FINISH_S
-    angle[after] = -ARC_TOP_ANGLE
-    return angle
-
-
-def _hand_path(t: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """The arc as an image-space path.
-
-    Returns x and y with y in image convention (increasing downward), so the
-    detector's conversion to an upward height is genuinely exercised rather than
-    bypassed by handing it a signal that already points the right way.
-    """
-    angle = _arc_angle(t)
-    height = ARC_LOW_HEIGHT + ARC_RADIUS * (1.0 - np.cos(angle))
-    return 0.5 + ARC_RADIUS * np.sin(angle), 1.0 - height
-
-
-# A static body for the synthetic subject, in image coordinates (y downward).
-# The torso has to be real: detection judges hand travel in torso lengths, so a
-# fixture with every landmark stacked on one point has no scale to measure
-# against and every ratio it produces is meaningless.
-TORSO_LENGTH = 0.25
-_BODY: dict[int, tuple[float, float]] = {
-    int(Landmark.LEFT_SHOULDER): (0.45, 0.25),
-    int(Landmark.RIGHT_SHOULDER): (0.55, 0.25),
-    int(Landmark.LEFT_HIP): (0.46, 0.25 + TORSO_LENGTH),
-    int(Landmark.RIGHT_HIP): (0.54, 0.25 + TORSO_LENGTH),
-}
-
-
-def _sequence(
-    x: np.ndarray,
-    y: np.ndarray,
-    t: np.ndarray,
-    *,
-    visibility: np.ndarray | None = None,
-    detected: np.ndarray | None = None,
-    per_landmark_visibility: dict[int, np.ndarray] | None = None,
-) -> PoseSequence:
-    """A pose sequence whose wrists follow the given path on a still body.
-
-    `per_landmark_visibility` overrides the shared value for named landmarks,
-    which is how down-the-line footage behaves: one wrist is hidden behind the
-    other, and which one changes through the swing.
-    """
-    vis = np.full(t.size, 0.95) if visibility is None else visibility
-    overrides = per_landmark_visibility or {}
-    seen = np.ones(t.size, dtype=bool) if detected is None else detected
-    wrists = {int(Landmark.LEFT_WRIST), int(Landmark.RIGHT_WRIST)}
-
-    frames = []
-    for index in range(t.size):
-        if not seen[index]:
-            frames.append(PoseFrame(frame_index=index, timestamp_s=float(t[index]), detected=False))
-            continue
-        points = []
-        for landmark in range(LANDMARK_COUNT):
-            if landmark in wrists:
-                # Left and right a little apart, so the midpoint is a distinct
-                # point from either and the hand-source choice is exercised.
-                offset = 0.01 if landmark == int(Landmark.LEFT_WRIST) else -0.01
-                px, py = float(x[index]) + offset, float(y[index])
-            else:
-                px, py = _BODY.get(landmark, (0.5, 0.2))
-            channel = overrides.get(landmark)
-            points.append(
-                LandmarkPoint(
-                    x=px,
-                    y=py,
-                    z=0.0,
-                    visibility=float(vis[index] if channel is None else channel[index]),
-                    presence=0.99,
-                )
-            )
-        frames.append(
-            PoseFrame(
-                frame_index=index,
-                timestamp_s=float(t[index]),
-                detected=True,
-                image=points,
-                hip_local=points,
-            )
-        )
-
-    found = int(np.count_nonzero(seen))
-    return PoseSequence(
-        video_path="/data/synthetic.mov",
-        video_content_key=ContentKey(
-            algorithm=HashAlgorithm.SHA256_SAMPLED, digest="f" * 64, size_bytes=1
-        ),
-        geometry=SQUARE_FRAME,
-        model=PoseModelInfo(
-            name="fake",
-            variant="fake",
-            precision="float32",
-            sha256="0" * 64,
-            delegate="cpu",
-            min_pose_detection_confidence=0.5,
-            min_pose_presence_confidence=0.5,
-            min_tracking_confidence=0.5,
-        ),
-        extracted_at=datetime(2026, 9, 16, tzinfo=UTC),
-        stats=PoseExtractionStats(
-            frames_processed=t.size,
-            frames_detected=found,
-            detection_rate=found / t.size if t.size else 0.0,
-            elapsed_s=1.0,
-            ms_per_frame=1.0,
-        ),
-        frames=frames,
-    )
-
-
 def _detect(sequence: PoseSequence, *, filter_config=None, phase_config=None):
     filtered = filter_sequence(sequence, filter_config or FilterConfig())
     return detect_phases(filtered, phase_config)
-
-
-def _swing(duration_s: float = DURATION_S, fps: float = FPS, **kwargs):
-    t = np.arange(0.0, duration_s, 1.0 / fps)
-    x, y = _hand_path(t)
-    return _sequence(x, y, t, **kwargs)
 
 
 @pytest.fixture(scope="module")

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from pydantic import BaseModel
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import (
@@ -38,7 +39,9 @@ from analyzer.contracts.metrics import (
 from analyzer.contracts.phases import SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
+from analyzer.contracts.projects import Project, ProjectList
 from analyzer.contracts.rpc import EngineError
+from analyzer.contracts.sync import SyncModel
 from analyzer.contracts.video import TimestampSource, VideoMetadata
 from analyzer.dispatch import call
 from analyzer.progress import CallbackReporter
@@ -758,6 +761,474 @@ def metrics(
     # Non-zero when nothing was measured, so a script driving this learns that no
     # metrics came out rather than reading an empty set as success.
     if not result.computed:
+        raise typer.Exit(code=1)
+
+
+def _format_ms(value: float | None, *, signed: bool = False) -> str:
+    if value is None:
+        return "-"
+    return f"{value:+.1f} ms" if signed else f"{value:.1f} ms"
+
+
+def _render_sync(result: SyncModel) -> None:
+    summary = Table(title="Synchronisation", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.aligned else "[yellow]NO[/yellow]"
+    summary.add_row("aligned", verdict)
+    summary.add_row("method", result.method.value if result.method else "-")
+    for role, clip in (("reference", result.reference), ("target", result.target)):
+        rate = f"{1.0 / clip.median_interval_s:.1f} fps" if clip.median_interval_s > 0 else "-"
+        slow = "" if clip.slow_motion_factor == 1.0 else f", {clip.slow_motion_factor:g}x slo-mo"
+        summary.add_row(role, f"{clip.name} ({clip.frames} frames, {rate}{slow})")
+
+    mapping = result.time_map
+    if mapping is not None:
+        uncertainty = mapping.offset_uncertainty_s
+        offset = f"{mapping.offset_s * 1000:+.1f} ms"
+        if uncertainty is not None:
+            offset += f" +/-{uncertainty * 1000:.1f} ms"
+        summary.add_row("offset (target - reference)", offset)
+        if mapping.rate_estimated:
+            spread = (
+                f" +/-{mapping.rate_uncertainty:.5f}"
+                if mapping.rate_uncertainty is not None
+                else ""
+            )
+            summary.add_row("clock rate", f"[yellow]{mapping.rate:.5f}{spread}[/yellow]")
+        else:
+            summary.add_row("clock rate", "[dim]1.0 (assumed, not measured)[/dim]")
+        summary.add_row(
+            "anchored over",
+            f"{mapping.support_start_s:.3f}-{mapping.support_end_s:.3f} s of the reference",
+        )
+
+    overlap = result.overlap
+    if overlap is not None:
+        summary.add_row(
+            "overlap",
+            f"{overlap.duration_s:.3f} s ({overlap.reference_fraction:.0%} of the reference, "
+            f"{overlap.target_fraction:.0%} of the target)",
+        )
+    console.print(summary)
+
+    quality, confidence = result.quality, result.confidence
+    if quality is not None and confidence is not None:
+        scores = Table(title="How well it is determined", title_justify="left", expand=True)
+        scores.add_column("Property", no_wrap=True)
+        scores.add_column("Value", overflow="fold")
+
+        style = (
+            "green"
+            if confidence.overall >= 0.6
+            else "yellow"
+            if confidence.overall > 0.1
+            else "red"
+        )
+        scores.add_row("confidence", f"[{style}]{confidence.overall:.2f}[/{style}]")
+        scores.add_row(
+            "",
+            f"[dim]agreement {confidence.agreement:.2f} x anchors {confidence.anchors:.2f} "
+            f"x stability {confidence.stability:.2f}[/dim]",
+        )
+        scores.add_row("frame-rate floor", _format_ms(quality.quantisation_floor_ms))
+        # The distinction that matters most in this table: a residual of zero
+        # because the anchors agreed, against no residual at all because there
+        # was nothing left over to disagree.
+        if quality.residual_rms_ms is None:
+            scores.add_row(
+                "anchor residual",
+                f"[yellow]not measurable[/yellow] ({quality.degrees_of_freedom} spare "
+                "degrees of freedom -- the fit passes through every anchor)",
+            )
+        else:
+            ratio = quality.residual_rms_ms / max(quality.quantisation_floor_ms, 1e-9)
+            scores.add_row(
+                "anchor residual",
+                f"{_format_ms(quality.residual_rms_ms)} rms, "
+                f"{_format_ms(quality.residual_max_ms)} worst ({ratio:.1f}x the floor)",
+            )
+        if quality.method_disagreement_ms is not None:
+            comparable = mapping is not None and not mapping.rate_estimated
+            note = "" if comparable else " [dim](not comparable: a rate was fitted)[/dim]"
+            scores.add_row(
+                "vs cross-correlation", _format_ms(quality.method_disagreement_ms) + note
+            )
+        console.print(scores)
+
+    if result.anchors:
+        anchors = Table(title="Anchors", title_justify="left", expand=True)
+        for column in ("instant", "source", "reference frame", "target frame", "conf", "residual"):
+            anchors.add_column(column, no_wrap=True)
+        residuals = {entry.label: entry for entry in result.residuals}
+        for anchor in result.anchors:
+            entry = residuals.get(anchor.label)
+            anchors.add_row(
+                anchor.label,
+                anchor.source.value,
+                f"{anchor.reference_frame} ({anchor.reference_s:.3f} s)",
+                f"{anchor.target_frame} ({anchor.target_s:.3f} s)",
+                f"{anchor.confidence:.2f}",
+                "-" if entry is None else _format_ms(entry.residual_ms, signed=True),
+            )
+        console.print(anchors)
+
+    correlation = result.correlation
+    if correlation is not None:
+        rival = (
+            "no rival scored"
+            if correlation.rival_correlation is None
+            else f"best rival {correlation.rival_correlation:.3f} at "
+            f"{(correlation.rival_offset_s or 0.0) * 1000:+.0f} ms"
+        )
+        console.print(
+            f"[dim]Cross-correlation: peak {correlation.peak_correlation:.3f} at "
+            f"{correlation.peak_offset_s * 1000:+.1f} ms over {correlation.overlap_s:.2f} s "
+            f"({correlation.samples} samples at {correlation.grid_interval_s * 1000:.2f} ms); "
+            f"{rival}.[/dim]"
+        )
+
+    if result.refusal:
+        console.print(f"[red]{result.refusal}[/red]")
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _parse_anchor(raw: str) -> dict[str, object]:
+    """Parse `label=reference_frame:target_frame`.
+
+    Terse because picking four instants on a command line should not need four
+    flags each. The error names the form rather than the parse failure, because
+    what a user needs here is the shape, not which colon was missing.
+    """
+    label, _, frames = raw.partition("=")
+    reference, _, target = frames.partition(":")
+    try:
+        return {
+            "label": label.strip() or "manual",
+            "reference_frame": int(reference),
+            "target_frame": int(target),
+        }
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"'{raw}' is not an anchor. The form is label=REFERENCE_FRAME:TARGET_FRAME, "
+            "for example impact=204:252."
+        ) from exc
+
+
+@app.command()
+def sync(
+    reference: Annotated[
+        Path, typer.Argument(help="The clip whose clock everything is stated in.")
+    ],
+    target: Annotated[Path, typer.Argument(help="The clip to align to the reference.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given videos.")
+    ] = None,
+    window: Annotated[
+        float | None,
+        typer.Option(
+            "--window",
+            help="Filtering window in seconds, shared by both clips. The coarser clip sets it.",
+        ),
+    ] = None,
+    method: Annotated[
+        str | None,
+        typer.Option("--method", help="Force a method: events, correlation or manual."),
+    ] = None,
+    anchor: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--anchor",
+            help="A manual pick, as label=REFERENCE_FRAME:TARGET_FRAME. Repeatable.",
+        ),
+    ] = None,
+    slow_motion_reference: Annotated[
+        float,
+        typer.Option("--slow-motion-reference", help="Slow-motion factor of the reference clip."),
+    ] = 1.0,
+    slow_motion_target: Annotated[
+        float, typer.Option("--slow-motion-target", help="Slow-motion factor of the target clip.")
+    ] = 1.0,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Relate two clips' clocks, and report how well the relation is known."""
+    params: dict[str, object] = {
+        "reference": {
+            "path": str(reference),
+            "model": model,
+            "slow_motion_factor": slow_motion_reference,
+        },
+        "target": {
+            "path": str(target),
+            "model": model,
+            "slow_motion_factor": slow_motion_target,
+        },
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if method is not None:
+        params["sync"] = {"method": method}
+    if anchor:
+        params["anchors"] = [_parse_anchor(entry) for entry in anchor]
+
+    try:
+        result = call("sync_clips", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_sync(result)
+
+    # Non-zero when no map came out, so a script driving this learns that the
+    # clips were not aligned rather than reading a refusal as an offset of zero.
+    if not result.aligned:
+        raise typer.Exit(code=1)
+
+
+projects = typer.Typer(
+    name="project",
+    help="Sessions: the clips of one swing, and how their clocks relate.",
+    no_args_is_help=True,
+)
+app.add_typer(projects)
+
+
+def _render_project(project: Project) -> None:
+    summary = Table(title=f"{project.name} (id {project.id})", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("created", project.created_at.astimezone().strftime("%Y-%m-%d %H:%M"))
+    if project.notes:
+        summary.add_row("notes", project.notes)
+    summary.add_row("clips", str(len(project.clips)))
+    console.print(summary)
+
+    if project.clips:
+        clips = Table(title="Clips", title_justify="left", expand=True)
+        for column in ("id", "role", "file", "slow motion", "on disk"):
+            clips.add_column(column, no_wrap=True)
+        for clip in project.clips:
+            clips.add_row(
+                str(clip.id),
+                clip.role.value,
+                clip.name,
+                "-" if clip.slow_motion_factor == 1.0 else f"{clip.slow_motion_factor:g}x",
+                "[green]yes[/green]" if clip.exists else "[red]missing[/red]",
+            )
+        console.print(clips)
+
+    for stored in project.syncs:
+        mapping = stored.model.time_map
+        offset = "refused" if mapping is None else f"{mapping.offset_s * 1000:+.1f} ms"
+        confidence = (
+            "-" if stored.model.confidence is None else f"{stored.model.confidence.overall:.2f}"
+        )
+        console.print(
+            f"[dim]sync {stored.reference_clip_id} -> {stored.target_clip_id}: {offset} "
+            f"(confidence {confidence}, {stored.updated_at.astimezone():%Y-%m-%d %H:%M})[/dim]"
+        )
+
+    for warning in project.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _project_call(method: str, params: dict[str, object]) -> BaseModel:
+    try:
+        return call(method, params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+
+@projects.command("create")
+def project_create(
+    name: Annotated[str, typer.Argument(help="What this session is.")],
+    notes: Annotated[str, typer.Option("--notes", help="Free text.")] = "",
+) -> None:
+    """Create an empty project."""
+    result = _project_call("create_project", {"name": name, "notes": notes})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("list")
+def project_list() -> None:
+    """List every project, newest first."""
+    result = _project_call("list_projects", {})
+    assert isinstance(result, ProjectList)  # noqa: S101 - narrows the dispatch return type
+
+    if not result.projects:
+        console.print("[dim]No projects yet. Create one with `analyzer project create`.[/dim]")
+        console.print(f"[dim]Database: {result.database_path}[/dim]")
+        return
+
+    table = Table(title="Projects", title_justify="left", expand=True)
+    for column in ("id", "name", "created", "clips", "missing"):
+        table.add_column(column, no_wrap=True)
+    for project in result.projects:
+        missing = sum(1 for clip in project.clips if not clip.exists)
+        table.add_row(
+            str(project.id),
+            project.name,
+            project.created_at.astimezone().strftime("%Y-%m-%d"),
+            str(len(project.clips)),
+            "-" if missing == 0 else f"[red]{missing}[/red]",
+        )
+    console.print(table)
+    console.print(f"[dim]Database: {result.database_path}[/dim]")
+
+
+@projects.command("show")
+def project_show(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+) -> None:
+    """Show one project, its clips and its stored alignments."""
+    result = _project_call("get_project", {"project_id": project_id})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("add")
+def project_add(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    path: Annotated[Path, typer.Argument(help="Video file to attach.")],
+    role: Annotated[str, typer.Option("--role", help="face_on, down_the_line or other.")] = "other",
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    label: Annotated[str, typer.Option("--label", help="Free text.")] = "",
+) -> None:
+    """Attach a clip to a project. The clip is identified by content, not by path."""
+    result = _project_call(
+        "add_clip",
+        {
+            "project_id": project_id,
+            "path": str(path),
+            "role": role,
+            "slow_motion_factor": slow_motion,
+            "label": label,
+        },
+    )
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("delete")
+def project_delete(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")] = False,
+) -> None:
+    """Delete a project, its clips and its alignments. The video files are untouched."""
+    if not yes:
+        # A project is the one thing here that cannot be recomputed from the
+        # footage, so deleting one is confirmed rather than assumed. Everything
+        # else this CLI removes can be rebuilt by re-running a command.
+        project = _project_call("get_project", {"project_id": project_id})
+        assert isinstance(project, Project)  # noqa: S101 - narrows the dispatch return type
+        console.print(
+            f"Deleting project {project.id} ({project.name}) with {len(project.clips)} clip(s) "
+            f"and {len(project.syncs)} stored alignment(s). The video files are not touched."
+        )
+        typer.confirm("Continue?", abort=True)
+
+    result = _project_call("delete_project", {"project_id": project_id})
+    assert isinstance(result, ProjectList)  # noqa: S101 - narrows the dispatch return type
+    console.print(f"[dim]Deleted. {len(result.projects)} project(s) remain.[/dim]")
+
+
+@projects.command("remove")
+def project_remove(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    clip_id: Annotated[int, typer.Argument(help="Which clip.")],
+) -> None:
+    """Detach a clip from a project. Its stored alignments go with it."""
+    result = _project_call("remove_clip", {"project_id": project_id, "clip_id": clip_id})
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("relocate")
+def project_relocate(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    clip_id: Annotated[int, typer.Argument(help="Which clip.")],
+    path: Annotated[Path, typer.Argument(help="Where the file is now.")],
+) -> None:
+    """Point a clip at a moved file, keeping its recorded content key."""
+    result = _project_call(
+        "relocate_clip", {"project_id": project_id, "clip_id": clip_id, "path": str(path)}
+    )
+    assert isinstance(result, Project)  # noqa: S101 - narrows the dispatch return type
+    _render_project(result)
+
+
+@projects.command("sync")
+def project_sync(
+    project_id: Annotated[int, typer.Argument(help="Which project.")],
+    reference_clip: Annotated[
+        int | None, typer.Option("--reference-clip", help="Clip id to use as the reference.")
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="Clip id to align to the reference.")
+    ] = None,
+    model: Annotated[str | None, typer.Option("--model", help="Which extraction to use.")] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, shared by both.")
+    ] = None,
+    method: Annotated[
+        str | None, typer.Option("--method", help="events, correlation or manual.")
+    ] = None,
+    anchor: Annotated[
+        list[str] | None,
+        typer.Option("--anchor", help="A manual pick, as label=REFERENCE_FRAME:TARGET_FRAME."),
+    ] = None,
+    save: Annotated[
+        bool, typer.Option("--save/--no-save", help="Store the result on the project.")
+    ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Align two of a project's clips, using each clip's own slow-motion factor."""
+    params: dict[str, object] = {
+        "project_id": project_id,
+        "reference_clip_id": reference_clip,
+        "target_clip_id": target_clip,
+        "model": model,
+        "save": save,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if method is not None:
+        params["sync"] = {"method": method}
+    if anchor:
+        params["anchors"] = [_parse_anchor(entry) for entry in anchor]
+
+    result = _project_call("sync_project", params)
+    assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_sync(result)
+    if not result.aligned:
         raise typer.Exit(code=1)
 
 

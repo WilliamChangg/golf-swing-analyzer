@@ -100,3 +100,75 @@ pub async fn detect_phases(
         }
     })
 }
+
+/// One instant a person identified in both clips of a pair.
+///
+/// Frames rather than seconds, because a frame is what the UI scrubs to and
+/// seconds are what only the engine can compute: on variable-rate footage
+/// `frame / fps` is not when the frame was taken.
+#[derive(serde::Deserialize)]
+pub struct ManualAnchor {
+    pub label: String,
+    pub reference_frame: u32,
+    pub target_frame: u32,
+}
+
+/// Relate two clips' clocks, and report how well the relation is known.
+///
+/// The slow-motion factors are per clip, not per request: two cameras in one
+/// session routinely differ, and a phone at 240 fps beside one at 30 is the
+/// ordinary case. The smoothing window is shared, because smoothing two clips
+/// differently would shift the features the alignment keys on.
+///
+/// `aligned: false` is a successful result, exactly as `detected: false` is for
+/// `detect_phases`. Two clips that cannot be aligned is an answer, and it
+/// arrives with a `refusal` explaining what was found instead.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn sync_clips(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    reference_path: String,
+    target_path: String,
+    model: Option<String>,
+    reference_slow_motion: Option<f64>,
+    target_slow_motion: Option<f64>,
+    window_s: Option<f64>,
+    anchors: Option<Vec<ManualAnchor>>,
+) -> Result<Value, EngineError> {
+    let mut params = json!({
+        "reference": {
+            "path": reference_path,
+            "model": model,
+            "slow_motion_factor": reference_slow_motion.unwrap_or(1.0),
+        },
+        "target": {
+            "path": target_path,
+            "model": model,
+            "slow_motion_factor": target_slow_motion.unwrap_or(1.0),
+        },
+    });
+    if let Some(window) = window_s {
+        params["filter"] = json!({ "smoothing": { "window_s": window } });
+    }
+    if let Some(picks) = anchors {
+        params["anchors"] = Value::Array(
+            picks
+                .into_iter()
+                .map(|pick| {
+                    json!({
+                        "label": pick.label,
+                        "reference_frame": pick.reference_frame,
+                        "target_frame": pick.target_frame,
+                    })
+                })
+                .collect(),
+        );
+    }
+
+    engine.request_with_notifications("sync_clips", params, &|method, params| {
+        if method == PROGRESS_NOTIFICATION {
+            let _ = app.emit(PROGRESS_EVENT, params.clone());
+        }
+    })
+}

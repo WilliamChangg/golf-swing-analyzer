@@ -14,6 +14,7 @@ import type {
   PoseExtractionResult,
   ProgressUpdate,
   SwingPhases,
+  SyncModel,
   VideoMetadata,
 } from "@gsa/types";
 import { invoke } from "@tauri-apps/api/core";
@@ -25,6 +26,7 @@ const COMMANDS = {
   probeVideo: "probe_video",
   extractPoses: "extract_poses",
   detectPhases: "detect_phases",
+  syncClips: "sync_clips",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -191,6 +193,56 @@ export function detectPhases(
     path,
     model: options.model ?? null,
     windowS: options.windowS ?? null,
+  });
+}
+
+/** One instant a person identified in both clips of a pair. */
+export interface ManualAnchor {
+  label: string;
+  referenceFrame: number;
+  targetFrame: number;
+}
+
+/**
+ * Relate two clips' clocks, and report how well the relation is known.
+ *
+ * Requires `extractPoses` to have run for both clips. Slow-motion factors are
+ * per clip because two cameras in one session routinely differ; the smoothing
+ * window is shared, because smoothing two clips differently would shift the
+ * very features the alignment keys on — which means the *coarser* clip sets it,
+ * and a 30 fps camera cannot support the engine's 0.10 s default.
+ *
+ * **`aligned: false` is a success**, exactly as `detected: false` is for
+ * `detectPhases`. It arrives with a `refusal` saying what was found instead.
+ *
+ * Passing `anchors` switches the engine to the manual method: a person who has
+ * looked at both frames is supplying the answer, not an estimate for the engine
+ * to weigh against its own.
+ */
+export function syncClips(
+  referencePath: string,
+  targetPath: string,
+  options: {
+    model?: string;
+    referenceSlowMotion?: number;
+    targetSlowMotion?: number;
+    windowS?: number;
+    anchors?: ManualAnchor[];
+  } = {},
+): Promise<EngineResult<SyncModel>> {
+  return call<SyncModel>(COMMANDS.syncClips, {
+    referencePath,
+    targetPath,
+    model: options.model ?? null,
+    referenceSlowMotion: options.referenceSlowMotion ?? null,
+    targetSlowMotion: options.targetSlowMotion ?? null,
+    windowS: options.windowS ?? null,
+    anchors:
+      options.anchors?.map((anchor) => ({
+        label: anchor.label,
+        reference_frame: anchor.referenceFrame,
+        target_frame: anchor.targetFrame,
+      })) ?? null,
   });
 }
 

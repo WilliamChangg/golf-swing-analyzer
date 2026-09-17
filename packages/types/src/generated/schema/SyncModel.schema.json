@@ -1,0 +1,640 @@
+{
+  "$defs": {
+    "AnchorResidual": {
+      "description": "How far one anchor sits from the fitted map.\n\nSigned, and in milliseconds, because the sign is the informative part: four\nresiduals that alternate are noise, and four that trend are a rate the fit\nwas not allowed to take up.",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "reference_s": {
+          "type": "number"
+        },
+        "observed_target_s": {
+          "type": "number"
+        },
+        "predicted_target_s": {
+          "type": "number"
+        },
+        "residual_ms": {
+          "description": "observed - predicted, in milliseconds.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "reference_s",
+        "observed_target_s",
+        "predicted_target_s",
+        "residual_ms"
+      ],
+      "title": "AnchorResidual",
+      "type": "object"
+    },
+    "AnchorSource": {
+      "description": "Where one anchor's pair of frames came from.\n\nKept distinct from `SyncMethod` because a single fit may mix them: a person\ncorrecting one badly-detected event leaves the other three as detections,\nand the result is neither wholly manual nor wholly automatic.",
+      "enum": [
+        "detected",
+        "manual"
+      ],
+      "title": "AnchorSource",
+      "type": "string"
+    },
+    "ClipRef": {
+      "description": "One clip of a synchronised pair, as the sync layer needs to see it.\n\nTimings here are **real seconds**, already divided by the slow-motion factor,\nmatching every other duration in the engine. `slow_motion_factor` is carried\nalongside so a reader can recover the clip's own playback clock, and because\na fitted rate far from 1.0 usually means one of these two numbers is wrong.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "name": {
+          "description": "Basename, for display.",
+          "type": "string"
+        },
+        "frames": {
+          "type": "integer"
+        },
+        "start_s": {
+          "description": "Timestamp of the first frame, in real seconds.",
+          "type": "number"
+        },
+        "duration_s": {
+          "description": "Span from the first to the last frame, in real seconds.",
+          "type": "number"
+        },
+        "median_interval_s": {
+          "description": "Median gap between frames, in real seconds. The quantisation of every instant located in this clip, and half of what bounds how well the pair can be aligned.",
+          "type": "number"
+        },
+        "slow_motion_factor": {
+          "description": "The factor the caller supplied for this clip. 1.0 is real time.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "frames",
+        "start_s",
+        "duration_s",
+        "median_interval_s",
+        "slow_motion_factor"
+      ],
+      "title": "ClipRef",
+      "type": "object"
+    },
+    "CorrelationReport": {
+      "description": "The independent estimate, and what it had to work with.\n\nCross-correlating two *projected* speed signals assumes their temporal shapes\nmatch, which they do not exactly: a face-on camera sees the full sweep of the\nhands and a down-the-line camera sees much of it foreshortened, so the same\nswing produces two differently-shaped curves. The instants survive the\nprojection -- the hands are slowest at the top and fastest near impact from\nevery angle -- which is why this works at all, and `peak_correlation` is how\nwell it worked on this pair rather than an assumption that it did.",
+      "properties": {
+        "peak_correlation": {
+          "description": "Pearson correlation at the best lag.",
+          "maximum": 1.0,
+          "minimum": -1.0,
+          "type": "number"
+        },
+        "peak_offset_s": {
+          "description": "The lag that maximised it, as a target-minus-reference offset.",
+          "type": "number"
+        },
+        "rival_correlation": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The best correlation at any lag far enough from the peak to be a different alignment. None when no such lag scored at all."
+        },
+        "rival_offset_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where that rival sat. A swing has two speed humps, so a rival is expected."
+        },
+        "grid_interval_s": {
+          "description": "Resampling interval both signals were put on: the finer of the two clips'.",
+          "type": "number"
+        },
+        "overlap_s": {
+          "description": "Seconds of signal both clips supplied at the best lag.",
+          "type": "number"
+        },
+        "samples": {
+          "description": "Grid samples that contributed to the peak correlation.",
+          "type": "integer"
+        },
+        "sub_grid_shift_s": {
+          "description": "How far the parabolic refinement moved the peak off the grid. Bounded by half a grid step by construction; a value at that bound means the refinement saturated and the peak is not well shaped.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "peak_correlation",
+        "peak_offset_s",
+        "grid_interval_s",
+        "overlap_s",
+        "samples",
+        "sub_grid_shift_s"
+      ],
+      "title": "CorrelationReport",
+      "type": "object"
+    },
+    "OverlapReport": {
+      "description": "What the two clips have in common once the map is applied.\n\nStated in reference-clip time, because that is the frame the map is\nparameterised in and a reader comparing it against `ClipRef.duration_s` needs\nthe two in the same clock.",
+      "properties": {
+        "start_s": {
+          "type": "number"
+        },
+        "end_s": {
+          "type": "number"
+        },
+        "duration_s": {
+          "type": "number"
+        },
+        "reference_fraction": {
+          "description": "Fraction of the reference clip inside the overlap.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "target_fraction": {
+          "description": "Fraction of the target clip inside the overlap.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s",
+        "duration_s",
+        "reference_fraction",
+        "target_fraction"
+      ],
+      "title": "OverlapReport",
+      "type": "object"
+    },
+    "SwingEvent": {
+      "description": "The instants that divide a swing.\n\nTAKEAWAY - the hands begin moving away from the ball.\nTOP      - the backswing reverses; the hands are momentarily near rest.\nIMPACT   - estimated from hand kinematics, not observed. See module docstring.\nFINISH   - the hands come back to rest after the follow-through.",
+      "enum": [
+        "takeaway",
+        "top",
+        "impact",
+        "finish"
+      ],
+      "title": "SwingEvent",
+      "type": "string"
+    },
+    "SyncAnchor": {
+      "description": "One instant identified in both clips.\n\nFrames and seconds are both carried. Frames are what a person picks and what\na UI scrubs to; seconds are what the map is fitted in, and on\nvariable-rate footage the two are not interconvertible without the clip's own\ntimestamps -- which live in the engine, not in the caller.",
+      "properties": {
+        "label": {
+          "description": "What this instant is, in words. Shown to a reader.",
+          "type": "string"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The swing event this anchor is, when it is one. None for a manual pick."
+        },
+        "source": {
+          "$ref": "#/$defs/AnchorSource"
+        },
+        "reference_frame": {
+          "type": "integer"
+        },
+        "target_frame": {
+          "type": "integer"
+        },
+        "reference_s": {
+          "type": "number"
+        },
+        "target_s": {
+          "type": "number"
+        },
+        "confidence": {
+          "description": "How well this instant was located, in the weaker of the two clips. A detected anchor inherits Phase 4's event confidence; a manual anchor is the assertion being fitted rather than an estimate of it, and scores 1.0 -- what checks it is the residual, not this.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "source",
+        "reference_frame",
+        "target_frame",
+        "reference_s",
+        "target_s",
+        "confidence"
+      ],
+      "title": "SyncAnchor",
+      "type": "object"
+    },
+    "SyncConfidence": {
+      "description": "Why an alignment is or is not trustworthy, decomposed.\n\nThree measured factors and their product, following Phase 4 and Phase 5. The\nproduct is the headline because an alignment needs all three; the factors are\nwhat make a low score actionable, and they fail for different reasons that\ncall for different fixes -- re-film, re-pick the anchors, or supply the right\nslow-motion factor.",
+      "properties": {
+        "overall": {
+          "description": "Product of the three factors below.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "agreement": {
+          "description": "Evidence about whichever estimator actually produced the offset, which is a different quantity for the two kinds of map.\n\nWhere the anchors produced it (`events`, `manual`): how closely they agree with the map, measured against the quantisation floor rather than against zero, taken at its worst alongside the cross-correlation's independent estimate.\n\nWhere the correlation produced it (`combined`, `correlation`): how far the peak sat above its nearest rival. Under realistic landmark noise the anchor residual cannot do this job -- four events scatter tens of milliseconds on a pair that is correctly aligned to under one, and scatter no more than that on two clips of genuinely different swings. The correlation margin separates those cases and the residual does not; `scripts/benchmark_sync.py` has the numbers.\n\n**Zero when nothing checked the map at all** -- an exactly determined fit with no correlation estimate is an assertion, not a measurement, and this is where that shows.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "anchors": {
+          "description": "Mean confidence of the instants the map was fitted to.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "stability": {
+          "description": "How much of the map's accuracy survives to the far edges of the overlap, where its evidence is not. The uncertainty at the pivot over the worst uncertainty anywhere in the overlap, so it measures *only* the cost of extrapolation and does not restate what `agreement` already said about how well the anchors fit.\n\nAn offset-only map scores 1.0 by construction: a constant offset is exactly as good a thousand frames away as at its anchors. A fitted rate pays here for the extrapolation it enables, and that payment is the whole reason `min_rate_span_s` and `rate_significance` exist.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "overall",
+        "agreement",
+        "anchors",
+        "stability"
+      ],
+      "title": "SyncConfidence",
+      "type": "object"
+    },
+    "SyncConfig": {
+      "additionalProperties": false,
+      "description": "Policy for synchronisation.\n\nEvery bound here is **stated policy except where it says otherwise**, in the\nsame sense as `GapPolicy`: none of it is tuned against a ground-truth pair,\nbecause no simultaneous two-camera recording exists in this project yet.\n`scripts/benchmark_sync.py` measures what the method achieves against known\noffsets, which is a different and weaker claim, and says so.",
+      "properties": {
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SyncMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Force a method. None picks events when both clips yielded a swing and correlation otherwise, and cross-checks whichever it picked against the other."
+        },
+        "min_rate_span_s": {
+          "default": 1.0,
+          "description": "Anchors must span at least this long before a rate is fitted. Below it, the rate's own error does more damage than assuming the clocks agree: a frame of anchor error over half a second is a 6% rate at 30 fps, which is 60 ms of drift a second later.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "prefer_correlated_offset": {
+          "default": true,
+          "description": "Take the offset from the cross-correlation when no clock rate was needed, keeping the events for the anchors and the residual.\n\n**Measured, and it overturned the obvious default.** Four swing events look like four clocks and are not: `scripts/benchmark_sync.py` perturbs the landmarks at the noise level Phase 3 measured from real footage and watches where each event lands. Over eight seeds the top moves 8 ms, impact 117 ms, the finish 350 ms and the takeaway 542 ms -- the last two are threshold crossings on a signal that is barely moving there, and one seed puts the takeaway on frame zero. A correlation over the same pair averages several hundred samples and recovers the offset to under a millisecond, against 8-31 ms for the anchored fit.\n\nSo the offset comes from the estimator with the evidence behind it. This is not averaging two estimates -- which this layer refuses to do -- it is using each for the quantity it can determine: a correlation cannot produce a rate or a residual, and four instants cannot out-measure three hundred samples of the same offset.\n\nIt does not apply when a rate *was* fitted. A correlation yields one lag for the whole clip and a rate-bearing map has a different offset at every instant, so substituting one into the other would introduce exactly the bias `SyncQuality.method_disagreement_ms` documents. There the events fit stands whole.",
+          "type": "boolean"
+        },
+        "rate_significance": {
+          "default": 2.0,
+          "description": "How many of its own standard errors a fitted rate must sit away from 1.0 to be kept. Below it the anchors are consistent with two clocks running in step, and fitting the difference anyway makes the map *worse*: it spends a degree of freedom on noise and buys an uncertainty that grows with distance from the anchors, where a constant offset has none. Two sigma, so a rate is kept when the evidence for it would not be dismissed as chance.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "max_rate_deviation": {
+          "default": 0.5,
+          "description": "A fitted rate further than this from 1.0 is refused and the map falls back to offset-only. Half again is already absurd for two clocks; the bound is there to stop a bad anchor pair producing a map that is wrong everywhere rather than wrong in one place.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "clock_drift_tolerance": {
+          "default": 0.02,
+          "description": "A fitted rate further than this from 1.0 earns a warning. Consumer camera clocks agree to far better than 2%, so a rate outside it is evidence about the supplied slow-motion factors, not about the hardware.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "min_overlap_s": {
+          "default": 0.3,
+          "description": "A candidate lag is not scored unless both clips supply this much signal there. Without it the extreme lags, where a handful of samples overlap, produce spuriously perfect correlations.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_lag_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest offset the correlation will consider. None searches every lag that satisfies `min_overlap_s`, which is the honest default: two cameras started by hand can be any distance apart."
+        },
+        "grid_interval_s": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Interval both hand-speed signals are resampled onto before correlating. None uses the finer of the two clips', which is what lets the lag search resolve below the coarser clip's frame interval -- the only thing the faster camera of a mismatched pair contributes to the alignment."
+        },
+        "rival_separation_s": {
+          "default": 0.2,
+          "description": "How far from the peak a lag must be to count as a different alignment rather than part of the same peak.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_residual_ms": {
+          "default": 150.0,
+          "description": "Above this residual the alignment is refused rather than reported with a low score. A tenth of a second is most of a downswing, so a map that wrong is not a worse answer but a different swing. Policy, not a measured optimum.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_anchor_disagreement_s": {
+          "default": 0.3,
+          "description": "An event pair whose offset differs from the median pair's by more than this is dropped before fitting, and said so. One misdetected event should cost its own anchor, not the whole alignment.\n\n**Measured, not assumed.** The bound has to admit the spread a genuine clock rate produces while catching an event located in the wrong place, and those two overlap on paper: a rate of 0.7 over a 1.6 s swing moves the anchors 0.4 s apart. In practice they do not, because the median sits among the clustered anchors rather than at one end. `scripts/benchmark_sync.py` sweeps the supplied slow-motion factor from 2% to 40% wrong and keeps all four anchors at this bound, recovering the rate to within 0.3%; the same bound drops the spurious takeaway a clip that starts mid-backswing produces, which sits 0.47 s out.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "SyncConfig",
+      "type": "object"
+    },
+    "SyncMethod": {
+      "description": "What produced a time map.\n\nMANUAL\n    Anchors supplied by a person, who looked at both clips and said which\n    frames show the same instant. The engine does the arithmetic and the\n    error accounting; it does not second-guess the instants.\n\nEVENTS\n    Anchors from Phase 4's detected swing events, paired by name. The only\n    method that can estimate a rate, because it is the only one that\n    produces anchors spread across the swing.\n\nCORRELATION\n    The lag that maximises the normalised correlation of the two hand-speed\n    signals. Produces one number -- an offset -- and no rate.\n\nCOMBINED\n    The default where both are available, and each is used for what it can\n    actually determine: the **offset from the correlation**, the anchors and\n    the residual from the events. See `SyncConfig.prefer_correlated_offset`\n    for the measurement that decided this.",
+      "enum": [
+        "manual",
+        "events",
+        "correlation",
+        "combined"
+      ],
+      "title": "SyncMethod",
+      "type": "string"
+    },
+    "SyncQuality": {
+      "description": "How well the alignment is determined, in milliseconds.\n\n`quantisation_floor_ms` is the bound nothing about this pair can beat. An\ninstant located to the nearest frame carries a uniform error of a frame\ninterval, whose standard deviation is that interval over sqrt(12); two clips\ncontribute one each, in quadrature. A residual at the floor means the anchors\nagree as well as their frame rates allow, and the coarser clip is what sets\nit -- pairing a 240 fps camera with a 30 fps one buys almost nothing.",
+      "properties": {
+        "residual_rms_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "RMS of the anchor residuals. **None when the fit has no spare degrees of freedom**, where the residual is zero by construction and reporting it would look like a perfect alignment."
+        },
+        "residual_max_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Largest absolute anchor residual, on the same condition."
+        },
+        "degrees_of_freedom": {
+          "description": "Anchors minus fitted parameters. Zero or less means the residual is not evidence.",
+          "type": "integer"
+        },
+        "quantisation_floor_ms": {
+          "description": "Best residual the two clips' frame rates permit. See the class docstring.",
+          "type": "number"
+        },
+        "method_disagreement_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Distance between the fitted offset and the cross-correlation's, at the pivot. None when only one estimate exists, which is itself worth knowing: nothing independent checked the map.\n\n**Comparable only when the map is offset-only.** A correlation produces one lag for the whole clip; a map with a fitted rate has a different offset at every instant, and the two are then estimating different quantities. A rate of 0.91 moves the map by 90 ms per second away from the pivot, so a correlation landing 9 ms from the pivot value is close agreement rather than poor. It is reported in both cases and drives `SyncConfidence.agreement` in neither, once a rate is in play -- there the residual is the better instrument, being the only one that is rate-aware."
+        }
+      },
+      "required": [
+        "degrees_of_freedom",
+        "quantisation_floor_ms"
+      ],
+      "title": "SyncQuality",
+      "type": "object"
+    },
+    "TimeMap": {
+      "description": "The affine map from reference-clip time to target-clip time.\n\nBoth directions are provided because both are needed: rendering the target\nclip alongside the reference needs `to_target`, and reporting an instant\nfound in the target in the reference's frame numbering needs `to_reference`.",
+      "properties": {
+        "offset_s": {
+          "description": "How far ahead of the reference clock the target clock runs, at `pivot_s`. With `rate` at 1.0 this is the whole map.",
+          "type": "number"
+        },
+        "rate": {
+          "description": "Target seconds per reference second. 1.0 means the two clocks run at the same speed, which is the default and is not a measurement unless `rate_estimated` is true.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "rate_estimated": {
+          "description": "True when the rate was fitted from anchors spanning enough time to determine it. False means it was held at 1.0, which is an assumption about the hardware rather than something measured here.",
+          "type": "boolean"
+        },
+        "pivot_s": {
+          "description": "The reference-clip instant `offset_s` is stated at: the centroid of the anchors. Chosen so the offset and rate uncertainties are uncorrelated and can be combined by `uncertainty_at`.",
+          "type": "number"
+        },
+        "offset_uncertainty_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Standard error of `offset_s`, from the fit's residual scatter where there are spare degrees of freedom and from the frame quantisation otherwise. None where neither is available."
+        },
+        "rate_uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Standard error of `rate`. None whenever the rate was not estimated."
+        },
+        "support_start_s": {
+          "description": "Earliest reference time an anchor was placed at.",
+          "type": "number"
+        },
+        "support_end_s": {
+          "description": "Latest reference time an anchor was placed at.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "offset_s",
+        "rate",
+        "rate_estimated",
+        "pivot_s",
+        "support_start_s",
+        "support_end_s"
+      ],
+      "title": "TimeMap",
+      "type": "object"
+    }
+  },
+  "description": "Everything the engine concluded about aligning two clips.\n\n`aligned` is false whenever no map could be produced or the map produced was\ntoo poor to report, and then `time_map` is None rather than populated with a\nguess. A caller that reads the map without checking cannot therefore mistake\na refusal for an alignment at zero offset, which is the failure mode this\nshape exists to prevent -- and zero offset is exactly the wrong value to\ndefault to, because it is also a perfectly plausible answer.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "aligned": {
+      "type": "boolean"
+    },
+    "method": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SyncMethod"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "What produced the map. None when nothing did."
+    },
+    "reference": {
+      "$ref": "#/$defs/ClipRef"
+    },
+    "target": {
+      "$ref": "#/$defs/ClipRef"
+    },
+    "time_map": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimeMap"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "anchors": {
+      "items": {
+        "$ref": "#/$defs/SyncAnchor"
+      },
+      "type": "array"
+    },
+    "residuals": {
+      "items": {
+        "$ref": "#/$defs/AnchorResidual"
+      },
+      "type": "array"
+    },
+    "quality": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SyncQuality"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "confidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SyncConfidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "correlation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CorrelationReport"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The independent estimate, when one could be computed. Never merged into the map."
+    },
+    "overlap": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OverlapReport"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "config": {
+      "$ref": "#/$defs/SyncConfig"
+    },
+    "refusal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why no map was produced, in words. Set exactly when `aligned` is false."
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "aligned",
+    "reference",
+    "target",
+    "config"
+  ],
+  "title": "SyncModel",
+  "type": "object"
+}

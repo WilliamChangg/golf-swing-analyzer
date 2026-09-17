@@ -25,7 +25,8 @@ pub fn run() {
             commands::doctor,
             commands::probe_video,
             commands::extract_poses,
-            commands::detect_phases
+            commands::detect_phases,
+            commands::sync_clips
         ])
         .run(tauri::generate_context!())
         .expect("error while running the application");

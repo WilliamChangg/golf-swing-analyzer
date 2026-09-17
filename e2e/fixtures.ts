@@ -356,3 +356,153 @@ export const NO_SWING = {
     "No swing detected. The hands ranged over 0.04 torso lengths, below the 0.5 a swing requires. Either the clip contains no swing, or the hands were not tracked through the part where one happened.",
   ],
 };
+
+/**
+ * An alignment shaped like the real down-the-line/face-on pair.
+ *
+ * The numbers come from running `scripts/benchmark_sync.py --real` on the two
+ * tour clips in `data/`, which are *not* the same swing — so the residual is
+ * 40x the frame-rate floor and the confidence is 0.10. That is deliberately the
+ * fixture: a flow that only ever renders a clean alignment never exercises the
+ * presentation of the case a reader most needs to notice.
+ */
+export const SYNC_MODEL = {
+  schema_version: 1,
+  aligned: true,
+  method: "combined",
+  reference: {
+    path: "/Users/example/data/face-on/rory_face_on.mp4",
+    name: "rory_face_on.mp4",
+    frames: 525,
+    start_s: 0,
+    duration_s: 3.1,
+    median_interval_s: 0.004762,
+    slow_motion_factor: 7,
+  },
+  target: {
+    path: "/Users/example/data/dtl/rory_dtl.mp4",
+    name: "rory_dtl.mp4",
+    frames: 422,
+    start_s: 0,
+    duration_s: 2.813,
+    median_interval_s: 0.006667,
+    slow_motion_factor: 5,
+  },
+  time_map: {
+    offset_s: -0.2577,
+    rate: 1,
+    rate_estimated: false,
+    pivot_s: 1.631,
+    offset_uncertainty_s: 0.0024,
+    rate_uncertainty: null,
+    support_start_s: 0.767,
+    support_end_s: 2.5,
+  },
+  anchors: [
+    {
+      label: "takeaway",
+      event: "takeaway",
+      source: "detected",
+      reference_frame: 161,
+      target_frame: 64,
+      reference_s: 0.767,
+      target_s: 0.427,
+      confidence: 0.95,
+    },
+    {
+      label: "top",
+      event: "top",
+      source: "detected",
+      reference_frame: 303,
+      target_frame: 164,
+      reference_s: 1.443,
+      target_s: 1.093,
+      confidence: 0.88,
+    },
+    {
+      label: "impact",
+      event: "impact",
+      source: "detected",
+      reference_frame: 381,
+      target_frame: 247,
+      reference_s: 1.814,
+      target_s: 1.647,
+      confidence: 0.64,
+    },
+    {
+      label: "finish",
+      event: "finish",
+      source: "detected",
+      reference_frame: 525,
+      target_frame: 319,
+      reference_s: 2.5,
+      target_s: 2.127,
+      confidence: 0.62,
+    },
+  ],
+  residuals: [
+    {
+      label: "takeaway",
+      reference_s: 0.767,
+      observed_target_s: 0.427,
+      predicted_target_s: 0.509,
+      residual_ms: -82.3,
+    },
+    {
+      label: "top",
+      reference_s: 1.443,
+      observed_target_s: 1.093,
+      predicted_target_s: 1.185,
+      residual_ms: -91.8,
+    },
+    {
+      label: "impact",
+      reference_s: 1.814,
+      observed_target_s: 1.647,
+      predicted_target_s: 1.557,
+      residual_ms: 90.1,
+    },
+    {
+      label: "finish",
+      reference_s: 2.5,
+      observed_target_s: 2.127,
+      predicted_target_s: 2.242,
+      residual_ms: -115.7,
+    },
+  ],
+  quality: {
+    residual_rms_ms: 95.8,
+    residual_max_ms: 115.7,
+    degrees_of_freedom: 3,
+    quantisation_floor_ms: 2.4,
+    method_disagreement_ms: 0.1,
+  },
+  confidence: {
+    overall: 0.1,
+    agreement: 0.12,
+    anchors: 0.77,
+    stability: 1,
+  },
+  correlation: {
+    peak_correlation: 0.716,
+    peak_offset_s: -0.2577,
+    rival_correlation: 0.593,
+    rival_offset_s: 2.195,
+    grid_interval_s: 0.004762,
+    overlap_s: 2.45,
+    samples: 515,
+    sub_grid_shift_s: 0.0002,
+  },
+  overlap: {
+    start_s: 0,
+    end_s: 2.792,
+    duration_s: 2.792,
+    reference_fraction: 0.9,
+    target_fraction: 0.99,
+  },
+  config: {},
+  refusal: null,
+  warnings: [
+    "Synchronisation aligns two swing-shaped signals; it cannot tell that both cameras filmed the same swing. The residual is the only evidence on that question, because two swings of different tempo cannot be aligned by any offset and any clock rate.",
+  ],
+};

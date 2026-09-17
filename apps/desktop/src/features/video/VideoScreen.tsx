@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/card";
 import { PhasesPanel } from "@/features/video/PhasesPanel";
 import { PosePanel } from "@/features/video/PosePanel";
+import { SyncPanel } from "@/features/video/SyncPanel";
 import { probeVideo } from "@/lib/ipc";
 
 type ScreenState =
@@ -337,6 +338,10 @@ export function VideoScreen() {
           <PhasesPanel
             key={`phases-${state.metadata.path}`}
             videoPath={state.metadata.path}
+          />
+          <SyncPanel
+            key={`sync-${state.metadata.path}`}
+            referencePath={state.metadata.path}
           />
         </>
       ) : null}

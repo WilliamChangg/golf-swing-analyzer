@@ -32,11 +32,28 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "filter_poses": {"path": "poses.parquet"},
     "detect_phases": {"path": "poses.parquet"},
     "compute_metrics": {"path": "poses.parquet"},
+    "sync_clips": {
+        "reference": {"path": "a.parquet"},
+        "target": {"path": "b.parquet"},
+    },
+    "create_project": {"name": "Session"},
+    "list_projects": {},
+    "get_project": {"project_id": 1},
+    "delete_project": {"project_id": 1},
+    "add_clip": {"project_id": 1, "path": str(CFR_30FPS), "role": "face_on"},
+    "remove_clip": {"project_id": 1, "clip_id": 1},
+    "relocate_clip": {"project_id": 1, "clip_id": 1, "path": str(CFR_30FPS)},
+    "sync_project": {"project_id": 1},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
 # decodes a clip, so it is exercised separately under the slow markers.
-_FAST_METHODS = {"doctor", "probe_video"}
+#
+# The project methods qualify because they only touch SQLite -- and they are
+# only safe to call here because `conftest.isolated_data` redirects the database
+# into `tmp_path`. Without that this table would create projects in the
+# developer's real data directory on every run.
+_FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
 
 
 class TestCall:

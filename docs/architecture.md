@@ -109,7 +109,9 @@ ingestion/      container inspection and frame decoding
 pose/           landmark estimation, storage, per-landmark series
 filtering/      smoothing, gap policy, derivatives
 phases/         swing event detection
+sync/           relating two cameras' clocks to each other
 biomechanics/   measured metrics, with units, confidence and methodology
+projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
 worker, cli     entry points
 ```
@@ -117,8 +119,18 @@ worker, cli     entry points
 Later phases add `coaching` as a sibling package, and Protocol-typed seams
 (`ClubDetector`, `BallDetector`) following `ingestion`'s `FrameSource`, `pose`'s
 `PoseEstimator` and `filtering`'s `FilterStage`. Golf-specific reasoning is
-confined to `phases`, `biomechanics` and `coaching`; everything below is general
-computer vision that would serve any moving body.
+confined to `phases`, `sync`, `biomechanics` and `coaching`; everything below is
+general computer vision that would serve any moving body. `sync` is the
+marginal member of that set: its mechanism — an affine time map and a masked
+cross-correlation — would align any pair of recordings of anything, and only its
+choice of signal (hand speed, and the four named swing events) is golf-specific.
+
+`projects` sits apart from the rest, because it holds the only state here that
+cannot be recomputed. Everything else is either input the user already has or a
+derived artifact under `cache_dir()` that exists to save time; a project records
+a _decision_ — these two clips are one swing, filmed from here and from there —
+which nothing can recover from the files once it is lost. It therefore lives
+under `data_dir()`, which backup tools do not skip.
 
 `coordinates` sits below everything and owns the one conversion the whole system
 depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
@@ -323,6 +335,82 @@ the ball. It is corroborated against an independent signal — the lowest point
 the hands reach after the top — and Phases 10 and 11 replace that corroboration
 with real evidence.
 
+## Two-camera synchronisation
+
+Two cameras keep two clocks and neither knows about the other. Phases 8 and 9
+triangulate points from two views, and triangulation is only meaningful for two
+views of the _same instant_, so this layer is a prerequisite for everything above
+it — and the error in its answer propagates into every reconstructed point, which
+is why that error is carried rather than assumed away.
+
+```
+target_s = reference_s + offset_s + (rate - 1) * (reference_s - pivot_s)
+```
+
+**The pivot is the anchor centroid, and that is load-bearing.** It makes the two
+fitted parameters uncorrelated, so the offset's and the rate's standard errors
+can be reported separately and combined in quadrature. Quoted at time zero they
+would be strongly correlated and two independent-looking error bars would
+overstate the error near the anchors and understate it far from them.
+
+**The rate is refused by default.** A rate fitted from four instants spanning a
+second and a half carries a fractional error of about a frame divided by the
+span; applied ten seconds from the anchors that is worse than assuming the two
+clocks agree, which for real hardware they do to a small fraction of a percent.
+It is fitted only over a long enough baseline and kept only when it sits more
+than two standard errors from 1.0 — otherwise it is describing noise, and paying
+for it with an uncertainty that grows with distance from the anchors while a
+constant offset has none.
+
+**Two estimators, each used for what it can determine.** A masked normalised
+cross-correlation of the two hand-speed signals produces one number, an offset,
+from several hundred samples. An affine fit to the paired swing events produces
+an offset, a rate and a residual from four instants. They are never averaged —
+averaging two estimates that disagree yields a third matching neither — and the
+split between them was decided by measurement rather than by argument:
+
+| Quantity | Comes from  | Why                                                |
+| -------- | ----------- | -------------------------------------------------- |
+| offset   | correlation | 0.4–1.8 ms error against 14–27 ms for four anchors |
+| rate     | events      | a single lag cannot express one                    |
+| residual | events      | a single lag has nothing left over to disagree     |
+
+The events lose the offset because they are not four equally good clocks. Under
+the landmark noise Phase 3 measured from real footage, the top moves 8 ms, impact
+117 ms, the finish 350 ms and the takeaway 542 ms — the last two are threshold
+crossings on a signal that is barely moving there.
+[ADR-0011](decisions/ADR-0011-affine-time-map.md).
+
+**Nothing may claim to beat the frame-rate floor.** An instant located to the
+nearest frame carries a uniform error one interval wide, standard deviation
+`interval / sqrt(12)`, and two clips contribute one each in quadrature. Every
+reported uncertainty is the larger of the observed scatter and that floor, so
+anchors that happen to agree better than their frame rates allow are reported at
+the frame rates' limit rather than at their own lucky rounding.
+
+**What this layer cannot tell you** is that the two clips show the same swing. It
+aligns swing-shaped signals and will align two different swings just as happily;
+what it cannot do is make their phase durations agree. On the only two-angle pair
+in this project the residual is 40x the floor and the confidence is 0.10, which
+is the correct reading of two different swings — and the honest limit of what a
+pair of uncalibrated recordings can be asked.
+
+## Projects
+
+The first state in this engine that cannot be recomputed, and the reason
+`data_dir()` exists alongside `cache_dir()`. SQLite rather than a directory of
+JSON for three reasons in descending order of weight: a sync cannot name a clip
+outside its project because a foreign key says so; deleting a project takes its
+clips and alignments in one statement and cannot half-fail; and a write is atomic
+against a reader in another process, which the desktop app and a terminal running
+the CLI are.
+
+A clip is identified by **content**, not by path. The same footage cannot enter
+one project twice under two names, and a file that has been moved still matches
+its own cached extraction — `ProjectClip.exists` reports whether the path still
+resolves, because a project with a moved clip is correct and incomplete rather
+than corrupt.
+
 ## Progress
 
 Long methods report through a `ProgressReporter` and have no idea what is on the
@@ -449,16 +537,41 @@ Filtering all 33 landmarks in three axes takes 12.3 ms for a 68-frame clip and
 17.5 ms for a 240-frame clip — against ~1.2 s to extract poses for the same 68
 frames. Nothing is cached as a result.
 
-No figures exist yet for metrics, because they do not exist yet.
+### Synchronisation (Phase 7, 2026-09-17)
+
+`scripts/benchmark_sync.py`. **Not ground truth**: one synthetic swing sampled by
+two simulated cameras, with the offset as an input. No simultaneous two-camera
+recording exists in this project, so what this establishes is that the method
+recovers an offset that was put in — not that it recovers one from a real pair,
+whose two cameras see two different projections of the same body.
+
+Median absolute error over 9 seeds, at the sigma = 0.0014 frame widths Phase 3
+measured from real footage:
+
+| Pair          | Frame-rate floor | Recovered offset error |
+| ------------- | ---------------- | ---------------------- |
+| 240 + 240 fps | 1.7 ms           | **0.5 ms**             |
+| 120 + 120 fps | 3.4 ms           | **0.4 – 4.2 ms**       |
+| 120 + 30 fps  | 9.9 ms           | **0.3 ms**             |
+| 30 + 30 fps   | 13.6 ms          | **0.5 ms**             |
+
+The floor is what the two frame rates permit, not what the method achieves; the
+correlation beats it because it averages several hundred samples rather than
+locating one instant. Anchoring on the four swing events instead gives 14–27 ms
+on the same pairs, which is the measurement that decided which estimator supplies
+the offset.
+
+Aligning two 312-frame clips costs 0.5 ms on signals already filtered. Nothing is
+cached, for the same measured reason as Phase 3.
 
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                                         |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Contracts, probes, dispatch, protocol | pytest (449)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                |
-| IPC wrappers, component rendering     | Vitest (73)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection                                                         |
-| UI flows                              | Playwright (21) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing                                                                          |
+| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (699)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
+| IPC wrappers, component rendering     | Vitest (91)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking                                                                       |
+| UI flows                              | Playwright (29) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment                                                                                                                 |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

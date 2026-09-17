@@ -5,6 +5,7 @@ import {
   NO_SWING,
   POSE_RESULT,
   SWING_PHASES,
+  SYNC_MODEL,
   VFR_ROTATED_METADATA,
   stubEngine,
 } from "./fixtures";
@@ -275,5 +276,100 @@ test.describe("swing phase detection", () => {
 
     await expect(page.getByText(/No extracted poses/)).toBeVisible();
     await expect(page.getByText(/analyzer extract/)).toBeVisible();
+  });
+});
+
+test.describe("two-camera synchronisation", () => {
+  /** Loading a clip, then choosing a second one to align it against. */
+  async function alignPair(page: Page, extra = {}) {
+    await loadClip(page, {
+      "plugin:dialog|open": { result: SYNC_MODEL.target.path },
+      sync_clips: { result: SYNC_MODEL },
+      ...extra,
+    });
+    await page.getByRole("button", { name: /Choose second clip/ }).click();
+    await expect(page.getByText("Second camera")).toBeVisible();
+  }
+
+  test("offers a second camera without claiming one exists", async ({
+    page,
+  }) => {
+    await loadClip(page);
+
+    await expect(page.getByText("Second camera")).toBeVisible();
+    await expect(page.getByText(/Phases 8 and 9 build on/)).toBeVisible();
+  });
+
+  test("reports the offset with the uncertainty it carries", async ({
+    page,
+  }) => {
+    await alignPair(page);
+
+    await expect(page.getByText("Aligned", { exact: true })).toBeVisible();
+    await expect(page.getByText(/-257\.7 ms ± 2\.4 ms/)).toBeVisible();
+  });
+
+  test("states that the clock rate was assumed rather than measured", async ({
+    page,
+  }) => {
+    await alignPair(page);
+
+    await expect(page.getByText(/assumed, not measured/)).toBeVisible();
+  });
+
+  test("shows the residual against the floor it should be judged by", async ({
+    page,
+  }) => {
+    await alignPair(page);
+
+    // The real pair is two different swings, so the residual is 40x the floor.
+    // That comparison is the finding, and it has to be legible without the
+    // reader doing the division.
+    await expect(page.getByText(/95\.8 ms rms \(39\.9× floor\)/)).toBeVisible();
+    await expect(page.getByText("2.4 ms", { exact: true })).toBeVisible();
+  });
+
+  test("keeps the caveat that it cannot know both clips are one swing", async ({
+    page,
+  }) => {
+    await alignPair(page);
+
+    await expect(
+      page.getByText(/cannot tell that both cameras filmed the same swing/),
+    ).toBeVisible();
+  });
+
+  test("draws both clips on one clock", async ({ page }) => {
+    await alignPair(page);
+
+    const timeline = page.getByTestId("alignment-timeline");
+    await expect(timeline).toBeVisible();
+    await expect(timeline.getByText("rory_face_on.mp4")).toBeVisible();
+    await expect(timeline.getByText("rory_dtl.mp4")).toBeVisible();
+  });
+
+  test("lets a person pin an instant in each clip and re-align on it", async ({
+    page,
+  }) => {
+    await alignPair(page);
+
+    await page
+      .getByRole("button", { name: "Next frame in rory_face_on.mp4" })
+      .click();
+    await page.getByRole("button", { name: /Pin this instant/ }).click();
+
+    await expect(page.getByText("anchor 1: 1 → 0")).toBeVisible();
+    await expect(page.getByText(/nothing checks it/)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: /Re-align on 1 pick/ }),
+    ).toBeEnabled();
+  });
+
+  test("cannot re-align before anything is pinned", async ({ page }) => {
+    await alignPair(page);
+
+    await expect(
+      page.getByRole("button", { name: /Re-align on 0 picks/ }),
+    ).toBeDisabled();
   });
 });

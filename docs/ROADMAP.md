@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-6 complete (7 / 21).**
+**Progress: Phases 0-7 complete (8 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -15,8 +15,8 @@ advance past a broken phase.
 | 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame  |
 | 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology               |
 | 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                          |
-| 7   | Two-camera sync       | ⬜ Next     | Measured sync residual in ms                               |
-| 8   | Camera calibration    | ⬜          | Reprojection error reported; status gates claims           |
+| 7   | Two-camera sync       | ✅ **Done** | Measured sync residual in ms                               |
+| 8   | Camera calibration    | ⬜ Next     | Reprojection error reported; status gates claims           |
 | 9   | 3D reconstruction     | ⬜          | Reconstruction error measured on synthetic ground truth    |
 | 10  | Club tracking         | ⬜          | Shaft tracked; low confidence emits nothing                |
 | 11  | Ball detection        | ⬜          | Impact-frame agreement measured                            |
@@ -683,15 +683,145 @@ change it now.
 - The factor itself is supplied, not measured, and it moves events. Nothing in
   the video can recover it.
 
-## Phase 7 — Two-camera synchronisation ⬜
+## Phase 7 — Two-camera synchronisation ✅
 
-- [ ] 7.1 Two-video project model (SQLite)
-- [ ] 7.2 `SyncModel` / `TimeMap` contract
-- [ ] 7.3 Manual sync UI (pick address/impact per camera)
-- [ ] 7.4 Automatic sync: cross-correlation of hand-speed + event refinement
-- [ ] 7.5 Report residual (ms) and confidence
-- [ ] 7.6 Tests: known offsets, mismatched fps, partial overlap
-- [ ] 7.7 Measure sync error vs manual ground truth; commit
+`python/analyzer/sync/{timemap,correlate,anchors,align}.py` ·
+`python/analyzer/projects/store.py` ·
+[ADR-0011](decisions/ADR-0011-affine-time-map.md)
+
+Two cameras, two clocks, neither aware of the other. Everything Phase 8 and
+Phase 9 do rests on relating them, because triangulating two views is only
+meaningful for two views of the _same instant_ — and the error in the relation
+propagates into every reconstructed point, so it has to be carried rather than
+assumed away.
+
+- [x] **7.1 Two-video project model (SQLite)** — the first state in this engine
+      that cannot be recomputed, so it lives under `data_dir()` rather than in
+      the cache. Clips identified by content, not by path; foreign keys on;
+      a schema version refused rather than guessed at
+- [x] **7.2 `SyncModel` / `TimeMap` contract** — an affine map stated at the
+      anchor centroid, so its two uncertainties are independent and combine in
+      quadrature. `rate_estimated` says whether the second parameter was
+      measured or assumed
+- [x] **7.3 Manual sync UI** — both clips drawn on one clock, frame steppers per
+      camera, pinned instants replacing the detected events entirely
+- [x] **7.4 Automatic sync** — masked normalised cross-correlation of hand speed
+      (FFT, partial overlap handled per lag) and an affine fit to the paired
+      events. Both always computed; neither ever averaged into the other
+- [x] **7.5 Report residual (ms) and confidence** — residual against the
+      quantisation floor the two frame rates impose, plus a decomposed
+      confidence and the gap between the two independent estimators
+- [x] **7.6 Tests** — 91 added (60 sync, 31 projects) plus 18 Vitest and 8
+      Playwright: known offsets, mismatched fps, partial overlap, a stale schema
+- [x] **7.7 Measured against known offsets; commit**
+
+**Measured** (`scripts/benchmark_sync.py`, Apple M1 Pro / macOS 26.4.1). One
+synthetic swing sampled by two simulated cameras, at the sigma = 0.0014 frame
+widths Phase 3 measured from real footage; median absolute error over 9 seeds:
+
+| Pair          | Floor   | Clean  | With landmark noise |
+| ------------- | ------- | ------ | ------------------- |
+| 240 + 240 fps | 1.7 ms  | —      | **0.5 ms**          |
+| 120 + 120 fps | 3.4 ms  | 0.0 ms | **0.4 – 4.2 ms**    |
+| 120 + 30 fps  | 9.9 ms  | —      | **0.3 ms**          |
+| 30 + 30 fps   | 13.6 ms | —      | **0.5 ms**          |
+
+**The benchmark overturned the design's central assumption.** Four swing events
+look like four clocks and are not. Perturbing the landmarks and watching where
+each lands over eight seeds: the top moves 8 ms, impact 117 ms, the finish
+350 ms and the takeaway **542 ms** — the last two are threshold crossings on a
+signal that is barely moving there, and one seed put the takeaway on frame zero.
+Anchoring on all four gives 14–27 ms; correlating the two speed signals gives
+0.4–1.8 ms. So the offset now comes from the correlation and the events supply
+the two things it cannot produce, a clock rate and a residual.
+
+**What a second camera makes measurable.** Phase 6 recorded that a slow-motion
+factor "is supplied, not measured, and nothing in the video can recover it".
+True of one clip, false of two:
+
+| Factor supplied | True rate | Fitted | Estimated? |
+| --------------- | --------- | ------ | ---------- |
+| correct         | 1.0000    | 1.0000 | no         |
+| 2% wrong        | 0.9804    | 1.0000 | no         |
+| 10% wrong       | 0.9091    | 0.8869 | **yes**    |
+| 20% wrong       | 0.8333    | 0.7874 | **yes**    |
+| 40% wrong       | 0.7143    | 0.7592 | **yes**    |
+
+The _ratio_ of two supplied factors is recoverable even though neither clip can
+recover its own. A rate further than 2% from 1.0 is reported as a slow-motion
+problem, because real camera clocks do not differ by anything approaching that.
+
+**The frame-rate floor is the number to know before buying a camera.** Two at
+30 fps give 13.6 ms. Replacing one with a 240 fps camera gives 9.7 ms and can
+never beat 9.6 ms however fast it gets, because the 30 fps clip contributes that
+much alone. Replacing both gives 1.7 ms. Upgrading one camera of a pair is worth
+a factor of sqrt(2) at most.
+
+**On the only real pair in this project, the answer is "these are not the same
+swing", and that is the useful part.** `rory_face_on.mp4` against `rory_dtl.mp4`
+aligns at −258 ms with a residual of 95.8 ms rms against a 2.4 ms floor — 40x —
+and per-anchor residuals of −82, −92, +90 and −116 ms. Confidence 0.10. Nothing
+here can see that two cameras were pointed at one event; what it can see is that
+no offset and no clock rate reconcile two different tempos.
+
+Cost: 0.5 ms to align two 312-frame clips, on signals already filtered. Nothing
+is cached, for the same measured reason as Phase 3.
+
+**Deliberate deviations from the original plan:**
+
+- **7.7 is measured against known offsets, not against manual ground truth, and
+  the benchmark says so in its own docstring.** Ground truth for synchronisation
+  needs two cameras that genuinely filmed one swing at once with their clocks
+  related by something outside this system — a clapperboard, a flash, a genlock.
+  No such recording exists here. What is measured is one synthetic swing sampled
+  twice, which establishes that the arithmetic recovers an offset that was put
+  in, and cannot establish that a real pair does: the simulated cameras see the
+  same projection of the same body, and two real cameras do not. One command
+  finishes this once a simultaneous pair exists:
+  `uv run --project python python scripts/benchmark_sync.py --real <a> <b>`
+- **The offset does not come from the events.** 7.4 said "cross-correlation of
+  hand-speed + event refinement", which assumes the events refine the
+  correlation. Measured, it is the other way round by a factor of fifteen. The
+  events are kept because they are the only evidence that can determine a clock
+  rate or produce a residual, and both matter — but they do not set the offset.
+  Full reasoning in [ADR-0011](decisions/ADR-0011-affine-time-map.md).
+- **The rate is refused by default, on a significance test rather than a
+  threshold.** A rate fitted from four instants over 1.5 s carries a fractional
+  error of about a frame divided by the span, and applied ten seconds away that
+  is worse than assuming the clocks agree. It is kept only when it sits more than
+  two standard errors from 1.0. Dropping an insignificant one moved a clean
+  pair's confidence from 0.72 to 0.95 with no change in accuracy.
+- **Phase 4's event confidence does not detect a badly located event**, which is
+  a finding about Phase 4 rather than about this phase. It scores a takeaway at
+  0.95 on seeds where that takeaway landed 500 ms from the truth, so gating
+  anchors on it changes nothing measurable (22–28 ms at every threshold from 0.0
+  to 0.5). Recorded here; not fixed here.
+- **The residual stops separating "same swing" from "different swing" once the
+  footage is noisy.** A correctly aligned pair scatters 34 ms and an 8% tempo
+  difference scatters 44 ms. What does separate them is the correlation peak's
+  margin over its nearest rival — 0.36, 0.09, and 0.01 at a 15% difference — so
+  that margin is what `SyncConfidence.agreement` reports for a map whose offset
+  came from the correlation. The residual is still shown, and still refuses
+  above `max_residual_ms`.
+- **Both clips share one smoothing window.** Smoothing them differently would
+  shift the features the alignment keys on by an amount nothing measures, so the
+  coarser clip sets the window for the pair — and a 30 fps camera cannot support
+  the 0.10 s default at all. That arrives here as a refusal naming the window
+  that clip's rate would support, carried up from Phase 3's own report.
+- **`Project` and `ProjectList` are not exported to TypeScript.** They are
+  reachable over RPC and from `analyzer project`, but no UI renders them yet —
+  project management is Phase 14.1 — and exporting types nothing draws would make
+  the app's type surface a description of the plan rather than of the app. Same
+  reasoning that kept `SequenceFilterReport` out until Phase 4 built its panel.
+- **A stored alignment is JSON inside a row, not four normalised tables.** A
+  `SyncModel` is a nested document read whole and never queried by part;
+  normalising it would create four tables to keep in step with one Pydantic
+  model that is already the authoritative definition. The schema version is
+  repeated in its own column so a stale row can be found without being parsed.
+- **The synthetic swing fixture moved to `tests/synthetic.py`.** Phase 7 needs
+  one swing sampled by two cameras with different clocks, which is impossible
+  while the fixture only knows how to produce a clip. A second copy of it would
+  have been a second definition of what a swing looks like.
 
 ## Phase 8 — Camera calibration ⬜
 
