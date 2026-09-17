@@ -462,18 +462,46 @@ class TestSignals:
     def test_height_increases_upward_despite_image_coordinates(self) -> None:
         """The sign convention that would invert the top into the bottom.
 
-        Image y grows downward. If the conversion were missing, the highest hand
-        position would be found where the hands are lowest, and every event after
-        it would be wrong without anything failing.
+        Checked against the *stored* coordinates the fixture was written in,
+        which is the only place the convention can be checked from now that the
+        flip happens below the filter. Image y grows downward, so the frame
+        where the fixture's y is smallest is where the hands are highest. If the
+        conversion were missing or applied twice, the top of the backswing would
+        be found at the bottom of the swing and every event after it would be
+        wrong without anything failing.
         """
         t = np.arange(0.0, DURATION_S, 1.0 / FPS)
         x, y = _hand_path(t)
         filtered = filter_sequence(_sequence(x, y, t), FilterConfig())
         signals = swing_signals(filtered)
 
-        highest = int(np.nanargmax(signals.height))
-        lowest_y = int(np.nanargmin(filtered[Landmark.RIGHT_WRIST].position[:, 1]))
-        assert highest == lowest_y
+        # Up to impact only. The arc carries the hands back to the same height
+        # in the follow-through as at the top, so over the whole clip the
+        # maximum is a tie and which index wins is decided by rounding.
+        before_impact = t <= IMPACT_S
+        highest = int(np.nanargmax(np.where(before_impact, signals.height, -np.inf)))
+        highest_in_the_fixture = int(np.argmin(np.where(before_impact, y, np.inf)))
+        assert abs(highest - highest_in_the_fixture) <= 1
+
+    def test_the_filtered_frame_already_points_upward(self) -> None:
+        """`height` is now the y channel, not a correction applied to it."""
+        t = np.arange(0.0, DURATION_S, 1.0 / FPS)
+        x, y = _hand_path(t)
+        filtered = filter_sequence(_sequence(x, y, t), FilterConfig())
+        signals = swing_signals(filtered)
+
+        tracked = signals.hand.valid
+        assert signals.height[tracked] == pytest.approx(
+            signals.hand.position[tracked, 1], abs=1e-12
+        )
+
+    def test_refuses_raw_image_coordinates(self) -> None:
+        """Anisotropic and upside down: every distance and every height would be wrong."""
+        t = np.arange(0.0, DURATION_S, 1.0 / FPS)
+        x, y = _hand_path(t)
+        filtered = filter_sequence(_sequence(x, y, t), FilterConfig(), space=LandmarkSpace.IMAGE)
+        with pytest.raises(SignalError, match="FRAME_WIDTHS"):
+            swing_signals(filtered)
 
     def test_the_hand_point_is_chosen_once_for_the_clip(self) -> None:
         t = np.arange(0.0, DURATION_S, 1.0 / FPS)

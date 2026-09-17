@@ -28,6 +28,7 @@ from analyzer import __version__
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.metrics import (
+    CameraView,
     Metric,
     MetricBasis,
     MetricGroup,
@@ -344,8 +345,9 @@ def filter_poses(
         str | None, typer.Option("--model", help="Which extraction to filter, when given a video.")
     ] = None,
     space: Annotated[
-        str, typer.Option("--space", help="Coordinate space: image or hip_local.")
-    ] = "image",
+        str,
+        typer.Option("--space", help="Reference frame: frame_widths, image or hip_local."),
+    ] = "frame_widths",
     window: Annotated[
         float | None, typer.Option("--window", help="Fitting window in seconds.")
     ] = None,
@@ -537,11 +539,15 @@ def phases(
         raise typer.Exit(code=1)
 
 
-_BASIS_NOTE: dict[MetricBasis, str] = {
-    MetricBasis.TEMPORAL: "from the clock; unaffected by where the camera stood",
-    MetricBasis.IMAGE_PLANE: "measured in the image plane; blind to motion towards the camera",
-    MetricBasis.PROJECTED_ANGLE: "an angle in the image, not a 3D joint angle",
-    MetricBasis.FORESHORTENED_ANGLE: "rotation inferred from foreshortening; a magnitude only",
+# Short tags, because the basis belongs in every row and the full sentence for
+# each is in the footer. Kept in the table rather than dropped for the meaning
+# column: the two answer different questions, and a reader needs both -- what
+# kind of claim the number is, and what it corresponds to on the body.
+_BASIS_TAG: dict[MetricBasis, str] = {
+    MetricBasis.TEMPORAL: "clock",
+    MetricBasis.IMAGE_PLANE: "image",
+    MetricBasis.PROJECTED_ANGLE: "proj angle",
+    MetricBasis.FORESHORTENED_ANGLE: "foreshort",
 }
 
 _GROUP_TITLES: dict[MetricGroup, str] = {
@@ -580,6 +586,16 @@ def _render_metrics(result: MetricSet) -> None:
     )
     summary.add_row("torso length", f"{result.torso_length:.3f} frame widths")
 
+    view = result.view
+    if view is not None:
+        style = "green" if view.view is not CameraView.UNKNOWN else "yellow"
+        summary.add_row(
+            "camera view",
+            f"[{style}]{view.view.value}[/{style}] "
+            f"(confidence {view.confidence:.2f}, shoulders {view.shoulder_span_ratio:.2f} "
+            f"torso at address)",
+        )
+
     lead = result.lead_side
     if lead is not None:
         named = lead.side.value if lead.side is not None else "[yellow]undetermined[/yellow]"
@@ -603,9 +619,9 @@ def _render_metrics(result: MetricSet) -> None:
         if not entries:
             continue
         table = Table(title=_GROUP_TITLES[group], title_justify="left", expand=True)
-        for column in ("metric", "value", "confidence", "obs", "anchor", "method"):
+        for column in ("metric", "value", "conf", "obs", "anchor", "method", "basis"):
             table.add_column(column, no_wrap=True)
-        table.add_column("basis", overflow="fold")
+        table.add_column("what it means from this view", overflow="fold")
 
         for metric in entries:
             factors = metric.confidence
@@ -619,7 +635,8 @@ def _render_metrics(result: MetricSet) -> None:
                 f"{factors.observation:.2f}",
                 f"{factors.anchor:.2f}",
                 f"{factors.method:.2f}",
-                _BASIS_NOTE[metric.basis],
+                _BASIS_TAG[metric.basis],
+                metric.interpretation,
             )
         console.print(table)
 
@@ -639,9 +656,12 @@ def _render_metrics(result: MetricSet) -> None:
         console.print(refusals)
 
     console.print(
-        "[dim]Every angle here is a projection from one uncalibrated camera, not a 3D "
-        "body angle. Lengths are in torso lengths, which is framing-independent but not "
-        "metric. Confidence is observation x anchor x method.[/dim]"
+        "[dim]basis: clock = from the timestamps, unaffected by camera position; "
+        "image = measured in the image plane, blind to motion towards the camera; "
+        "proj angle = an angle in the picture, not a 3D joint angle; "
+        "foreshort = rotation inferred from foreshortening, a magnitude only.\n"
+        "Lengths are in torso lengths, which is framing-independent but not metric. "
+        "Confidence is observation x anchor x method.[/dim]"
     )
 
     for warning in result.warnings:

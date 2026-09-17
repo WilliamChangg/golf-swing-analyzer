@@ -33,6 +33,7 @@ from analyzer.contracts.cache import ContentKey, HashAlgorithm
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import (
     BodySide,
+    CameraView,
     MetricBasis,
     MetricConfig,
     MetricName,
@@ -460,9 +461,18 @@ class TestRotationRefusal:
         assert result.get(MetricName.SHOULDER_TURN, SwingEvent.TOP) is None
         assert any(entry.name is MetricName.SHOULDER_TURN for entry in result.refused)
 
-    def test_the_refusal_says_the_recording_is_not_face_on(self) -> None:
+    def test_the_refusal_names_the_view_rather_than_its_symptom(self) -> None:
+        """The shoulder line is also too short to read an angle across, which is
+        true, a consequence of the same fact, and not the thing worth saying."""
         result = self._down_the_line()
-        assert any("face-on" in warning for warning in result.warnings)
+        reason = next(
+            entry.reason for entry in result.refused if entry.name is MetricName.SHOULDER_TURN
+        )
+        assert "down-the-line" in reason
+
+    def test_a_blocked_metric_is_refused_once_not_once_per_anchor(self) -> None:
+        names = [entry.name for entry in self._down_the_line().refused]
+        assert names.count(MetricName.SHOULDER_TURN) == 1
 
     def test_x_factor_goes_with_the_turns_it_is_built_from(self) -> None:
         result = self._down_the_line()
@@ -752,3 +762,143 @@ class TestAspectCorrection:
         assert _value(landscape, MetricName.SHOULDER_TURN, SwingEvent.TOP) == pytest.approx(
             _value(portrait, MetricName.SHOULDER_TURN, SwingEvent.TOP), abs=1.0
         )
+
+
+class TestCameraView:
+    """6.2/6.3 -- the view is measured, and it decides what the numbers mean."""
+
+    @staticmethod
+    def _down_the_line():
+        return _measure(_swing(address_turn=82.0, shoulder_turn_top=-82.0, pelvis_turn_top=-70.0))
+
+    @staticmethod
+    def _oblique():
+        # Shoulders part-way round at address: neither broadside nor end-on.
+        return _measure(_swing(address_turn=70.0, shoulder_turn_top=-20.0, pelvis_turn_top=-10.0))
+
+    def test_a_broadside_shoulder_line_reads_as_face_on(self, result) -> None:
+        assert result.view is not None
+        assert result.view.view is CameraView.FACE_ON
+        assert result.view.shoulder_span_ratio > 1.0
+
+    def test_an_end_on_shoulder_line_reads_as_down_the_line(self) -> None:
+        estimate = self._down_the_line().view
+        assert estimate.view is CameraView.DOWN_THE_LINE
+        assert estimate.shoulder_span_ratio < 0.30
+
+    def test_an_oblique_camera_is_reported_as_unknown_rather_than_rounded(self) -> None:
+        """Picking the nearer label would claim a view the recording does not show."""
+        estimate = self._oblique().view
+        assert estimate.view is CameraView.UNKNOWN
+        assert estimate.confidence == 0.0
+
+    def test_the_verdict_reports_the_measurement_behind_it(self, result) -> None:
+        estimate = result.view
+        assert estimate.frames
+        assert np.isfinite(estimate.openness)
+        assert f"{estimate.shoulder_span_ratio:.2f}" in estimate.methodology
+
+    def test_every_metric_carries_the_view_it_was_measured_in(self, result) -> None:
+        assert all(metric.view is CameraView.FACE_ON for metric in result.metrics)
+
+    def test_every_metric_carries_an_anatomical_reading(self, result) -> None:
+        assert all(metric.interpretation for metric in result.metrics)
+
+    def test_every_registered_metric_declares_a_reading(self) -> None:
+        """Either per view, or once for the quantities a view does not change.
+
+        The fallback exists for an undetermined view, not as a place for a
+        metric nobody got round to describing: a reader seeing it should learn
+        that this clip could not be placed, not that this number was skipped.
+        """
+        undeclared = [
+            name.value
+            for name, entry in REGISTRY.items()
+            if not entry.meanings and not entry.meaning
+        ]
+        assert undeclared == []
+
+    def test_a_known_view_never_falls_back_to_the_undetermined_reading(
+        self, result
+    ) -> None:
+        assert not any(
+            "did not establish" in metric.interpretation for metric in result.metrics
+        )
+
+    def test_the_same_computation_means_different_things_from_different_views(self) -> None:
+        """The reason the view exists at all.
+
+        Spine tilt is the identical arithmetic in both: lateral side bend seen
+        face-on, forward posture angle seen down the line. A consumer handed
+        only the number and the unit would be equally convinced either way.
+        """
+        face_on = _measure(_swing()).get(MetricName.SPINE_TILT, None)
+        down_the_line = self._down_the_line().get(MetricName.SPINE_TILT, None)
+
+        assert face_on is not None and down_the_line is not None
+        assert face_on.interpretation != down_the_line.interpretation
+        assert "side bend" in face_on.interpretation
+        assert "Forward" in down_the_line.interpretation
+
+    def test_an_unknown_view_gets_no_anatomical_reading(self) -> None:
+        """Rather than the reading for whichever view was nearer."""
+        spine = self._oblique().get(MetricName.SPINE_TILT, None)
+        assert spine is not None
+        assert "depends on where the camera stood" in spine.interpretation
+
+    def test_rotation_is_blocked_by_the_view_not_merely_unmeasured(self) -> None:
+        result = self._down_the_line()
+        for name in (MetricName.SHOULDER_TURN, MetricName.PELVIS_TURN, MetricName.X_FACTOR):
+            assert result.get(name, SwingEvent.TOP) is None
+            reason = next(entry.reason for entry in result.refused if entry.name is name)
+            assert "down-the-line" in reason
+
+    def test_an_unknown_view_blocks_nothing_by_itself(self) -> None:
+        """An oblique camera supports some of these; its own checks decide which."""
+        result = self._oblique()
+        blocked = {
+            entry.name for entry in result.refused if "cannot be measured from" in entry.reason
+        }
+        assert blocked == set()
+
+    def test_the_warning_names_the_view_and_what_it_costs(self) -> None:
+        warnings = self._down_the_line().warnings
+        assert any("down-the-line recording" in warning for warning in warnings)
+
+    def test_a_down_the_line_clip_does_not_also_complain_about_its_baseline(self) -> None:
+        """One fact about the camera, not three findings."""
+        warnings = self._down_the_line().warnings
+        assert not any("wider mid-swing" in warning for warning in warnings)
+
+
+class TestHandDepth:
+    """The one down-the-line metric that does not need the club Phase 10 tracks."""
+
+    @staticmethod
+    def _down_the_line():
+        return _measure(_swing(address_turn=82.0, shoulder_turn_top=-82.0, pelvis_turn_top=-70.0))
+
+    def test_hand_depth_is_measured_down_the_line(self) -> None:
+        depth = self._down_the_line().get(MetricName.HAND_DEPTH, SwingEvent.TOP)
+        assert depth is not None
+        assert depth.unit is MetricUnit.TORSO_LENGTHS
+
+    def test_hand_depth_is_refused_face_on(self, result) -> None:
+        """The same axis runs along the target line there, which is a different quantity."""
+        assert result.get(MetricName.HAND_DEPTH, SwingEvent.TOP) is None
+        reason = next(
+            entry.reason for entry in result.refused if entry.name is MetricName.HAND_DEPTH
+        )
+        assert "face-on" in reason
+
+    def test_hand_depth_matches_the_hand_travel_the_fixture_built(self) -> None:
+        """Measured against the arc the hands were put on, in torso lengths."""
+        measured = self._down_the_line()
+        depth = measured.get(MetricName.HAND_DEPTH, SwingEvent.TOP)
+        assert depth is not None
+
+        t = np.arange(0.0, DURATION_S, 1.0 / FPS)
+        arc = _arc_angle(t) * -1.0
+        at_address = ARC_RADIUS * math.sin(arc[int(TAKEAWAY_S * FPS) // 2])
+        at_top = ARC_RADIUS * math.sin(arc[int(TOP_S * FPS)])
+        assert depth.value == pytest.approx((at_top - at_address) / TORSO, abs=0.25)

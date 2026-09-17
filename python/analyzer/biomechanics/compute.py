@@ -28,9 +28,12 @@ import numpy as np
 
 from analyzer.biomechanics import arms, posture, rotation, timing
 from analyzer.biomechanics.anchors import build_anchors
-from analyzer.biomechanics.body import Body, body_from
-from analyzer.biomechanics.registry import REGISTRY
+from analyzer.biomechanics.body import body_from
+from analyzer.biomechanics.registry import REGISTRY, definition
+from analyzer.biomechanics.view import infer_view
 from analyzer.contracts.metrics import (
+    CameraView,
+    Metric,
     MetricConfig,
     MetricName,
     MetricSet,
@@ -62,27 +65,90 @@ def _empty(
     )
 
 
-def _view_warnings(body: Body, result: MetricSet) -> list[str]:
-    """Facts about the recording a reader should not have to derive from the refusals."""
+def _apply_view_gate(
+    produced: list[Metric], refused: list[RefusedMetric], view: CameraView
+) -> tuple[list[Metric], list[RefusedMetric]]:
+    """Let the camera position have the last word on what this clip can report.
+
+    Applied centrally rather than inside each family module, so that a family
+    added later cannot forget it, and applied to the *refusals* as well as the
+    values. A quantity its view does not contain gets exactly one refusal saying
+    so, replacing whatever more specific complaint the measurement itself
+    raised: on a down-the-line clip the shoulder line is also too short to read
+    an angle across, which is true, a consequence of the same fact, and not the
+    thing worth telling someone holding a camera.
+
+    `UNKNOWN` blocks nothing. An oblique camera does support some of these, and
+    which ones is better decided by each metric's own conditions -- the
+    foreshortening baseline check, the shoulder span the lead side needs -- than
+    by a label the clip could not establish.
+    """
+    blocked = {name for name, entry in REGISTRY.items() if entry.refuses(view)}
+    if not blocked:
+        return produced, refused
+
+    named = view.value.replace("_", "-")
+    survivors = [entry for entry in refused if entry.name not in blocked]
+    survivors.extend(
+        RefusedMetric(
+            name=name,
+            reason=(
+                f"{definition(name).label} cannot be measured from a {named} "
+                f"recording. {definition(name).summary}"
+            ),
+        )
+        for name in sorted(blocked, key=lambda entry: entry.value)
+    )
+    return [metric for metric in produced if metric.name not in blocked], survivors
+
+
+def _view_warnings(result: MetricSet) -> list[str]:
+    """Facts about the recording a reader should not have to derive from the refusals.
+
+    The view comes first and absorbs what it explains. On a down-the-line clip
+    the shoulders are also not square at address and the lead side also cannot be
+    named; both are consequences of where the camera was, and listing them as
+    separate findings would read as three problems where there is one fact.
+    """
     warnings: list[str] = []
+    view = result.view.view if result.view is not None else CameraView.UNKNOWN
 
-    off_baseline = [reference for reference in result.references if not reference.square_at_address]
-    if off_baseline:
-        names = " and ".join(reference.landmarks for reference in off_baseline)
-        worst = max(reference.excess for reference in off_baseline)
+    if view is CameraView.DOWN_THE_LINE:
         warnings.append(
-            f"The {names} projected up to {worst:.1f} times wider mid-swing than at "
-            "address, so the player was not square to the camera at address and this does "
-            "not look like a face-on recording. Rotation by foreshortening has been "
-            "refused rather than measured against a pose the player never held. Face-on "
-            "capture is what makes shoulder and pelvis turn available."
+            "This is a down-the-line recording. Posture, hand depth, hand path and "
+            "timing are all measurable from it; shoulder turn, pelvis turn and X-factor "
+            "are not, because the shoulder line points at the camera and its rotation "
+            "does not appear in the picture. A second camera placed face-on is what "
+            "makes those available."
+        )
+    elif view is CameraView.UNKNOWN and result.view is not None:
+        warnings.append(
+            f"The camera view could not be established. {result.view.methodology} "
+            "Metrics are still reported, but what each one corresponds to on the body "
+            "depends on where the camera stood, so they carry no anatomical reading."
         )
 
-    if result.lead_side is not None and result.lead_side.side is None:
-        warnings.append(
-            "Which arm leads could not be determined, so the lead and trail arm angles "
-            f"were refused. {result.lead_side.methodology}"
-        )
+    # Only where the view has not already accounted for it: on a down-the-line
+    # clip an off-square baseline is the expected consequence, not a finding.
+    if view is not CameraView.DOWN_THE_LINE:
+        off_baseline = [
+            reference for reference in result.references if not reference.square_at_address
+        ]
+        if off_baseline:
+            names = " and ".join(reference.landmarks for reference in off_baseline)
+            worst = max(reference.excess for reference in off_baseline)
+            warnings.append(
+                f"The {names} projected up to {worst:.1f} times wider mid-swing than at "
+                "address, so the player was not square to the camera there and rotation "
+                "by foreshortening has been refused rather than measured against a pose "
+                "they never held."
+            )
+
+        if result.lead_side is not None and result.lead_side.side is None:
+            warnings.append(
+                "Which arm leads could not be determined, so the lead and trail arm "
+                f"angles were refused. {result.lead_side.methodology}"
+            )
 
     return warnings
 
@@ -118,17 +184,30 @@ def compute_metrics(
         )
 
     anchors = build_anchors(phases)
+
+    # Before anything is measured, because every measurement is tagged with it
+    # and some are not available from every camera position.
+    estimate = infer_view(body, anchors, resolved)
+    view = estimate.view
+
     lead = arms.infer_lead_side(body, anchors, resolved)
 
-    posture_metrics, posture_refused = posture.metrics(body, anchors)
-    rotation_metrics, rotation_refused, references = rotation.metrics(body, anchors, resolved)
-    arm_metrics, arm_refused = arms.metrics(body, anchors, lead)
-    timing_metrics, timing_refused = timing.metrics(body, anchors, phases)
+    posture_metrics, posture_refused = posture.metrics(body, anchors, view)
+    rotation_metrics, rotation_refused, references = rotation.metrics(body, anchors, resolved, view)
+    arm_metrics, arm_refused = arms.metrics(body, anchors, lead, view)
+    timing_metrics, timing_refused = timing.metrics(body, anchors, phases, view)
+
+    produced, all_refused = _apply_view_gate(
+        [*posture_metrics, *rotation_metrics, *arm_metrics, *timing_metrics],
+        [*posture_refused, *rotation_refused, *arm_refused, *timing_refused],
+        view,
+    )
 
     result = MetricSet(
         computed=True,
-        metrics=[*posture_metrics, *rotation_metrics, *arm_metrics, *timing_metrics],
-        refused=[*posture_refused, *rotation_refused, *arm_refused, *timing_refused],
+        metrics=produced,
+        refused=all_refused,
+        view=estimate,
         lead_side=lead,
         references=references,
         torso_length=body.torso_length,
@@ -136,7 +215,7 @@ def compute_metrics(
         frames=len(body),
         config=resolved,
     )
-    result.warnings = _view_warnings(body, result)
+    result.warnings = _view_warnings(result)
     return result
 
 

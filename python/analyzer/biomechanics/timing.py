@@ -42,7 +42,7 @@ from analyzer.biomechanics.registry import (
     build_metric,
     duration_method_factor,
 )
-from analyzer.contracts.metrics import Metric, RefusedMetric
+from analyzer.contracts.metrics import CameraView, Metric, RefusedMetric
 from analyzer.contracts.phases import SwingEvent, SwingPhases
 
 
@@ -55,7 +55,7 @@ def _duration_s(body: Body, anchor: Anchor) -> float:
 
 
 def metrics(
-    body: Body, anchors: Anchors, phases: SwingPhases
+    body: Body, anchors: Anchors, phases: SwingPhases, view: CameraView
 ) -> tuple[list[Metric], list[RefusedMetric]]:
     """Every timing metric this clip supports."""
     produced: list[Metric] = []
@@ -86,6 +86,7 @@ def metrics(
                 name,
                 seconds,
                 anchor,
+                view=view,
                 # The two frames the value is a difference of. Every frame between
                 # them is spanned, but none of them enters the arithmetic, and
                 # listing them would overstate what was read.
@@ -104,7 +105,7 @@ def metrics(
             )
         )
 
-    _tempo(body, anchors, phases, durations, produced, refused)
+    _tempo(body, anchors, phases, durations, view, produced, refused)
     return produced, refused
 
 
@@ -113,6 +114,7 @@ def _tempo(
     anchors: Anchors,
     phases: SwingPhases,
     durations: dict[MetricName, float],
+    view: CameraView,
     produced: list[Metric],
     refused: list[RefusedMetric],
 ) -> None:
@@ -160,6 +162,7 @@ def _tempo(
             MetricName.TEMPO_RATIO,
             backswing / downswing,
             anchor,
+            view=view,
             source_frames=[takeaway.frame_index, top.frame_index, impact.frame_index],
             observation=1.0,
             # A ratio inherits the resolution of both durations, and is no better

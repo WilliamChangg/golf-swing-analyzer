@@ -38,7 +38,7 @@ import itertools
 import numpy as np
 from numpy.typing import NDArray
 
-from analyzer.biomechanics.anchors import Anchors
+from analyzer.biomechanics.anchors import Anchors, reference_point
 from analyzer.biomechanics.body import Body
 from analyzer.biomechanics.geometry import (
     interior_angle_deg,
@@ -56,6 +56,7 @@ from analyzer.biomechanics.registry import (
 )
 from analyzer.contracts.metrics import (
     BodySide,
+    CameraView,
     LeadSide,
     Metric,
     MetricConfig,
@@ -192,14 +193,14 @@ def hand_path_length(body: Body, frames: tuple[int, ...]) -> tuple[float, list[i
 
 
 def metrics(
-    body: Body, anchors: Anchors, lead: LeadSide
+    body: Body, anchors: Anchors, lead: LeadSide, view: CameraView
 ) -> tuple[list[Metric], list[RefusedMetric]]:
     """Every hand and arm metric this clip supports."""
     produced: list[Metric] = []
     refused: list[RefusedMetric] = []
 
-    _arm_metrics(body, anchors, lead, produced, refused)
-    _hand_metrics(body, anchors, produced, refused)
+    _arm_metrics(body, anchors, lead, view, produced, refused)
+    _hand_metrics(body, anchors, view, produced, refused)
     return produced, refused
 
 
@@ -207,6 +208,7 @@ def _arm_metrics(
     body: Body,
     anchors: Anchors,
     lead: LeadSide,
+    view: CameraView,
     produced: list[Metric],
     refused: list[RefusedMetric],
 ) -> None:
@@ -233,6 +235,7 @@ def _arm_metrics(
                 name,
                 series,
                 anchor,
+                view=view,
                 visibility=body.visibility,
                 landmarks=_ARMS[side],
                 method=plane,
@@ -250,9 +253,12 @@ def _arm_metrics(
 def _hand_metrics(
     body: Body,
     anchors: Anchors,
+    view: CameraView,
     produced: list[Metric],
     refused: list[RefusedMetric],
 ) -> None:
+    _hand_depth(body, anchors, view, produced, refused)
+
     for anchor in (anchors.backswing, anchors.downswing):
         if anchor is None:
             continue
@@ -273,6 +279,7 @@ def _hand_metrics(
                 MetricName.HAND_PATH_LENGTH,
                 value,
                 anchor,
+                view=view,
                 source_frames=frames,
                 observation=_hand_observation(body, frames),
                 method=1.0,
@@ -314,6 +321,7 @@ def _hand_metrics(
             MetricName.PEAK_HAND_SPEED,
             float(speed[fastest]) / body.torso_length,
             downswing,
+            view=view,
             source_frames=[fastest],
             observation=_hand_observation(body, [fastest]),
             method=1.0,
@@ -327,6 +335,70 @@ def _hand_metrics(
             ),
         )
     )
+
+
+def _hand_depth(
+    body: Body,
+    anchors: Anchors,
+    view: CameraView,
+    produced: list[Metric],
+    refused: list[RefusedMetric],
+) -> None:
+    """How far the hands moved along the frame's horizontal axis from address.
+
+    Down the line that axis runs towards and away from the ball, which makes this
+    a depth measurement and the closest thing to "did the hands stay on plane"
+    that a single camera supports. The same arithmetic face-on measures travel
+    along the target line instead, which is a different quantity under the same
+    name -- so the registry refuses it there rather than relabelling it.
+    """
+    if anchors.address is None:
+        refused.append(
+            RefusedMetric(
+                name=MetricName.HAND_DEPTH,
+                reason=(
+                    "Measured as travel from where the hands sat at address, and this "
+                    "clip has no address phase."
+                ),
+            )
+        )
+        return
+
+    origin = reference_point(body.hand.position, anchors.address)
+    if not np.all(np.isfinite(origin)):
+        refused.append(
+            RefusedMetric(
+                name=MetricName.HAND_DEPTH,
+                reason="The hands were not tracked through the address phase.",
+            )
+        )
+        return
+
+    series = np.where(
+        body.hand.valid,
+        body.in_torso_lengths(body.hand.position[:, 0] - origin[0]),
+        np.nan,
+    )
+
+    for anchor in (anchors.top, anchors.impact):
+        if anchor is None:
+            continue
+        found = measure_series(
+            MetricName.HAND_DEPTH,
+            series,
+            anchor,
+            view=view,
+            visibility={Landmark.LEFT_WRIST: body.hand.visibility},
+            landmarks=(Landmark.LEFT_WRIST,),
+            method=1.0,
+            methodology=(
+                f"Travel of the tracked hand point ({body.hand.source.value}) along the "
+                "frame's horizontal axis from its median position over the address "
+                "phase, in torso lengths. Measures the projection only: the component "
+                "running across that axis does not appear in it at all."
+            ),
+        )
+        _record(produced, refused, found, MetricName.HAND_DEPTH, anchor, "the hands")
 
 
 def _hand_observation(body: Body, frames: list[int]) -> float:

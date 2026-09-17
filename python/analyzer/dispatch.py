@@ -133,8 +133,12 @@ class FilterPosesParams(BaseModel, extra="forbid"):
         description="Which model's extraction to filter. Only used when `path` is a video.",
     )
     space: LandmarkSpace = Field(
-        default=LandmarkSpace.IMAGE,
-        description="Coordinate space to filter. HIP_LOCAL is not calibrated world geometry.",
+        default=LandmarkSpace.FRAME_WIDTHS,
+        description=(
+            "Reference frame to filter in. FRAME_WIDTHS is isotropic and is what "
+            "every measurement is taken in; IMAGE is the estimator's own output, "
+            "anisotropic and y-down, useful for drawing. Neither is metric."
+        ),
     )
     config: FilterConfig = Field(
         default_factory=FilterConfig,
@@ -236,10 +240,12 @@ def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    # Detection always reads IMAGE space: hand height in HIP_LOCAL is measured
-    # from an origin that moves with the body, so "the highest the hands reached"
-    # would mean something other than what the rules assume.
-    filtered = filter_sequence(sequence, parsed.filter, reporter=reporter)
+    # Detection always reads FRAME_WIDTHS: it is the only frame here that is
+    # isotropic and upward-positive, and both matter to rules about how far and
+    # how high the hands went.
+    filtered = filter_sequence(
+        sequence, parsed.filter, space=LandmarkSpace.FRAME_WIDTHS, reporter=reporter
+    )
     try:
         return detect_phases(filtered, parsed.phases)
     except SignalError as exc:
@@ -301,7 +307,9 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    filtered = filter_sequence(sequence, parsed.filter, reporter=reporter)
+    filtered = filter_sequence(
+        sequence, parsed.filter, space=LandmarkSpace.FRAME_WIDTHS, reporter=reporter
+    )
     try:
         detected = detect_phases(filtered, parsed.phases)
         return compute_metrics(filtered, detected, parsed.metrics)

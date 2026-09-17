@@ -20,13 +20,24 @@ whatever viewing geometry the camera happened to have -- and are not body
 rotation. `contracts/phases.py` and Phase 5 are where that distinction is
 enforced; here they are simply signals.
 
-## Image coordinates point down
+## Coordinates arrive already corrected
 
-The single most dangerous thing in this module. IMAGE space has y increasing
-*downward*, so a larger y is a lower hand. Every rule here is about the hands
-being high or low, and a sign error would invert the top of the backswing into
-the bottom without failing anywhere. So y is converted once, here, into an
-explicitly named `height` that increases upward, and the raw y is not used again.
+This module reads **FRAME_WIDTHS**, in which y already increases upward and both
+axes are in the same unit. Neither is true of the IMAGE coordinates a pose
+estimator emits, and both used to be fixed here: `height` was computed as
+`1 - y`, and the line angles negated their own y.
+
+Both corrections moved below the filter in Phase 6, which is a better place for
+two reasons. A sign flip applied to positions before fitting emerges correctly
+signed in the velocity and the acceleration, where applying it afterwards needs
+a second correction kept in step with the first. And an anisotropic frame makes
+every distance here -- hand travel, torso length, the speed the whole detection
+keys on -- wrong by a factor that depends on the shape of the recording, which
+is not something a detector should have to think about.
+
+`height` survives as a name because the rules are about the hands being high or
+low and reading `position[:, 1]` at each of them would be worse. It is now
+simply the y channel.
 """
 
 from __future__ import annotations
@@ -245,8 +256,7 @@ def _line_angle_deg(
     smaller x is treated as the start. **Positive means the landmark further
     right in the frame is the higher one.** Zero is level.
 
-    The y sign is flipped first, because image y grows downward and every
-    statement in this module is about the body as it is seen.
+    No sign flip here any more: FRAME_WIDTHS already has y pointing up.
 
     This convention is shared with `biomechanics.geometry.line_tilt_deg` and the
     two must not diverge: a reader comparing a plotted shoulder angle against a
@@ -265,8 +275,7 @@ def _line_angle_deg(
 
     delta = end.position - start.position
     usable = start.valid & end.valid
-    dx = delta[usable, 0]
-    dy = -delta[usable, 1]
+    dx, dy = delta[usable, 0], delta[usable, 1]
     # Point the segment rightwards across the frame, so the tilt describes the
     # line rather than the order the landmarks arrived in.
     leftwards = dx < 0.0
@@ -278,27 +287,32 @@ def _line_angle_deg(
 
 def swing_signals(filtered: FilteredSequence) -> SwingSignals:
     """Reduce a filtered sequence to the signals a swing is read from."""
-    if filtered.space is not LandmarkSpace.IMAGE:
-        # HIP_LOCAL is hip-centred, so the hands' height in it is measured from a
-        # point that moves with the body. "Highest the hands reached" then means
-        # something other than what the rules below assume.
+    if filtered.space is not LandmarkSpace.FRAME_WIDTHS:
+        # Two different objections, and both matter. IMAGE is anisotropic and its
+        # y points down, so every distance here would be wrong by the shape of
+        # the frame and every height inverted. HIP_LOCAL is hip-centred, so the
+        # hands' height in it is measured from a point that moves with the body,
+        # and "the highest the hands reached" means something other than what the
+        # rules below assume.
         raise SignalError(
-            f"Phase detection reads IMAGE-space trajectories; this sequence is in "
-            f"{filtered.space.value}. HIP_LOCAL is centred on the hips, so hand height "
-            "in it is relative to a moving origin rather than to the frame."
+            f"Phase detection reads FRAME_WIDTHS trajectories; this sequence is in "
+            f"{filtered.space.value}. IMAGE has y pointing down and a different unit on "
+            "each axis, and HIP_LOCAL is centred on a moving origin -- so hand height "
+            "and hand travel would both mean something else."
         )
 
     count = len(filtered.t)
     hand = choose_hand(filtered)
 
-    # Speed in the image plane only. The z channel of IMAGE space is MediaPipe's
-    # own depth estimate from a single camera, on an unstated scale; including it
-    # would mix a measured quantity with a guessed one inside one number.
+    # Speed in the image plane only. The z channel is MediaPipe's own depth
+    # estimate from a single camera, on an unstated scale; including it would mix
+    # a measured quantity with a guessed one inside one number.
     speed = np.linalg.norm(hand.velocity[:, :2], axis=1)
     speed[~hand.valid] = np.nan
 
-    # y grows downward in IMAGE space. Converted once, here.
-    height = np.where(hand.valid, 1.0 - hand.position[:, 1], np.nan)
+    # Already upward-positive, and in the same unit as x. Both were this module's
+    # job before Phase 6 moved the conversion below the filter.
+    height = np.where(hand.valid, hand.position[:, 1], np.nan)
 
     return SwingSignals(
         t=filtered.t,

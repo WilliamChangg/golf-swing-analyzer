@@ -63,6 +63,7 @@ from analyzer.biomechanics.registry import (
     measure_series,
 )
 from analyzer.contracts.metrics import (
+    CameraView,
     Metric,
     MetricConfig,
     RefusedMetric,
@@ -158,13 +159,11 @@ def _reference_problem(segment: Segment, config: MetricConfig) -> str | None:
             f"The {segment.label} were not tracked through an address phase, so there is "
             "no square-to-camera baseline to measure a rotation away from."
         )
-    if reference.span < config.min_shoulder_span_ratio:
-        return (
-            f"At address the {segment.label} projected only {reference.span:.2f} torso "
-            f"lengths, under the {config.min_shoulder_span_ratio:g} a rotation can be read "
-            "from. Seen nearly end-on the line spans a few pixels, and an angle taken "
-            "across those is noise rather than rotation."
-        )
+    # No check here on how wide the line projects at address. That measurement
+    # is what decides the view, and Phase 6 made the view the single owner of
+    # "this recording does not contain this quantity" -- a second threshold on
+    # the same number, a few hundredths away from the first, would refuse the
+    # same clips for a narrower-sounding reason.
     if not reference.square_at_address:
         return (
             f"The {segment.label} projected {reference.excess:.2f} times wider on frame "
@@ -180,7 +179,7 @@ def _reference_problem(segment: Segment, config: MetricConfig) -> str | None:
 
 
 def metrics(
-    body: Body, anchors: Anchors, config: MetricConfig
+    body: Body, anchors: Anchors, config: MetricConfig, view: CameraView
 ) -> tuple[list[Metric], list[RefusedMetric], list[RotationReference]]:
     """Every rotation metric this clip supports, with the references they used."""
     produced: list[Metric] = []
@@ -214,6 +213,7 @@ def metrics(
                 name,
                 tilt,
                 anchor,
+                view=view,
                 visibility=body.visibility,
                 landmarks=segment.landmarks,
                 method=plane,
@@ -245,6 +245,7 @@ def metrics(
                 name,
                 segment.turn_deg,
                 anchor,
+                view=view,
                 visibility=body.visibility,
                 landmarks=segment.landmarks,
                 method=segment.method,
@@ -281,6 +282,7 @@ def metrics(
             MetricName.X_FACTOR,
             separation,
             anchor,
+            view=view,
             visibility=body.visibility,
             landmarks=(*_SHOULDERS, *_HIPS),
             method=method,

@@ -1,10 +1,14 @@
-"""The subject, in plane coordinates, ready to be measured.
+"""The subject, ready to be measured.
 
-One object built once per clip and read by every metric module. It exists so
-that the aspect correction, the y-flip and the choice of scale happen in exactly
-one place: a metric module that reached back into the filtered sequence for a
-raw landmark would silently reintroduce both errors `geometry` exists to remove,
-and nothing would fail.
+One object built once per clip and read by every metric module, so that the
+choice of scale and the set of landmarks a metric may use are decided in one
+place rather than per module.
+
+It no longer converts anything. Until Phase 6 this was also where the aspect
+correction and the y flip happened, which made it the only safe way into the
+filtered sequence; both now happen below the filter, so the positions arriving
+here are already isotropic and upward-positive. What is left is a slice to x and
+y, and the scale below.
 
 ## Scale
 
@@ -30,7 +34,7 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from analyzer.biomechanics.geometry import distance, midpoint, plane_coordinates
+from analyzer.biomechanics.geometry import distance, midpoint
 from analyzer.contracts.phases import HandSource
 from analyzer.contracts.pose import FrameGeometry, Landmark, LandmarkSpace
 from analyzer.filtering.landmarks import FilteredSequence
@@ -63,7 +67,7 @@ class BodyError(ValueError):
 
 @dataclass(frozen=True)
 class HandTrack:
-    """The tracked hand point, converted to plane coordinates.
+    """The tracked hand point, in frame widths.
 
     Which landmark it came from was decided by Phase 4, once for the clip, and
     is carried here rather than re-decided: the two layers reasoning about
@@ -80,7 +84,7 @@ class HandTrack:
 
 @dataclass(frozen=True)
 class Body:
-    """One clip's subject: every tracked landmark in plane coordinates, plus scale."""
+    """One clip's subject: every tracked landmark in frame widths, plus scale."""
 
     t: NDArray[np.float64]
     geometry: FrameGeometry
@@ -163,18 +167,18 @@ def _torso_length(points: dict[Landmark, NDArray[np.float64]], usable: NDArray[n
 def body_from(filtered: FilteredSequence) -> Body:
     """Build the measurable subject from a filtered pose sequence.
 
-    Refuses HIP_LOCAL for the same reason Phase 4 does, and for one more. Those
-    coordinates are centred on the hips, so a hip sway measured in them is zero
-    by construction and a head lift is measured from an origin that is itself
-    moving; and they carry no frame, so the aspect correction this module is
-    built around has nothing to correct against.
+    Refuses anything but FRAME_WIDTHS. IMAGE is anisotropic and upside down, so
+    every angle here would be wrong by the shape of the frame and every height
+    inverted. HIP_LOCAL is hip-centred, so a hip sway measured in it is zero by
+    construction and a head lift is measured from an origin that is itself
+    moving.
     """
-    if filtered.space is not LandmarkSpace.IMAGE:
+    if filtered.space is not LandmarkSpace.FRAME_WIDTHS:
         raise BodyError(
-            f"Biomechanics reads IMAGE-space trajectories; this sequence is in "
-            f"{filtered.space.value}. HIP_LOCAL is centred on the hips, so displacements "
-            "measured in it are relative to a moving origin, and it carries no frame "
-            "geometry to make its distances isotropic."
+            f"Biomechanics reads FRAME_WIDTHS trajectories; this sequence is in "
+            f"{filtered.space.value}. IMAGE has a different unit on each axis and y "
+            "pointing down; HIP_LOCAL is centred on the hips, so a displacement in it "
+            "is relative to a moving origin."
         )
 
     missing = [landmark for landmark in TRACKED if landmark not in filtered.landmarks]
@@ -184,10 +188,11 @@ def body_from(filtered: FilteredSequence) -> Body:
             f"without {', '.join(entry.name.lower() for entry in missing)}."
         )
 
-    geometry = filtered.geometry
-    points = {
-        landmark: plane_coordinates(filtered[landmark].position, geometry) for landmark in TRACKED
-    }
+    # Sliced to x and y rather than converted. The frame is already isotropic
+    # and upward-positive; the z channel is dropped because in it MediaPipe's
+    # single-camera depth guess would enter a distance as though it were a
+    # measurement.
+    points = {landmark: filtered[landmark].position[:, :2] for landmark in TRACKED}
     valid = {landmark: filtered[landmark].valid for landmark in TRACKED}
     visibility = {landmark: filtered[landmark].visibility for landmark in TRACKED}
 
@@ -199,22 +204,21 @@ def body_from(filtered: FilteredSequence) -> Body:
     )
 
     raw_hand = choose_hand(filtered)
-    aspect = geometry.aspect_ratio
     return Body(
         t=filtered.t,
-        geometry=geometry,
+        geometry=filtered.geometry,
         points=points,
         valid=valid,
         visibility=visibility,
         hand=HandTrack(
             source=raw_hand.source,
-            position=plane_coordinates(raw_hand.position, geometry),
-            # Velocity is a difference of positions, so it takes the same aspect
-            # scaling and the same sign flip -- but no origin shift, which is why
-            # it cannot go through `plane_coordinates`.
-            velocity=np.stack(
-                (raw_hand.velocity[:, 0], -raw_hand.velocity[:, 1] * aspect), axis=-1
-            ),
+            position=raw_hand.position[:, :2],
+            # No special case any more. The conversion now happens on positions
+            # before the fit, and the filter is linear, so the velocity it
+            # produces is already in the same frame -- where converting after the
+            # fit meant scaling and flipping the derivative separately and
+            # keeping that in step with the position conversion by hand.
+            velocity=raw_hand.velocity[:, :2],
             valid=raw_hand.valid,
             visibility=raw_hand.visibility,
         ),

@@ -42,6 +42,7 @@ from analyzer.biomechanics.body import Body, body_from  # noqa: E402
 from analyzer.contracts.filtering import FilterConfig, SmoothingConfig  # noqa: E402
 from analyzer.contracts.metrics import MetricSet  # noqa: E402
 from analyzer.contracts.pose import Landmark  # noqa: E402
+from analyzer.coordinates import frame_widths_to_pixels  # noqa: E402
 from analyzer.filtering.landmarks import filter_sequence  # noqa: E402
 from analyzer.ingestion.probe import probe  # noqa: E402
 from analyzer.ingestion.reader import OpenCVFrameSource  # noqa: E402
@@ -79,7 +80,7 @@ def resolve_poses(path: Path, model: str | None) -> Path:
 
 
 def to_pixels(body: Body, point: np.ndarray) -> tuple[int, int] | None:
-    """Plane coordinates back to pixels, for drawing.
+    """Frame widths back to pixels, for drawing.
 
     The inverse of the conversion the whole engine runs on, which makes it the
     one useful check on that conversion: if the aspect handling were wrong, the
@@ -87,10 +88,8 @@ def to_pixels(body: Body, point: np.ndarray) -> tuple[int, int] | None:
     """
     if not np.all(np.isfinite(point)):
         return None
-    geometry = body.geometry
-    x = point[0] * geometry.width
-    y = (1.0 - point[1] / geometry.aspect_ratio) * geometry.height
-    return int(round(x)), int(round(y))
+    pixels = frame_widths_to_pixels(point, body.geometry)
+    return int(round(float(pixels[0]))), int(round(float(pixels[1])))
 
 
 def segment(image: np.ndarray, body: Body, a: np.ndarray, b: np.ndarray, colour, width: int = 3):
@@ -165,6 +164,15 @@ def annotate(image: np.ndarray, result: MetricSet, frame: int, title: str) -> No
         label(image, f"{metric.label}: {value}  (conf {metric.confidence.overall:.2f})", (16, y))
         y += 24
 
+    if result.view is not None:
+        label(
+            image,
+            f"view: {result.view.view.value} "
+            f"(shoulders {result.view.shoulder_span_ratio:.2f} torso at address)",
+            (16, y + 8),
+            SHOULDERS,
+        )
+        y += 24
     if result.lead_side is not None and result.lead_side.side is not None:
         label(image, f"lead side: {result.lead_side.side.value}", (16, y + 8), SHOULDERS)
 
@@ -187,6 +195,8 @@ def write_csv(destination: Path, result: MetricSet) -> None:
                 "anchor",
                 "method",
                 "source_frames",
+                "view",
+                "interpretation",
                 "methodology",
             ]
         )
@@ -206,6 +216,8 @@ def write_csv(destination: Path, result: MetricSet) -> None:
                     f"{factors.anchor:.4f}",
                     f"{factors.method:.4f}",
                     " ".join(str(frame) for frame in metric.source_frames),
+                    metric.view.value,
+                    metric.interpretation,
                     metric.methodology,
                 ]
             )

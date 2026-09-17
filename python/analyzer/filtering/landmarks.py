@@ -263,7 +263,7 @@ def filter_sequence(
     sequence: PoseSequence,
     config: FilterConfig | None = None,
     *,
-    space: LandmarkSpace = LandmarkSpace.IMAGE,
+    space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
     landmarks: tuple[Landmark, ...] | None = None,
     reporter: ProgressReporter | None = None,
     request_id: int | str | None = None,

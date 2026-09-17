@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-5 complete (6 / 21).**
+**Progress: Phases 0-6 complete (7 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                             |
 | --- | --------------------- | ----------- | ---------------------------------------------------------- |
@@ -14,8 +14,8 @@ advance past a broken phase.
 | 3   | Temporal filtering    | ✅ **Done** | Error bounds met against analytical trajectories           |
 | 4   | Swing phase detection | ✅ **Done** | Phases correct on real swings, inspectable frame-by-frame  |
 | 5   | Biomechanics engine   | ✅ **Done** | Metrics carry units, confidence, methodology               |
-| 6   | DTL + coordinates     | ⬜ Next     | Conventions documented and tested                          |
-| 7   | Two-camera sync       | ⬜          | Measured sync residual in ms                               |
+| 6   | DTL + coordinates     | ✅ **Done** | Conventions documented and tested                          |
+| 7   | Two-camera sync       | ⬜ Next     | Measured sync residual in ms                               |
 | 8   | Camera calibration    | ⬜          | Reprojection error reported; status gates claims           |
 | 9   | 3D reconstruction     | ⬜          | Reconstruction error measured on synthetic ground truth    |
 | 10  | Club tracking         | ⬜          | Shaft tracked; low confidence emits nothing                |
@@ -459,7 +459,7 @@ which the overlay confirms: the player sets up with the left hand above the
 right and takes the club over their right shoulder.
 
 `data/dtl/iron_dtl.mp4` produces 33 metrics and **refuses 3**. Its shoulders
-project 0.07 torso lengths at address and 10.61× that mid-swing, so shoulder
+project 0.10 torso lengths at address and 7.2× that mid-swing, so shoulder
 turn, pelvis turn and X-factor are refused as not measurable from that view —
 which is correct, because a down-the-line camera does not contain the
 measurement. Tilts, posture, hands and timing all survive.
@@ -520,29 +520,109 @@ app()` sat mid-file, so Typer never registered the commands defined below it
   under the module entry point while the installed `analyzer` script had them
   all. Moved to the bottom, with a comment saying why it stays there.
 
-## Phase 6 — DTL + coordinate systems ⬜
+## Phase 6 — DTL + coordinate systems ✅
 
-**Half of the carried-in anisotropy defect is fixed; half is not.** Phase 5
-added `FrameGeometry` to `PoseSequence` and `FilteredSequence` and applies the
-aspect correction in `biomechanics.geometry.plane_coordinates`, so every metric
-is computed in isotropic frame widths. **Phase 4 still is not.** Its hand speed,
-hand travel and torso length are all taken in raw IMAGE space, where a vertical
-distance is under-weighted by 0.5625 on a landscape clip and over-weighted by
-1.7778 on a portrait one. It survives because its gate is a _ratio_ of two such
-distances, which partly cancels, and because locating a maximum tolerates an
-anisotropic scaling — but its numbers are not geometry, and `SwingPhases.hand`
-reports a `torso_length` that differs from `MetricSet.torso_length` on the same
-clip for exactly this reason.
+`python/analyzer/coordinates.py` · `python/analyzer/biomechanics/view.py` ·
+[docs/coordinate-systems.md](coordinate-systems.md)
 
-- [ ] 6.1 Image / normalized / camera / world frame types + `docs/coordinate-systems.md`
-- [ ] 6.1a Move the aspect correction below the biomechanics layer so Phase 4
-      reads isotropic distances too; re-measure its travel ratios and
-      `min_travel_ratio` / `min_phase_travel_ratio` against it, and reconcile
-      the two `torso_length` figures
-- [ ] 6.2 DTL metrics: hand depth, spine angle, shaft orientation, club path, head movement
-- [ ] 6.3 View-tagged metrics so face-on and DTL never conflate
-- [ ] 6.4 Tests: round-trip conversions, known-projection fixtures
-- [ ] 6.5 Commit
+Two things, and they turn out to be the same thing twice. A measurement needs a
+**reference frame** before its arithmetic means anything, and it needs a
+**camera view** before its result means anything about a body. Phase 6 makes
+both explicit, measured and carried.
+
+- [x] **6.1 Frame types** — `LandmarkSpace` becomes the full vocabulary:
+      `IMAGE`, `FRAME_WIDTHS`, `HIP_LOCAL`, plus `CAMERA` and `WORLD` named but
+      refused with the phase that supplies them. Conversions and the conventions
+      document
+- [x] **6.1a The aspect correction moved below the filter** — into
+      `pose/series.py`, so phase detection reads isotropic, upward-positive
+      coordinates too. Thresholds re-measured, the two `torso_length` figures
+      reconciled
+- [x] **6.2 DTL metrics** — hand depth added; spine angle, head movement and hip
+      travel gained their down-the-line readings. **Shaft orientation and club
+      path are not built:** both need the club, which Phase 10 tracks
+- [x] **6.3 View-tagged metrics** — `CameraView` measured from the shoulder
+      line at address; every `Metric` carries the view and an `interpretation`;
+      metrics a view cannot support are refused centrally
+- [x] **6.4 Tests** — 18 added (all pytest): round trips across three frame
+      shapes, pixel agreement by two routes, the refusals, view classification
+      on face-on / down-the-line / oblique fixtures, and the tagging
+- [x] **6.5 Verified on both reference clips; commit**
+
+**Measured.** The view verdict, from the projected shoulder width at address:
+
+| Clip           | Shoulders at address | Openness | View          | Confidence |
+| -------------- | -------------------- | -------- | ------------- | ---------- |
+| PW_face-on.mp4 | 0.83 torso           | 0.90     | face_on       | 1.00       |
+| iron_dtl.mp4   | 0.10 torso           | 0.14     | down_the_line | 0.80       |
+
+A factor of eight between them, against thresholds at 0.55 and 0.30.
+
+The same computation, read through the view — **spine tilt at address is +4.6°
+of lateral side bend face-on and +35.5° of forward posture angle down the
+line.** Both are correct; neither is interpretable without knowing where the
+camera stood, and before this phase nothing recorded that.
+
+**What moving the correction cost and bought.** Phase 4's numbers changed, since
+it had been measuring in the anisotropic frame:
+
+| Quantity                 | Before | After   |
+| ------------------------ | ------ | ------- |
+| travel ratio (face-on)   | 3.86   | 2.92    |
+| travel ratio (iron DTL)  | 2.30   | 2.14    |
+| impact frame (face-on)   | 48     | **46**  |
+| `torso_length` agreement | no     | **yes** |
+
+The impact frame moving is the substantive one, and it moved the right way. The
+hand-arc low point is frame 47. Impact is defined as peak hand speed, which the
+README documents as running _marginally early_ because the hands peak before the
+club reaches the ball — so 46 against a low point of 47 is consistent with that
+and 48 was not. The anisotropic frame had been under-weighting vertical motion,
+which biased the speed peak towards the most horizontal part of the swing.
+
+`min_travel_ratio` (0.5) and `min_phase_travel_ratio` (0.15) were **re-measured
+and left alone**: the worst margin across the reference clips is 2.14 against
+0.5 on the gate and 1.19 against 0.15 on the phase bound, so the separation is
+4x and 8x respectively and nothing warranted moving.
+
+**Deliberate deviations from the original plan:**
+
+- **Shaft orientation and club path are not delivered.** 6.2 lists them and both
+  need the club tracked, which is Phase 10. Nothing here fakes them; the DTL
+  metrics that landed are the ones a body alone supports.
+- **`FRAME_WIDTHS` is a `LandmarkSpace`, not a parallel enum.** The plan said
+  "image / normalized / camera / world frame types", which suggested a second
+  vocabulary alongside the existing one. Two enums covering overlapping concepts
+  is how a caller ends up converting between them; extending the one that is
+  already threaded through `unit_for`, the reports and the contracts keeps a
+  single answer to "which frame is this in".
+- **`CAMERA` and `WORLD` are declared without being implemented.** Ordinarily
+  this project does not name what it cannot do. A reference frame is the
+  exception: the point is that Phase 8 and Phase 9 add the _capability_ rather
+  than the concept, and until then asking for one raises an error naming the
+  phase instead of reporting an unknown value.
+- **The z channel is carried through the conversion rather than dropped.**
+  MediaPipe documents its IMAGE z as roughly the scale of x, so it is already in
+  frame widths and passes through unchanged. That avoids making the frame a
+  two-dimensional special case in a filter built for three channels. It does not
+  make z a measurement, and nothing above reads it.
+- **The view has one gate, not two.** Rotation had been refused down the line by
+  its own shoulder-span check, which measured the same number the view detector
+  uses against a threshold five hundredths away. The view is now the single
+  owner of "this recording does not contain this quantity", and the gate is
+  applied centrally in `compute.py` — to the refusals as well as the values, so
+  a blocked metric is refused once, naming the view, rather than once per anchor
+  naming a symptom.
+- **`DOWN_THE_LINE` means _along_ the target line, not _behind_ the player.**
+  Shoulder foreshortening is identical from both ends and nothing else here
+  separates them. The overlay showed this: `data/dtl/iron_dtl.mp4` is filmed
+  from in _front_ of the player despite its name, and the classification is
+  still right. The cost is the sign of anything measured along the frame's
+  horizontal axis, so hand depth is reported as an image direction rather than
+  as "towards the player".
+- **`line_tilt_deg` lost its y negation** in `phases/signals.py`, since the
+  frame arriving there already points up. No event moved: nothing in detection
+  reads those angles.
 
 ## Phase 7 — Two-camera synchronisation ⬜
 

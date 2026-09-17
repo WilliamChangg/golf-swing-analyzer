@@ -109,17 +109,61 @@ POSE_CONNECTIONS: tuple[tuple[Landmark, Landmark], ...] = (
 
 
 class LandmarkSpace(StrEnum):
-    """Which coordinate space a set of landmarks is expressed in.
+    """Which reference frame a set of landmarks is expressed in.
 
-    IMAGE      - normalised to the displayed frame, x and y in [0, 1]. The only
-                 space that can be drawn on a video frame.
-    HIP_LOCAL  - approximate metres, centred on the hip midpoint, oriented to
-                 the body. MediaPipe calls these "world landmarks"; they are not
-                 calibrated world coordinates and carry no camera geometry.
+    The full vocabulary, including the frames this build cannot yet produce, so
+    that a later phase adds the capability rather than the concept and nothing
+    in between can claim a frame it does not have. `analyzer/coordinates.py`
+    holds the conversions and `docs/coordinate-systems.md` the conventions.
+
+    IMAGE
+        Normalised to the displayed frame: x divided by the width and y by the
+        height, both in [0, 1], y increasing downward. **Anisotropic** -- see
+        `FrameGeometry`. As stored by the pose estimator, and the frame a
+        landmark is drawn in.
+    FRAME_WIDTHS
+        Both axes divided by the frame *width*, y increasing upward, origin at
+        the bottom-left of the displayed frame. Isotropic, so a distance means
+        the same whichever way it points, and an angle is the angle in the
+        picture. **The frame every measurement is taken in.** Derived from
+        IMAGE and `FrameGeometry`; never stored.
+    HIP_LOCAL
+        Approximate metres, centred on the hip midpoint and oriented to the
+        body. MediaPipe calls these "world landmarks"; they are not calibrated
+        world coordinates and carry no camera geometry.
+    CAMERA
+        Metres in three dimensions, centred on the camera. Needs intrinsics,
+        which arrive with calibration in Phase 8. **Not produced by this build.**
+    WORLD
+        Metres in three dimensions, in a frame fixed to the scene. Needs a
+        calibrated stereo pair, which arrives in Phase 9. **Not produced by this
+        build.**
     """
 
     IMAGE = "image"
+    FRAME_WIDTHS = "frame_widths"
     HIP_LOCAL = "hip_local"
+    CAMERA = "camera"
+    WORLD = "world"
+
+
+# The frames a pose estimator writes into a stored sequence. Everything else is
+# either derived from these on read or not reachable yet, and keeping the set
+# explicit is what stops the store growing a column for a frame nothing fills.
+STORED_SPACES: tuple[LandmarkSpace, ...] = (LandmarkSpace.IMAGE, LandmarkSpace.HIP_LOCAL)
+
+# What a frame this build cannot produce is waiting for. Consulted when a caller
+# asks for one, so the error names the phase rather than saying "unsupported".
+UNREACHABLE_SPACES: dict[LandmarkSpace, str] = {
+    LandmarkSpace.CAMERA: (
+        "camera coordinates need the intrinsic matrix and distortion "
+        "coefficients that calibration produces in Phase 8"
+    ),
+    LandmarkSpace.WORLD: (
+        "world coordinates need triangulation against a calibrated stereo "
+        "pair, which arrives in Phase 9"
+    ),
+}
 
 
 class FrameGeometry(BaseModel):

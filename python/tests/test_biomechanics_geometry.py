@@ -7,10 +7,9 @@ tolerance agreed with the implementation proves the implementation agrees with
 itself, while 3-4-5 giving 90 degrees is a fact about geometry that the code has
 to meet rather than define.
 
-The aspect-ratio conversion gets the most attention here, because it is the
-correction with no visible failure mode. A distance computed without it is still
-a plausible number, an angle still lands between 0 and 180, and nothing about
-the output says the frame was not square.
+These are pure geometry: they take points already in FRAME_WIDTHS and know
+nothing about how the points got there. The conversion that puts them in that
+frame is tested separately, in `test_coordinates.py`.
 """
 
 from __future__ import annotations
@@ -27,71 +26,13 @@ from analyzer.biomechanics.geometry import (
     interior_angle_deg,
     line_tilt_deg,
     midpoint,
-    plane_coordinates,
     project_onto,
     tilt_from_vertical_deg,
 )
-from analyzer.contracts.pose import FrameGeometry
-
-SQUARE = FrameGeometry(width=1000, height=1000)
-PORTRAIT = FrameGeometry(width=1080, height=1920)  # aspect 16:9 on its side
 
 
 def point(x: float, y: float) -> np.ndarray:
     return np.array([x, y], dtype=np.float64)
-
-
-class TestPlaneCoordinates:
-    """The two corrections that have no visible failure mode."""
-
-    def test_y_increases_upward_after_conversion(self) -> None:
-        """Image y grows downward; every metric here is about high and low."""
-        high_in_frame = plane_coordinates(point(0.5, 0.1), SQUARE)
-        low_in_frame = plane_coordinates(point(0.5, 0.9), SQUARE)
-        assert high_in_frame[1] > low_in_frame[1]
-
-    def test_a_square_frame_leaves_coordinates_alone(self) -> None:
-        converted = plane_coordinates(point(0.25, 0.25), SQUARE)
-        assert converted[0] == pytest.approx(0.25)
-        assert converted[1] == pytest.approx(0.75)
-
-    def test_equal_pixel_distances_measure_equal_on_a_portrait_frame(self) -> None:
-        """The defect the conversion exists to remove.
-
-        108 pixels across and 108 pixels down are the same distance. In raw
-        normalised coordinates on a 1080x1920 frame they are 0.1 and 0.05625,
-        and every length, speed and angle built from them inherits that.
-        """
-        horizontal = distance(
-            plane_coordinates(point(0.0, 0.5), PORTRAIT),
-            plane_coordinates(point(0.1, 0.5), PORTRAIT),  # 108 px across
-        )
-        vertical = distance(
-            plane_coordinates(point(0.5, 0.0), PORTRAIT),
-            plane_coordinates(point(0.5, 108 / 1920), PORTRAIT),  # 108 px down
-        )
-        assert float(horizontal) == pytest.approx(float(vertical), rel=1e-12)
-
-    def test_a_true_45_degree_line_reads_as_45_degrees(self) -> None:
-        """And reads as 29.4 without the correction, which is the whole problem."""
-        # 200 pixels right and 200 pixels up on a 1080x1920 frame.
-        start = plane_coordinates(point(0.4, 0.5), PORTRAIT)
-        end = plane_coordinates(point(0.4 + 200 / 1080, 0.5 - 200 / 1920), PORTRAIT)
-        assert float(line_tilt_deg(start, end)) == pytest.approx(45.0, abs=1e-9)
-
-        uncorrected = math.degrees(math.atan2(200 / 1920, 200 / 1080))
-        assert uncorrected == pytest.approx(29.36, abs=0.01)
-
-    def test_the_z_channel_is_dropped_rather_than_carried(self) -> None:
-        """It is a single-camera depth estimate on an unstated scale."""
-        converted = plane_coordinates(np.array([0.5, 0.5, 0.9]), SQUARE)
-        assert converted.shape == (2,)
-
-    def test_a_whole_trajectory_converts_at_once(self) -> None:
-        trajectory = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]])
-        converted = plane_coordinates(trajectory, SQUARE)
-        assert converted.shape == (3, 2)
-        assert converted[1, 1] == pytest.approx(0.6)
 
 
 class TestAngles:

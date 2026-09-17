@@ -100,7 +100,7 @@ would not be a slightly-wrong version of the truth — it would be the angle awa
 from a pose the player never held.
 
 On the reference footage the two cases separate by a wide margin rather than a
-marginal one: 1.12× on the face-on clip (landmark noise) against 10.61× on the
+marginal one: 1.12× on the face-on clip (landmark noise) against 7.2× on the
 down-the-line clip.
 
 ### What was tried first

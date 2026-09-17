@@ -100,6 +100,7 @@ transport rather than engine data.
 
 ```
 contracts/      typed models shared with the desktop app
+coordinates.py  reference frames and the conversions between them
 hashing/        content digests for verification and cache keys
 paths/          filesystem layout resolution
 progress/       reporting from long-running methods
@@ -119,13 +120,23 @@ Later phases add `coaching` as a sibling package, and Protocol-typed seams
 confined to `phases`, `biomechanics` and `coaching`; everything below is general
 computer vision that would serve any moving body.
 
-`biomechanics` has one entry point, `compute_metrics(filtered, phases)`, and one
-internal rule that keeps it honest: nothing above `geometry.py` touches a raw
-landmark coordinate. IMAGE space is anisotropic and its y points downward, and
-both corrections are applied in `plane_coordinates` exactly once. A metric
-module that reached back into the filtered sequence for a coordinate would
-reintroduce both silently — no exception, no implausible number, just angles
-wrong by a factor that depends on the shape of the frame.
+`coordinates` sits below everything and owns the one conversion the whole system
+depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
+pointing downward; both are corrected exactly once, on read in `pose/series.py`,
+so every layer above measures in FRAME_WIDTHS. Putting it there rather than in
+the biomechanics layer is deliberate on two counts: phase detection sits below
+biomechanics and would otherwise measure in the uncorrected frame, and the
+filter is linear, so a conversion applied to positions before fitting emerges
+correctly signed in the velocity and acceleration rather than needing a second
+correction kept in step by hand. See
+[coordinate-systems.md](coordinate-systems.md).
+
+`biomechanics` has one entry point, `compute_metrics(filtered, phases)`. It
+measures the **camera view** before anything else, because a projected number is
+only interpretable once the direction it was taken from is known, and tags every
+metric with it — the same spine tilt is lateral side bend face-on and forward
+posture angle down the line. Metrics a view cannot support are refused centrally
+rather than per family, so a family added later cannot forget the check.
 
 ## Video ingestion
 

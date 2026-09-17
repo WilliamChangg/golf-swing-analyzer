@@ -27,6 +27,7 @@ export type MetricName =
   | "x_factor"
   | "shoulder_tilt"
   | "pelvis_tilt"
+  | "hand_depth"
   | "hand_path_length"
   | "peak_hand_speed"
   | "lead_arm_angle"
@@ -91,6 +92,10 @@ export type SwingEvent = "takeaway" | "top" | "impact" | "finish";
  * The intervals between events.
  */
 export type SwingPhase = "address" | "backswing" | "downswing" | "follow_through";
+/**
+ * The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing.
+ */
+export type CameraView = "face_on" | "down_the_line" | "unknown";
 export type BodySide = "left" | "right";
 
 /**
@@ -107,6 +112,7 @@ export interface MetricSet {
   computed: boolean;
   metrics?: Metric[];
   refused?: RefusedMetric[];
+  view?: ViewEstimate | null;
   lead_side?: LeadSide | null;
   references?: RotationReference[];
   /**
@@ -143,6 +149,11 @@ export interface Metric {
    * Every frame whose landmarks entered this value, so it can be checked against the video rather than taken on trust.
    */
   source_frames: number[];
+  view: CameraView;
+  /**
+   * What the number means anatomically from this view, in words. Separate from `methodology`, which says how it was computed: the arithmetic is the same from every camera position and the meaning is not.
+   */
+  interpretation: string;
   confidence: MetricConfidence;
   /**
    * How this number was produced, in words. Never omitted.
@@ -187,6 +198,47 @@ export interface RefusedMetric {
   name: MetricName;
   event?: SwingEvent | null;
   reason: string;
+}
+/**
+ * Which view a clip was shot from, and the measurements behind the verdict.
+ *
+ * Decided from the **projected width of the shoulder line at address**, in
+ * torso lengths. Seen face-on the shoulders lie broadside and span most of a
+ * torso length or more; seen down the line they point at the camera and
+ * collapse to almost nothing. On the reference clips the two are 0.83 and 0.10,
+ * which is a margin of eight times rather than a close call.
+ *
+ * `openness` corroborates it from an independent direction, the way Phase 4
+ * corroborates impact: the address span divided by the widest the line was ever
+ * seen in the clip is the cosine of how far off broadside it was at address. A
+ * swing turns the shoulders through about a right angle, so both views contain
+ * a frame where the line is nearly square, and the two signals should agree.
+ * They are kept separate because the second depends on the clip containing that
+ * frame and the first does not.
+ */
+export interface ViewEstimate {
+  view: CameraView;
+  /**
+   * How far clear of ambiguity the measurement sits, as a fraction of the band between the two thresholds. 1.0 is a full band clear.
+   */
+  confidence: number;
+  /**
+   * Projected shoulder width at address, in torso lengths. The verdict.
+   */
+  shoulder_span_ratio: number;
+  /**
+   * Projected hip width at address, in torso lengths. Reported, not used.
+   */
+  hip_span_ratio: number;
+  /**
+   * Address shoulder span divided by the widest in the clip: the cosine of how far off broadside the shoulders were at address. Corroboration.
+   */
+  openness: number;
+  /**
+   * The address frames the spans were measured over.
+   */
+  frames?: number[];
+  methodology: string;
 }
 /**
  * Which side of the body leads the swing, and how that was decided.
@@ -299,13 +351,21 @@ export interface FrameGeometry {
  */
 export interface MetricConfig {
   /**
-   * Projected shoulder span, in torso lengths, below which the shoulder line is too foreshortened to read a direction from. Seen face-on the span runs well over one torso length; seen down the line it collapses towards zero, and an angle taken across a few pixels is noise.
+   * Projected shoulder span at the top, in torso lengths, below which the shoulder line is too foreshortened to read a direction from -- which is what naming the lead side depends on. Measured at the top rather than at address, and so a different question from the one the view thresholds answer: a down-the-line clip has the shoulders nearly square at the top even though they were end-on at address.
    */
   min_shoulder_span_ratio?: number;
   /**
    * How far towards one shoulder the hands must sit at the top before the lead side is named. Below it, no side is reported and the metrics that need one are refused rather than assigned to a coin flip.
    */
   min_lead_side_margin?: number;
+  /**
+   * Projected shoulder width at address, in torso lengths, at or above which the camera is treated as face-on. The basis is anatomical rather than measured here: an adult's shoulder width is a fairly stable multiple of the distance from their shoulders to their hips, so a shoulder line spanning more than half of it cannot be pointing at the camera. The reference face-on clip measures 0.83.
+   */
+  face_on_span_ratio?: number;
+  /**
+   * Projected shoulder width at address, in torso lengths, at or below which the camera is treated as down-the-line. The reference down-the-line clip measures 0.10. Between this and `face_on_span_ratio` the view is reported as unknown rather than rounded to the nearer label -- an oblique camera is a real thing to have recorded, and it supports some measurements and not others.
+   */
+  down_the_line_span_ratio?: number;
   /**
    * How much wider than its address baseline a body line may project somewhere in the clip before the recording is judged not to be face-on and its rotations refused. Above 1 because landmark noise alone moves the maximum a little past address -- it reaches 1.12 on the face-on reference clip. A down-the-line recording, where the shoulders start end-on and open through the backswing, exceeds it by a wide margin rather than a marginal one.
    */

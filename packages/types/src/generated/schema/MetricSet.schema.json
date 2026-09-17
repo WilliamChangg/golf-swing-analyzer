@@ -8,6 +8,16 @@
       "title": "BodySide",
       "type": "string"
     },
+    "CameraView": {
+      "description": "Where the camera stood relative to the player.\n\nThe single fact that decides what a projected measurement *means*. The same\nspine tilt is lateral side bend seen face-on and forward posture angle seen\ndown the line; the same hip displacement is a slide towards the target in one\nand a move towards the ball in the other. Nothing in the arithmetic\ndistinguishes them, so the view is measured and carried on every metric, and\nthe anatomical reading is stated per view rather than assumed.\n\nFACE_ON\n    Perpendicular to the target line, looking at the player. The shoulder\n    line lies across the frame, so rotation is measurable by foreshortening\n    and left and right are distinguishable.\nDOWN_THE_LINE\n    Along the target line. The shoulder line points towards the camera and\n    collapses, so rotation about the spine is not recoverable, and the\n    frame's horizontal axis runs towards and away from the ball.\n\n    **Which end of the target line is not determined.** A camera behind the\n    player and one in front of them foreshorten the shoulder line\n    identically, and nothing else here separates them. The measurable\n    consequences are the same either way, which is why one label covers\n    both; what it costs is the sign of anything measured along the frame's\n    horizontal axis, so those quantities are reported as image directions\n    rather than as \"towards the player\" or \"away from them\". The reference\n    clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.\nUNKNOWN\n    Oblique, or too little of the body tracked at address to tell. Not a\n    failure: an oblique camera genuinely supports some measurements and not\n    others, and saying so beats picking the nearer label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "unknown"
+      ],
+      "title": "CameraView",
+      "type": "string"
+    },
     "FrameGeometry": {
       "description": "The displayed pixel dimensions IMAGE landmarks were normalised against.\n\nCarried with the landmarks because IMAGE space is **anisotropic** and\nnothing downstream can discover that on its own. x is divided by the frame\nwidth and y by the frame height, so on a 1080x1920 clip one pixel of\nvertical travel becomes 1/1920 while one pixel of horizontal travel becomes\n1/1080: the same displacement in pixels counts for 0.5625 as much going down\nas going across. Any Euclidean quantity that mixes the two -- a distance, a\nspeed, an angle -- is wrong by an amount that depends only on the shape of\nthe frame, and nothing about the result looks wrong.\n\nOne number fixes it, and it is not recoverable from the landmarks: the\naspect ratio. It is recorded here, at the point where it is still known,\nrather than re-derived later by probing a video file that may have moved.",
       "properties": {
@@ -117,6 +127,14 @@
           },
           "type": "array"
         },
+        "view": {
+          "$ref": "#/$defs/CameraView",
+          "description": "The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing."
+        },
+        "interpretation": {
+          "description": "What the number means anatomically from this view, in words. Separate from `methodology`, which says how it was computed: the arithmetic is the same from every camera position and the meaning is not.",
+          "type": "string"
+        },
         "confidence": {
           "$ref": "#/$defs/MetricConfidence"
         },
@@ -133,6 +151,8 @@
         "unit",
         "basis",
         "source_frames",
+        "view",
+        "interpretation",
         "confidence",
         "methodology"
       ],
@@ -193,7 +213,7 @@
       "properties": {
         "min_shoulder_span_ratio": {
           "default": 0.35,
-          "description": "Projected shoulder span, in torso lengths, below which the shoulder line is too foreshortened to read a direction from. Seen face-on the span runs well over one torso length; seen down the line it collapses towards zero, and an angle taken across a few pixels is noise.",
+          "description": "Projected shoulder span at the top, in torso lengths, below which the shoulder line is too foreshortened to read a direction from -- which is what naming the lead side depends on. Measured at the top rather than at address, and so a different question from the one the view thresholds answer: a down-the-line clip has the shoulders nearly square at the top even though they were end-on at address.",
           "exclusiveMinimum": 0.0,
           "type": "number"
         },
@@ -202,6 +222,18 @@
           "description": "How far towards one shoulder the hands must sit at the top before the lead side is named. Below it, no side is reported and the metrics that need one are refused rather than assigned to a coin flip.",
           "maximum": 1.0,
           "minimum": 0.0,
+          "type": "number"
+        },
+        "face_on_span_ratio": {
+          "default": 0.55,
+          "description": "Projected shoulder width at address, in torso lengths, at or above which the camera is treated as face-on. The basis is anatomical rather than measured here: an adult's shoulder width is a fairly stable multiple of the distance from their shoulders to their hips, so a shoulder line spanning more than half of it cannot be pointing at the camera. The reference face-on clip measures 0.83.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "down_the_line_span_ratio": {
+          "default": 0.3,
+          "description": "Projected shoulder width at address, in torso lengths, at or below which the camera is treated as down-the-line. The reference down-the-line clip measures 0.10. Between this and `face_on_span_ratio` the view is reported as unknown rather than rounded to the nearer label -- an oblique camera is a real thing to have recorded, and it supports some measurements and not others.",
+          "exclusiveMinimum": 0.0,
           "type": "number"
         },
         "max_reference_excess": {
@@ -245,6 +277,7 @@
         "x_factor",
         "shoulder_tilt",
         "pelvis_tilt",
+        "hand_depth",
         "hand_path_length",
         "peak_hand_speed",
         "lead_arm_angle",
@@ -365,6 +398,52 @@
       ],
       "title": "SwingPhase",
       "type": "string"
+    },
+    "ViewEstimate": {
+      "description": "Which view a clip was shot from, and the measurements behind the verdict.\n\nDecided from the **projected width of the shoulder line at address**, in\ntorso lengths. Seen face-on the shoulders lie broadside and span most of a\ntorso length or more; seen down the line they point at the camera and\ncollapse to almost nothing. On the reference clips the two are 0.83 and 0.10,\nwhich is a margin of eight times rather than a close call.\n\n`openness` corroborates it from an independent direction, the way Phase 4\ncorroborates impact: the address span divided by the widest the line was ever\nseen in the clip is the cosine of how far off broadside it was at address. A\nswing turns the shoulders through about a right angle, so both views contain\na frame where the line is nearly square, and the two signals should agree.\nThey are kept separate because the second depends on the clip containing that\nframe and the first does not.",
+      "properties": {
+        "view": {
+          "$ref": "#/$defs/CameraView"
+        },
+        "confidence": {
+          "description": "How far clear of ambiguity the measurement sits, as a fraction of the band between the two thresholds. 1.0 is a full band clear.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "shoulder_span_ratio": {
+          "description": "Projected shoulder width at address, in torso lengths. The verdict.",
+          "type": "number"
+        },
+        "hip_span_ratio": {
+          "description": "Projected hip width at address, in torso lengths. Reported, not used.",
+          "type": "number"
+        },
+        "openness": {
+          "description": "Address shoulder span divided by the widest in the clip: the cosine of how far off broadside the shoulders were at address. Corroboration.",
+          "type": "number"
+        },
+        "frames": {
+          "description": "The address frames the spans were measured over.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "view",
+        "confidence",
+        "shoulder_span_ratio",
+        "hip_span_ratio",
+        "openness",
+        "methodology"
+      ],
+      "title": "ViewEstimate",
+      "type": "object"
     }
   },
   "description": "Everything the biomechanics engine concluded about one clip.\n\n`computed` is false when no swing was detected, and then `metrics` is empty\nrather than populated from arbitrary frames. Metrics are anchored to swing\nevents; without events there is nothing to anchor them to, and measuring a\n\"spine tilt at the top\" on a clip with no top would be inventing the instant\nand then measuring it carefully.",
@@ -387,6 +466,17 @@
         "$ref": "#/$defs/RefusedMetric"
       },
       "type": "array"
+    },
+    "view": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ViewEstimate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "lead_side": {
       "anyOf": [

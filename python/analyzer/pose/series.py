@@ -24,6 +24,7 @@ from analyzer.contracts.pose import (
     LandmarkSpace,
     PoseSequence,
 )
+from analyzer.coordinates import image_to_frame_widths, require_reachable
 
 
 @dataclass(frozen=True)
@@ -56,14 +57,29 @@ class LandmarkSeries:
 
 
 def _points_for(sequence: PoseSequence, space: LandmarkSpace) -> list[list[LandmarkPoint]]:
-    field = "image" if space is LandmarkSpace.IMAGE else "hip_local"
+    """The stored points a space is read from.
+
+    FRAME_WIDTHS is derived rather than stored, so it reads the IMAGE points and
+    is converted below. The store keeps what the estimator emitted and nothing
+    else, which is what lets a convention change here without re-extracting.
+    """
+    field = "hip_local" if space is LandmarkSpace.HIP_LOCAL else "image"
     return [getattr(frame, field) for frame in sequence.frames]
 
 
 def landmark_series(
-    sequence: PoseSequence, landmark: Landmark, space: LandmarkSpace = LandmarkSpace.IMAGE
+    sequence: PoseSequence,
+    landmark: Landmark,
+    space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS,
 ) -> LandmarkSeries:
-    """Extract one landmark's trajectory, NaN where it was not detected."""
+    """Extract one landmark's trajectory, NaN where it was not detected.
+
+    Defaults to FRAME_WIDTHS, the frame every measurement is taken in. The
+    conversion from the stored IMAGE coordinates happens here, once, below the
+    filter -- which is what makes the derivatives come out correctly signed
+    without a second correction anywhere above (see `analyzer/coordinates.py`).
+    """
+    require_reachable(space)
     count = len(sequence.frames)
     timestamps = np.empty(count, dtype=np.float64)
     values = {
@@ -84,6 +100,14 @@ def landmark_series(
         values["visibility"][row] = point.visibility
         values["presence"][row] = point.presence
 
+    if space is LandmarkSpace.FRAME_WIDTHS:
+        # NaN passes through the conversion unchanged, so an undetected frame
+        # stays undetected rather than becoming a coordinate at the origin.
+        stacked = image_to_frame_widths(
+            np.stack((values["x"], values["y"], values["z"]), axis=-1), sequence.geometry
+        )
+        values["x"], values["y"], values["z"] = (stacked[:, axis] for axis in range(3))
+
     return LandmarkSeries(
         landmark=landmark,
         space=space,
@@ -97,7 +121,7 @@ def landmark_series(
 
 
 def all_series(
-    sequence: PoseSequence, space: LandmarkSpace = LandmarkSpace.IMAGE
+    sequence: PoseSequence, space: LandmarkSpace = LandmarkSpace.FRAME_WIDTHS
 ) -> dict[Landmark, LandmarkSeries]:
     """Every landmark's trajectory, keyed by landmark."""
     return {landmark: landmark_series(sequence, landmark, space) for landmark in Landmark}

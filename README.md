@@ -6,11 +6,11 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-5 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-6 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
-> temporal filtering, swing phase detection, and the biomechanics metric engine
-> are built and verified. No club tracking, 3D reconstruction or coaching exists
-> yet. Sections below marked _Not yet implemented_ say so rather than describing
+> temporal filtering, swing phase detection, the biomechanics metric engine, and
+> explicit coordinate frames with measured camera-view tagging are built and
+> verified. No club tracking, 3D reconstruction or coaching exists yet. Sections below marked _Not yet implemented_ say so rather than describing
 > features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
@@ -42,7 +42,7 @@ apps/desktop/          Tauri 2 + React 19 + TypeScript + Tailwind 4
 packages/types/        Shared types (generated from Pydantic + hand-written IPC)
 python/analyzer/       Analysis engine
 models/                Model manifest (weights fetched, not committed)
-docs/                  Architecture, decisions, roadmap
+docs/                  Architecture, coordinate systems, decisions, roadmap
 scripts/               Bootstrap, codegen, model download, health check
 ```
 
@@ -93,7 +93,7 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 6-13 outstanding._ A clip can be imported,
+_Partially implemented — Phases 7-13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
 derivatives, segmented into swing phases, and measured — the first four from the
 app's **Video** screen, and all of them from a terminal:
@@ -184,8 +184,8 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 6-11 outstanding._ Four stages are built; what
-sits on top of them is in §10.
+_Partially implemented — Phases 7-11 outstanding._ Four stages are built; what
+sits on top of them is in §10 and §11.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -234,7 +234,55 @@ _Not yet implemented — Phases 8-9._ The system will distinguish
 `UNCALIBRATED` / `INTRINSIC_ONLY` / `STEREO_CALIBRATED` and will refuse to make
 metric-scale claims without stereo calibration.
 
-## 10. Biomechanics methodology
+## 10. Coordinate systems and camera views
+
+Every number here is a measurement taken in some reference frame, and most ways
+to get one wrong produce a plausible number rather than an error. Full
+conventions in [docs/coordinate-systems.md](docs/coordinate-systems.md).
+
+| Frame          | Units           | y    | Isotropic | Metric | Status              |
+| -------------- | --------------- | ---- | --------- | ------ | ------------------- |
+| `IMAGE`        | x/W, y/H        | down | **no**    | no     | stored              |
+| `FRAME_WIDTHS` | x/W, (H−y_px)/W | up   | yes       | no     | derived on read     |
+| `HIP_LOCAL`    | approx. metres  | up   | yes       | approx | stored              |
+| `CAMERA`       | metres          | —    | yes       | yes    | **Phase 8, absent** |
+| `WORLD`        | metres          | —    | yes       | yes    | **Phase 9, absent** |
+
+`IMAGE` is what a pose estimator emits and a bad frame to measure in, for two
+reasons that both fail silently: it is **anisotropic** (x divided by the frame
+width and y by its height, so on a 1080x1920 clip the same displacement measures
+0.5625 times as much vertically, and a line genuinely at 45° reads as 29.4°) and
+its **y points down** (so a missing flip inverts the top of the backswing into
+the bottom).
+
+`FRAME_WIDTHS` fixes both, and the conversion happens **once, below the filter**.
+That placement is the point. A consumer cannot forget it — before Phase 6 the
+correction lived above phase detection, which therefore measured hand travel in
+the uncorrected frame — and the derivatives come out right for free, because the
+filter is linear and a flip applied to positions before fitting emerges correctly
+signed in the velocity.
+
+`CAMERA` and `WORLD` are named without being implemented, which is the one place
+this project declares what it cannot do. A later phase should add the
+_capability_, not the concept; asking for either today raises an error naming the
+phase that supplies it.
+
+**Camera views are a separate question, and the one that decides what a number
+means.** The view is measured from the projected width of the shoulder line at
+address, in torso lengths — 0.83 on the face-on reference clip against 0.10 on
+the down-the-line one. Every metric carries the view it was measured in and an
+`interpretation` saying what it corresponds to on the body from there.
+
+Spine tilt is the worked example. The identical computation gives **+4.6° of
+lateral side bend** face-on and **+35.5° of forward posture angle** down the
+line. Neither is interpretable without knowing where the camera stood.
+
+Metrics a view cannot support are refused rather than relabelled: shoulder turn,
+pelvis turn and X-factor down the line, hand depth face-on. An oblique camera is
+reported as `UNKNOWN` rather than rounded to the nearer label, and then nothing
+is blocked by the view alone — each metric's own conditions decide.
+
+## 11. Biomechanics methodology
 
 Every metric carries a name, a value, a unit, the swing event or phase it was
 measured at, the frames it came from, a three-part confidence, and a methodology
@@ -270,7 +318,7 @@ exactly why `sin θ` is the confidence factor rather than a number someone chose
 the player square to the camera at address. If the body line projects more than
 1.25× wider anywhere in the clip than it did at address, that did not happen,
 and the rotation metrics are refused with the measured ratio in the reason. On
-the reference footage the two cases are not close: 1.12× face-on against 10.61×
+the reference footage the two cases are not close: 1.12× face-on against 7.2×
 down-the-line.
 
 **Confidence is three measured factors and their product**, matching how Phase 4
@@ -311,7 +359,7 @@ backswing, downswing, follow-through and takeaway-to-impact durations with the
 tempo ratio. Each is declared once, with its unit and basis, so a unit written
 next to a computation cannot drift from the one in the documentation.
 
-## 11. Model architecture
+## 12. Model architecture
 
 _No model is trained — Phase 12._ No accuracy figure will be published without a
 real labelled evaluation set with session- and player-grouped splits.
@@ -328,7 +376,7 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
-## 12. Testing
+## 13. Testing
 
 ```bash
 npm run check:all
@@ -336,12 +384,12 @@ npm run check:all
 
 | Suite      | Count | Scope                                                                                                                      |
 | ---------- | ----- | -------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 542   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
+| pytest     | 588   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics |
 | cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                  |
 | Vitest     | 73    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector                        |
 | Playwright | 21    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection                             |
 
-All 648 pass as of Phase 5.
+All 694 pass as of Phase 6.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -411,7 +459,7 @@ CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
 
-## 13. Performance benchmarks
+## 14. Performance benchmarks
 
 Measured on the reference machine. Every figure here came out of a script in
 `scripts/`; none is estimated.
@@ -505,22 +553,24 @@ the two reference swings at a 0.15 s window):
 
 | Clip           | Frames | Filter  | Phases | Metrics | Produced | Refused |
 | -------------- | ------ | ------- | ------ | ------- | -------- | ------- |
-| PW_face-on.mp4 | 68     | 17.9 ms | 0.3 ms | 1.9 ms  | 39       | 0       |
-| iron_dtl.mp4   | 96     | 20.5 ms | 0.3 ms | 1.6 ms  | 33       | 3       |
+| PW_face-on.mp4 | 68     | 17.8 ms | 0.3 ms | 2.1 ms  | 39       | 1       |
+| iron_dtl.mp4   | 96     | 19.9 ms | 0.3 ms | 1.8 ms  | 35       | 3       |
 
 Against ~1.3 s to extract poses for the same clip. Filtering dominates the three
 because it fits a polynomial at every sample of 33 landmarks, while the metric
 layer reads a few dozen frames of a result already in memory. Nothing downstream
 of extraction is cached, for the same measured reason as Phase 3.
 
-The last two columns are the more interesting measurement. The down-the-line
-clip refuses shoulder turn, pelvis turn and X-factor, because its shoulders
-project 0.07 torso lengths at address and 10.61 times that mid-swing — that view
-does not contain the measurement, and the count says so.
+The last two columns are the more interesting measurement, and they run both
+ways. The down-the-line clip refuses shoulder turn, pelvis turn and X-factor,
+because that view does not contain them; the face-on clip refuses hand depth,
+because the axis it measures along runs along the target line there and is a
+different quantity under the same name. Each clip measures what its camera
+position supports and says what it cannot.
 
 A general benchmark harness arrives in Phase 17.
 
-## 14. Limitations
+## 15. Limitations
 
 - **macOS/Apple silicon only, so far.** Nothing is known to be Windows- or
   Linux-incompatible, but neither has been tested, and the MediaPipe wheel
@@ -561,17 +611,21 @@ A general benchmark harness arrives in Phase 17.
   kinematic estimate with a known bias in a known direction. It is corroborated
   against the lowest point of the hand arc, and Phases 10-11 will replace that
   with club and ball evidence.
-- **Phase 4's own distances are still anisotropic.** IMAGE space normalises x by
-  frame width and y by frame height, so on a 1080x1920 clip a vertical distance
-  counts for 0.5625 of a horizontal one of the same size in pixels. Phase 5
-  fixed this for everything it measures — `PoseSequence` now carries the display
-  dimensions and the biomechanics layer works in isotropic frame widths — but
-  the correction has not been pushed below it, so hand speed, hand travel and
-  torso length as reported by phase detection still mix the two. Phase 4
-  survives it because its gate is a ratio of two such distances, which partly
-  cancels, and because locating a maximum tolerates an anisotropic scaling. One
-  visible consequence: `SwingPhases.hand.torso_length` and
-  `MetricSet.torso_length` disagree on the same clip. Phase 6.1a reconciles them.
+- **Nothing here is metric.** Lengths are in torso lengths and the frame they
+  are measured in is the frame's own width. The same swing filmed from twice the
+  distance gives the same torso-length numbers and different frame-width ones,
+  which is the point — but neither is centimetres, and nothing here can produce
+  centimetres until a calibrated camera does in Phase 8.
+- **The camera view is inferred from one measurement.** The shoulder line's
+  projected width at address separates face-on from down-the-line by a factor of
+  eight on the reference clips, which is a wide margin, but it is one signal and
+  its thresholds rest on an anatomical assumption — that shoulder width is a
+  fairly stable multiple of torso length — rather than on a labelled set.
+- **`DOWN_THE_LINE` does not say which end of the target line.** A camera behind
+  the player and one in front foreshorten the shoulder line identically. The
+  measurable consequences are the same, but the sign of anything measured along
+  the frame's horizontal axis is therefore an image direction rather than an
+  anatomical one.
 - **Nothing in the metric layer sees three dimensions.** Every angle is a
   projection and every distance is an image-plane distance, including the ones
   named after 3D quantities. Motion directly towards or away from the camera
@@ -619,20 +673,18 @@ A general benchmark harness arrives in Phase 17.
   prefer.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
-## 15. Future work
+## 16. Future work
 
-Phases 6-20: DTL analysis and explicit coordinate systems, two-camera
-synchronisation, camera calibration, 3D reconstruction, club tracking, ball
+Phases 7-20: two-camera synchronisation, camera calibration, 3D reconstruction, club tracking, ball
 detection, temporal ML, the coaching engine, desktop visualisation, 3D
 rendering, swing comparison, performance work, model management, test hardening
 and documentation. Sequencing, deliverables, and exit criteria per phase are in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
-The next one carries a debt from this one: the aspect-ratio correction that
-makes distances isotropic is applied in the biomechanics layer, not below it, so
-phase detection still measures in a space where vertical and horizontal
-distances count differently. Phase 6.1a moves it down and re-measures Phase 4's
-thresholds against the result.
+Phase 6 cleared the debt Phase 5 carried: the aspect correction now happens once
+below the filter, so phase detection and the metric layer measure in the same
+isotropic frame and their two `torso_length` figures agree. Phase 7 begins the
+two-camera work that eventually makes the projections in §11 unnecessary.
 
 ## Licence
 

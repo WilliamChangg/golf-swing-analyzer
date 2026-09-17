@@ -1,32 +1,21 @@
-"""Vector and angle primitives, and the coordinate space they operate in.
+"""Vector and angle primitives for the biomechanics layer.
 
-Everything above this module measures angles and distances. Nothing above it
-touches a raw landmark coordinate, because raw landmark coordinates are in a
-space where the obvious arithmetic gives the wrong answer twice over.
+Pure geometry: everything here takes points and returns lengths and angles, and
+nothing knows what a swing is or which frame the points arrived in.
 
-## The two corrections, both applied exactly once, here
+That last part is new in Phase 6. This module used to own the conversion out of
+IMAGE coordinates as well -- the aspect correction and the y flip -- which made
+it the one place those could be applied and also the place a metric module had
+to remember to go through. Both now happen once below the filter, in
+`analyzer/coordinates.py`, so every layer above receives FRAME_WIDTHS: isotropic,
+upward-positive, and the same frame the phase detector reads. The functions
+below simply assume that, which is why none of them takes a `FrameGeometry` any
+more.
 
-**IMAGE space is anisotropic.** x is normalised by the frame width and y by the
-frame height. On a 1080x1920 clip the same displacement in pixels comes out
-0.5625 times as large going down as going across, so a Euclidean distance mixing
-the two is wrong, and an angle taken from them is wrong by a factor that depends
-on the shape of the frame. A shoulder line genuinely tilted at 45 degrees reads
-as 29.4 degrees on a portrait clip, and nothing about the number looks wrong.
-`plane_coordinates` multiplies y by the frame's aspect ratio, which puts both
-axes in **frame widths**: an isotropic unit in which a displacement measures the
-same whichever way it points.
-
-**IMAGE space points down.** y increases towards the bottom of the frame, so
-larger y is lower. Every metric here is about something being high or low, or
-tilted one way or the other, and a sign error would invert all of them without
-failing anywhere. `plane_coordinates` flips it, once, and no function in this
-package reads a raw y again.
-
-The z channel is dropped rather than corrected. In IMAGE space it is MediaPipe's
-own depth estimate from a single camera, on an unstated scale; a distance that
-included it would mix a measured quantity with a guessed one inside one number
-and offer no way to tell afterwards which part was which. Real depth arrives in
-Phase 9 from triangulation against a calibrated pair.
+The z channel never reaches here. In a single-camera recording it is MediaPipe's
+own depth guess on an unstated scale, and a distance that included it would mix a
+measured quantity with a guessed one inside one number with no way to tell
+afterwards which part was which. Real depth arrives in Phase 9.
 
 ## Conventions
 
@@ -40,28 +29,6 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-
-from analyzer.contracts.pose import FrameGeometry
-
-
-def plane_coordinates(
-    position: NDArray[np.float64], geometry: FrameGeometry
-) -> NDArray[np.float64]:
-    """Convert IMAGE landmarks to isotropic, upward-positive plane coordinates.
-
-    Takes `(..., 2)` or `(..., 3)` normalised IMAGE coordinates and returns
-    `(..., 2)` in frame widths with y increasing upwards. Both corrections
-    described in the module docstring happen here and nowhere else.
-
-    The origin lands at the bottom-left of the frame. Nothing downstream depends
-    on that -- every quantity built from these is a difference, a distance or an
-    angle, all of which are unchanged by where the origin sits -- but it does
-    make a y value readable on its own as a height above the bottom of the frame.
-    """
-    aspect = geometry.aspect_ratio
-    x = position[..., 0]
-    y = (1.0 - position[..., 1]) * aspect
-    return np.stack((x, y), axis=-1)
 
 
 def lengths(vectors: NDArray[np.float64]) -> NDArray[np.float64]:

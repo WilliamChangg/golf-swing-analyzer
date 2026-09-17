@@ -139,6 +139,7 @@ class MetricName(StrEnum):
     PELVIS_TILT = "pelvis_tilt"
 
     # --- hands and arms ---
+    HAND_DEPTH = "hand_depth"
     HAND_PATH_LENGTH = "hand_path_length"
     PEAK_HAND_SPEED = "peak_hand_speed"
     LEAD_ARM_ANGLE = "lead_arm_angle"
@@ -155,6 +156,89 @@ class MetricName(StrEnum):
 class BodySide(StrEnum):
     LEFT = "left"
     RIGHT = "right"
+
+
+class CameraView(StrEnum):
+    """Where the camera stood relative to the player.
+
+    The single fact that decides what a projected measurement *means*. The same
+    spine tilt is lateral side bend seen face-on and forward posture angle seen
+    down the line; the same hip displacement is a slide towards the target in one
+    and a move towards the ball in the other. Nothing in the arithmetic
+    distinguishes them, so the view is measured and carried on every metric, and
+    the anatomical reading is stated per view rather than assumed.
+
+    FACE_ON
+        Perpendicular to the target line, looking at the player. The shoulder
+        line lies across the frame, so rotation is measurable by foreshortening
+        and left and right are distinguishable.
+    DOWN_THE_LINE
+        Along the target line. The shoulder line points towards the camera and
+        collapses, so rotation about the spine is not recoverable, and the
+        frame's horizontal axis runs towards and away from the ball.
+
+        **Which end of the target line is not determined.** A camera behind the
+        player and one in front of them foreshorten the shoulder line
+        identically, and nothing else here separates them. The measurable
+        consequences are the same either way, which is why one label covers
+        both; what it costs is the sign of anything measured along the frame's
+        horizontal axis, so those quantities are reported as image directions
+        rather than as "towards the player" or "away from them". The reference
+        clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.
+    UNKNOWN
+        Oblique, or too little of the body tracked at address to tell. Not a
+        failure: an oblique camera genuinely supports some measurements and not
+        others, and saying so beats picking the nearer label.
+    """
+
+    FACE_ON = "face_on"
+    DOWN_THE_LINE = "down_the_line"
+    UNKNOWN = "unknown"
+
+
+class ViewEstimate(BaseModel):
+    """Which view a clip was shot from, and the measurements behind the verdict.
+
+    Decided from the **projected width of the shoulder line at address**, in
+    torso lengths. Seen face-on the shoulders lie broadside and span most of a
+    torso length or more; seen down the line they point at the camera and
+    collapse to almost nothing. On the reference clips the two are 0.83 and 0.10,
+    which is a margin of eight times rather than a close call.
+
+    `openness` corroborates it from an independent direction, the way Phase 4
+    corroborates impact: the address span divided by the widest the line was ever
+    seen in the clip is the cosine of how far off broadside it was at address. A
+    swing turns the shoulders through about a right angle, so both views contain
+    a frame where the line is nearly square, and the two signals should agree.
+    They are kept separate because the second depends on the clip containing that
+    frame and the first does not.
+    """
+
+    view: CameraView
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description=(
+            "How far clear of ambiguity the measurement sits, as a fraction of "
+            "the band between the two thresholds. 1.0 is a full band clear."
+        ),
+    )
+    shoulder_span_ratio: float = Field(
+        description="Projected shoulder width at address, in torso lengths. The verdict."
+    )
+    hip_span_ratio: float = Field(
+        description="Projected hip width at address, in torso lengths. Reported, not used."
+    )
+    openness: float = Field(
+        description=(
+            "Address shoulder span divided by the widest in the clip: the cosine "
+            "of how far off broadside the shoulders were at address. Corroboration."
+        )
+    )
+    frames: list[int] = Field(
+        default_factory=list, description="The address frames the spans were measured over."
+    )
+    methodology: str
 
 
 class MetricConfidence(BaseModel):
@@ -218,6 +302,22 @@ class Metric(BaseModel):
         description=(
             "Every frame whose landmarks entered this value, so it can be checked "
             "against the video rather than taken on trust."
+        )
+    )
+    view: CameraView = Field(
+        description=(
+            "The camera view this was measured in. Carried on every metric "
+            "because a projected quantity means different things from different "
+            "places, and two clips of the same swing must never be compared "
+            "across views as though the numbers described the same thing."
+        )
+    )
+    interpretation: str = Field(
+        description=(
+            "What the number means anatomically from this view, in words. "
+            "Separate from `methodology`, which says how it was computed: the "
+            "arithmetic is the same from every camera position and the meaning "
+            "is not."
         )
     )
     confidence: MetricConfidence
@@ -329,10 +429,12 @@ class MetricConfig(BaseModel, extra="forbid"):
         default=0.35,
         gt=0.0,
         description=(
-            "Projected shoulder span, in torso lengths, below which the shoulder "
-            "line is too foreshortened to read a direction from. Seen face-on the "
-            "span runs well over one torso length; seen down the line it collapses "
-            "towards zero, and an angle taken across a few pixels is noise."
+            "Projected shoulder span at the top, in torso lengths, below which the "
+            "shoulder line is too foreshortened to read a direction from -- which "
+            "is what naming the lead side depends on. Measured at the top rather "
+            "than at address, and so a different question from the one the view "
+            "thresholds answer: a down-the-line clip has the shoulders nearly "
+            "square at the top even though they were end-on at address."
         ),
     )
     min_lead_side_margin: float = Field(
@@ -343,6 +445,30 @@ class MetricConfig(BaseModel, extra="forbid"):
             "How far towards one shoulder the hands must sit at the top before the "
             "lead side is named. Below it, no side is reported and the metrics that "
             "need one are refused rather than assigned to a coin flip."
+        ),
+    )
+    face_on_span_ratio: float = Field(
+        default=0.55,
+        gt=0.0,
+        description=(
+            "Projected shoulder width at address, in torso lengths, at or above "
+            "which the camera is treated as face-on. The basis is anatomical "
+            "rather than measured here: an adult's shoulder width is a fairly "
+            "stable multiple of the distance from their shoulders to their hips, "
+            "so a shoulder line spanning more than half of it cannot be pointing "
+            "at the camera. The reference face-on clip measures 0.83."
+        ),
+    )
+    down_the_line_span_ratio: float = Field(
+        default=0.30,
+        gt=0.0,
+        description=(
+            "Projected shoulder width at address, in torso lengths, at or below "
+            "which the camera is treated as down-the-line. The reference "
+            "down-the-line clip measures 0.10. Between this and "
+            "`face_on_span_ratio` the view is reported as unknown rather than "
+            "rounded to the nearer label -- an oblique camera is a real thing to "
+            "have recorded, and it supports some measurements and not others."
         ),
     )
     max_reference_excess: float = Field(
@@ -383,6 +509,7 @@ class MetricSet(BaseModel):
     computed: bool
     metrics: list[Metric] = Field(default_factory=list)
     refused: list[RefusedMetric] = Field(default_factory=list)
+    view: ViewEstimate | None = None
     lead_side: LeadSide | None = None
     references: list[RotationReference] = Field(default_factory=list)
     torso_length: float = Field(

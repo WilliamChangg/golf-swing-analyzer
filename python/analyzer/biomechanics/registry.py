@@ -26,12 +26,13 @@ can never be more trustworthy than the instant it claims to describe.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
 
 from analyzer.contracts.metrics import (
+    CameraView,
     Metric,
     MetricBasis,
     MetricConfidence,
@@ -41,6 +42,11 @@ from analyzer.contracts.metrics import (
 )
 from analyzer.contracts.phases import SwingEvent, SwingPhase
 from analyzer.contracts.pose import Landmark
+
+_NO_VIEW_MEANING = (
+    "A projected measurement whose anatomical reading depends on where the camera "
+    "stood, which this clip did not establish."
+)
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,45 @@ class MetricDefinition:
     the interval -- "backswing duration over the backswing" tells a reader
     nothing they did not have.
     """
+
+    refused_in: frozenset[CameraView] = frozenset()
+    """Views this quantity is known not to be measurable from.
+
+    Not "views it is supported in": UNKNOWN must not appear here, because an
+    oblique camera is a reason to let a metric's own checks decide rather than a
+    reason to refuse outright. Rotation is listed against DOWN_THE_LINE because
+    that view genuinely does not contain it, and hand depth against FACE_ON for
+    the same reason in the other direction.
+    """
+
+    meanings: Mapping[CameraView, str] = field(default_factory=dict)
+    """What the number means anatomically, per view.
+
+    The reason `CameraView` exists. A spine tilt measured face-on is side bend
+    and the identical computation down the line is forward posture angle; a
+    consumer handed only the number and the unit would have no way to tell, and
+    would be equally convinced either way.
+    """
+
+    meaning: str = ""
+    """What the number means when the view does not change it.
+
+    A duration is a duration from anywhere, and a knee is bent by the same amount
+    whichever side it is seen from. Declaring these separately keeps `meanings`
+    for the quantities where the view genuinely decides, and stops a reader
+    inferring from a shared string that two views had been checked and found to
+    agree.
+    """
+
+    def interpretation(self, view: CameraView) -> str:
+        """The anatomical reading for a view, or a statement that there is not one."""
+        specific = self.meanings.get(view)
+        if specific is not None:
+            return specific
+        return self.meaning or _NO_VIEW_MEANING
+
+    def refuses(self, view: CameraView) -> bool:
+        return view in self.refused_in
 
 
 @dataclass(frozen=True)
@@ -99,6 +144,17 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "that is depends on where the camera stood, which this phase does not "
             "know: face-on it is side bend, down the line it is forward bend."
         ),
+        meanings={
+            CameraView.FACE_ON: (
+                "Lateral spine tilt -- side bend away from the target. At address a "
+                "few degrees away from the target is ordinary, because the trail "
+                "hand sits lower on the grip."
+            ),
+            CameraView.DOWN_THE_LINE: (
+                "Forward spine tilt -- the posture angle the player bends over the "
+                "ball with, and how much of it survives to impact."
+            ),
+        },
     ),
     MetricDefinition(
         name=MetricName.LEFT_KNEE_FLEX,
@@ -107,6 +163,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.DEGREES,
         basis=MetricBasis.PROJECTED_ANGLE,
         summary="180 degrees minus the projected hip-knee-ankle angle. Zero is a straight leg.",
+        meaning="How much the left knee is bent, as this camera sees it.",
     ),
     MetricDefinition(
         name=MetricName.RIGHT_KNEE_FLEX,
@@ -115,6 +172,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.DEGREES,
         basis=MetricBasis.PROJECTED_ANGLE,
         summary="180 degrees minus the projected hip-knee-ankle angle. Zero is a straight leg.",
+        meaning="How much the right knee is bent, as this camera sees it.",
     ),
     MetricDefinition(
         name=MetricName.HIP_SWAY,
@@ -126,6 +184,16 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "Sideways travel of the hip midpoint from where it sat at address, "
             "positive towards the right of the frame."
         ),
+        meanings={
+            CameraView.FACE_ON: (
+                "Lateral hip slide along the target line -- how far the hips "
+                "travelled towards or away from the target."
+            ),
+            CameraView.DOWN_THE_LINE: (
+                "Hip travel towards or away from the ball, which is early extension "
+                "when it goes towards the camera through the downswing."
+            ),
+        },
     ),
     MetricDefinition(
         name=MetricName.HEAD_SWAY,
@@ -134,6 +202,10 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.TORSO_LENGTHS,
         basis=MetricBasis.IMAGE_PLANE,
         summary="Sideways travel of the nose from its address position.",
+        meanings={
+            CameraView.FACE_ON: "Head movement along the target line, off the ball and back.",
+            CameraView.DOWN_THE_LINE: "Head movement towards or away from the ball.",
+        },
     ),
     MetricDefinition(
         name=MetricName.HEAD_LIFT,
@@ -142,6 +214,10 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.TORSO_LENGTHS,
         basis=MetricBasis.IMAGE_PLANE,
         summary="Vertical travel of the nose from its address position, positive upwards.",
+        meanings={
+            CameraView.FACE_ON: "Rise and fall of the head. Vertical, so both views agree.",
+            CameraView.DOWN_THE_LINE: "Rise and fall of the head. Vertical, so both views agree.",
+        },
     ),
     # --- rotation --------------------------------------------------------
     MetricDefinition(
@@ -155,6 +231,12 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "address, inferred from how much it shortened. A magnitude: the "
             "method cannot tell a turn from its mirror image."
         ),
+        refused_in=frozenset({CameraView.DOWN_THE_LINE}),
+        meanings={
+            CameraView.FACE_ON: (
+                "How far the shoulders have turned away from square, about the spine."
+            )
+        },
     ),
     MetricDefinition(
         name=MetricName.PELVIS_TURN,
@@ -163,6 +245,8 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.DEGREES,
         basis=MetricBasis.FORESHORTENED_ANGLE,
         summary="The same measurement made on the hip line.",
+        refused_in=frozenset({CameraView.DOWN_THE_LINE}),
+        meanings={CameraView.FACE_ON: "How far the hips have turned away from square."},
     ),
     MetricDefinition(
         name=MetricName.X_FACTOR,
@@ -176,6 +260,13 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "that both terms are magnitudes -- it says how far apart they are, "
             "not which way either went."
         ),
+        refused_in=frozenset({CameraView.DOWN_THE_LINE}),
+        meanings={
+            CameraView.FACE_ON: (
+                "Separation between the shoulders and the hips -- how much the upper "
+                "body has outrun the lower."
+            )
+        },
     ),
     MetricDefinition(
         name=MetricName.SHOULDER_TILT,
@@ -190,6 +281,16 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "is the higher one -- an image-frame statement, not an anatomical "
             "one: which shoulder that is depends on which way the player faces."
         ),
+        meanings={
+            CameraView.FACE_ON: (
+                "Shoulder tilt across the target line: the lead shoulder high at "
+                "address, and the trail shoulder dropping through the downswing."
+            ),
+            CameraView.DOWN_THE_LINE: (
+                "Apparent shoulder tilt seen end-on, which is mostly a reading of "
+                "how the shoulder line is turning rather than of how it is tilted."
+            ),
+        },
     ),
     MetricDefinition(
         name=MetricName.PELVIS_TILT,
@@ -198,8 +299,32 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.DEGREES,
         basis=MetricBasis.PROJECTED_ANGLE,
         summary="The same measurement made on the hip line.",
+        meaning="Tilt of the hip line away from level in the picture.",
     ),
     # --- hands and arms --------------------------------------------------
+    MetricDefinition(
+        name=MetricName.HAND_DEPTH,
+        group=MetricGroup.ARMS,
+        label="Hand depth",
+        unit=MetricUnit.TORSO_LENGTHS,
+        basis=MetricBasis.IMAGE_PLANE,
+        summary=(
+            "Travel of the hands along the frame's horizontal axis from where "
+            "they sat at address. Only meaningful down the line, where that axis "
+            "runs towards and away from the ball; seen face-on the same axis runs "
+            "along the target line and the quantity is a different one."
+        ),
+        refused_in=frozenset({CameraView.FACE_ON}),
+        meanings={
+            CameraView.DOWN_THE_LINE: (
+                "How far the hands moved towards or away from the ball -- whether "
+                "they stayed on the plane they started on or came off it. Positive "
+                "is towards the right of the frame; which side of the player that "
+                "is depends on which end of the target line the camera sat, which "
+                "this build does not determine."
+            )
+        },
+    ),
     MetricDefinition(
         name=MetricName.HAND_PATH_LENGTH,
         group=MetricGroup.ARMS,
@@ -211,6 +336,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "frame rather than measured end to end, so an arc is not reported as "
             "its chord."
         ),
+        meaning="How far the hands travelled, measured along their path.",
     ),
     MetricDefinition(
         name=MetricName.PEAK_HAND_SPEED,
@@ -223,6 +349,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "lengths per second rather than frame widths per second, so it is "
             "comparable between recordings made at different distances."
         ),
+        meaning="Fastest the hands moved through the downswing.",
     ),
     MetricDefinition(
         name=MetricName.LEAD_ARM_ANGLE,
@@ -234,6 +361,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "Projected shoulder-elbow-wrist angle on the leading side. "
             "180 degrees is a straight arm."
         ),
+        meaning="How straight the leading arm is -- 180 degrees is fully extended.",
     ),
     MetricDefinition(
         name=MetricName.TRAIL_ARM_ANGLE,
@@ -242,6 +370,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.DEGREES,
         basis=MetricBasis.PROJECTED_ANGLE,
         summary="The same measurement made on the trailing side.",
+        meaning="How folded the trailing arm is -- 180 degrees is fully extended.",
     ),
     # --- timing ----------------------------------------------------------
     MetricDefinition(
@@ -252,6 +381,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.SECONDS,
         basis=MetricBasis.TEMPORAL,
         summary="Takeaway to top, from the clip's presentation timestamps.",
+        meaning="Time from the takeaway to the top. A clock reading; the camera position does not enter it.",
     ),
     MetricDefinition(
         name=MetricName.DOWNSWING_DURATION,
@@ -261,6 +391,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.SECONDS,
         basis=MetricBasis.TEMPORAL,
         summary="Top to the estimated impact.",
+        meaning="Time from the top to impact. A clock reading; the camera position does not enter it.",
     ),
     MetricDefinition(
         name=MetricName.FOLLOW_THROUGH_DURATION,
@@ -270,6 +401,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.SECONDS,
         basis=MetricBasis.TEMPORAL,
         summary="Impact to the finish.",
+        meaning="Time from impact to the finish. A clock reading; the camera position does not enter it.",
     ),
     MetricDefinition(
         name=MetricName.TAKEAWAY_TO_IMPACT,
@@ -279,6 +411,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
         unit=MetricUnit.SECONDS,
         basis=MetricBasis.TEMPORAL,
         summary="The whole swing, from the hands first moving to the estimated impact.",
+        meaning="Time for the whole swing. A clock reading; the camera position does not enter it.",
     ),
     MetricDefinition(
         name=MetricName.TEMPO_RATIO,
@@ -292,6 +425,7 @@ _DEFINITIONS: tuple[MetricDefinition, ...] = (
             "is the one quantity here that a frame rate, a camera position and a "
             "subject's size all leave completely alone."
         ),
+        meaning="Backswing against downswing. Unitless and view-independent: the one number here no camera position can distort.",
     ),
 )
 
@@ -378,6 +512,7 @@ def build_metric(
     value: float,
     anchor: Anchor,
     *,
+    view: CameraView,
     source_frames: Sequence[int],
     observation: float,
     method: float,
@@ -385,11 +520,15 @@ def build_metric(
 ) -> Metric:
     """Assemble a `Metric` from its declaration and one measurement.
 
-    The unit, basis, group and label come from the registry; only the value, the
-    anchor and the confidence factors come from the caller. `overall` is the
-    product of the three factors, as in Phase 4 and for the same reason: a metric
-    needs all of them, and a product says so where an average would let a strong
-    factor cover for a fatal one.
+    The unit, basis, group, label and the anatomical reading for this view all
+    come from the registry; only the value, the anchor and the confidence factors
+    come from the caller. `overall` is the product of the three factors, as in
+    Phase 4 and for the same reason: a metric needs all of them, and a product
+    says so where an average would let a strong factor cover for a fatal one.
+
+    `view` is required rather than defaulted. A projected number whose camera
+    position is unrecorded is one a consumer will interpret anyway, and getting
+    it wrong turns side bend into forward bend without anything looking amiss.
     """
     entry = definition(name)
     factors = tuple(float(np.clip(f, 0.0, 1.0)) for f in (observation, anchor.confidence, method))
@@ -404,6 +543,8 @@ def build_metric(
         event=anchor.event,
         phase=anchor.phase,
         source_frames=list(source_frames),
+        view=view,
+        interpretation=entry.interpretation(view),
         confidence=MetricConfidence(
             overall=float(np.clip(factors[0] * factors[1] * factors[2], 0.0, 1.0)),
             observation=factors[0],
@@ -441,6 +582,7 @@ def measure_series(
     series: NDArray[np.float64],
     anchor: Anchor,
     *,
+    view: CameraView,
     visibility: Mapping[Landmark, NDArray[np.float64]],
     landmarks: Sequence[Landmark],
     method: float | NDArray[np.float64],
@@ -471,6 +613,7 @@ def measure_series(
         name,
         value,
         anchor,
+        view=view,
         source_frames=frames,
         observation=observation_factor(visibility, landmarks, frames),
         method=method_factor,

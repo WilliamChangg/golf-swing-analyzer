@@ -12,4 +12,4 @@ export type { HashAlgorithm, TimestampSource, VideoMetadata, ContentKey, VideoSt
 export type { PoseExtractionResult, PoseModelInfo, PoseExtractionStats } from "./PoseExtractionResult";
 export type { ProgressUpdate } from "./ProgressUpdate";
 export type { SwingEvent, SwingPhase, HandSource, SwingPhases, DetectedEvent, EventConfidence, DetectedPhase, HandSignalInfo, PhaseConfig } from "./SwingPhases";
-export type { MetricName, MetricGroup, MetricUnit, MetricBasis, BodySide, MetricSet, Metric, MetricConfidence, RefusedMetric, LeadSide, RotationReference, FrameGeometry, MetricConfig } from "./MetricSet";
+export type { MetricName, MetricGroup, MetricUnit, MetricBasis, CameraView, BodySide, MetricSet, Metric, MetricConfidence, RefusedMetric, ViewEstimate, LeadSide, RotationReference, FrameGeometry, MetricConfig } from "./MetricSet";

@@ -36,7 +36,7 @@ from analyzer.biomechanics.registry import (
     in_plane_fraction,
     measure_series,
 )
-from analyzer.contracts.metrics import Metric, RefusedMetric
+from analyzer.contracts.metrics import CameraView, Metric, RefusedMetric
 from analyzer.contracts.pose import Landmark
 
 _STRAIGHT_LEG_DEG = 180.0
@@ -101,7 +101,9 @@ def _displacement(
     return body.in_torso_lengths(positions[:, axis] - origin[axis])
 
 
-def metrics(body: Body, anchors: Anchors) -> tuple[list[Metric], list[RefusedMetric]]:
+def metrics(
+    body: Body, anchors: Anchors, view: CameraView
+) -> tuple[list[Metric], list[RefusedMetric]]:
     """Every posture metric this clip supports, and the reasons for those it does not."""
     produced: list[Metric] = []
     refused: list[RefusedMetric] = []
@@ -117,6 +119,7 @@ def metrics(body: Body, anchors: Anchors) -> tuple[list[Metric], list[RefusedMet
             MetricName.SPINE_TILT,
             tilt,
             anchor,
+            view=view,
             visibility=body.visibility,
             landmarks=_SPINE_LANDMARKS,
             method=tilt_plane,
@@ -136,6 +139,7 @@ def metrics(body: Body, anchors: Anchors) -> tuple[list[Metric], list[RefusedMet
                 name,
                 series,
                 anchor,
+                view=view,
                 visibility=body.visibility,
                 landmarks=_KNEES[name],
                 method=plane,
@@ -197,6 +201,7 @@ def metrics(body: Body, anchors: Anchors) -> tuple[list[Metric], list[RefusedMet
                 name,
                 masked,
                 anchor,
+                view=view,
                 visibility=body.visibility,
                 landmarks=landmarks,
                 # An image-plane displacement is exactly what it claims to be: the
