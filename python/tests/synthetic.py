@@ -60,12 +60,22 @@ ARC_TOP_ANGLE = 2.2
 # The torso has to be real: detection judges hand travel in torso lengths, so a
 # fixture with every landmark stacked on one point has no scale to measure
 # against and every ratio it produces is meaningless.
+#
+# The ankles are on the ground, and they are here for Phase 11: a teed ball rests
+# on the ground, so the ball search region is anchored at the ankle midpoint
+# rather than at the hands. Without them every landmark this fixture does not
+# name falls back to a single point near the top of the frame, and a region
+# anchored there would search the sky -- which is precisely the failure the real
+# footage produced and the anchor exists to avoid.
 TORSO_LENGTH = 0.25
+GROUND_Y = 0.95
 BODY: dict[int, tuple[float, float]] = {
     int(Landmark.LEFT_SHOULDER): (0.45, 0.25),
     int(Landmark.RIGHT_SHOULDER): (0.55, 0.25),
     int(Landmark.LEFT_HIP): (0.46, 0.25 + TORSO_LENGTH),
     int(Landmark.RIGHT_HIP): (0.54, 0.25 + TORSO_LENGTH),
+    int(Landmark.LEFT_ANKLE): (0.46, GROUND_Y),
+    int(Landmark.RIGHT_ANKLE): (0.54, GROUND_Y),
 }
 
 

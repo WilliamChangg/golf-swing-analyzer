@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from analyzer.contracts.ball import BallConfig
 from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
 from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.club import ClubConfig
@@ -1130,6 +1131,256 @@ def _track_club(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel
         raise _unsupported_input(exc, exc.remediation) from exc
 
 
+# --- ball detection and impact fusion (Phase 11) --------------------------
+
+
+class DetectBallParams(BaseModel, extra="forbid"):
+    """Parameters for `detect_ball`.
+
+    `path` is a **video** for `TrackClubParams`' reason: this measures pixels, and
+    a stored pose sequence does not contain any. The landmarks are still needed --
+    they say where the player is standing, which is where the search region goes --
+    so they are resolved from the content-keyed cache the way every other method
+    does.
+    """
+
+    path: str = Field(description="Absolute path to the video file. Not a pose Parquet.")
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction places the search region. None uses the default.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy for the hand trajectory the region is anchored on.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description=(
+            "Structural bounds a motion must satisfy to be reported as a swing. A "
+            "detected swing is what lets the departure be checked against where a "
+            "strike can happen, and what restricts the identification to the "
+            "frames before the top; a clip with no swing in it is still searched, "
+            "and says so."
+        ),
+    )
+    ball: BallConfig = Field(
+        default_factory=BallConfig, description="Search geometry, and when to emit nothing."
+    )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. It reaches this "
+            "layer through the timestamps, which decide the permanence window and "
+            "the interval the departure is bracketed by."
+        ),
+    )
+
+
+def _ball_inputs(parsed: DetectBallParams, reporter: ProgressReporter) -> tuple[Path, Any, Any]:
+    """Resolve a clip to its filtered landmarks and detected phases.
+
+    Shared by `detect_ball` and `locate_impact`, which need exactly the same
+    preparation. Kept as a function rather than duplicated because the two would
+    otherwise drift on the one detail that matters: `detect_phases` failing is not
+    fatal here, and a copy that forgot would refuse the clips this layer is most
+    useful on.
+    """
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Ball detection reads the video, not a pose file: a ball is found in the "
+                "pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself. Its landmarks are resolved from the cache automatically.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
+    )
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        # Not fatal, for `_track_club`'s reason: the ball is in the frame whether
+        # or not the motion around it is called a swing. What is lost is the gate,
+        # and the report says so rather than quietly reporting an ungated instant
+        # as if it had been checked.
+        detected = None
+    return source, filtered, detected
+
+
+def _detect_ball(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Find the ball in a clip and the frame at which it stopped being there.
+
+    **No lens correction is applied, for `_track_club`'s reason and one more.**
+    The detector searches the raw frame, so an undistorted anchor would point at a
+    place in the image where the player is not. The extra reason is specific here:
+    the measurement is a *time*, not a position, and a lens does not move an
+    object between frames -- so distortion costs this phase nothing it would
+    otherwise have, which is not true of anything else that reads pixels.
+    """
+    parsed = DetectBallParams.model_validate(params)
+
+    from analyzer.ball import ContrastBlobDetector, detect_ball
+    from analyzer.ball.detector import BallDetectionError
+
+    source, filtered, detected = _ball_inputs(parsed, reporter)
+    try:
+        return detect_ball(
+            source,
+            filtered,
+            ContrastBlobDetector(parsed.ball),
+            phases=detected,
+            config=parsed.ball,
+            reporter=reporter,
+        )
+    except BallDetectionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+class LocateImpactParams(DetectBallParams):
+    """Parameters for `locate_impact`.
+
+    Everything `detect_ball` takes, plus the club. The club is opt-out rather than
+    opt-in because it is one of the four estimates being reconciled and leaving it
+    out silently would make the comparison the method exists for incomplete; it
+    costs a second decode of the clip, which is why it can be turned off at all.
+    """
+
+    club: ClubConfig = Field(
+        default_factory=ClubConfig,
+        description="Search geometry for the shaft, when the club estimate is included.",
+    )
+    with_club: bool = Field(
+        default=True,
+        description=(
+            "Whether to track the club as well, for its independent club-head "
+            "estimate. Costs a second pass over the frames. Turning it off does not "
+            "change the reported instant unless the club is the only source that "
+            "answered -- but it does remove a disagreement that would have been "
+            "measured."
+        ),
+    )
+
+
+def _locate_impact(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Reconcile every available impact estimate for one clip into one instant.
+
+    Runs the analyses rather than taking their reports, because the alternative --
+    accepting three stored reports and fusing them -- cannot check that they came
+    from the same clip, the same smoothing window and the same slow-motion factor.
+    Three estimates of one instant computed under three different clocks is
+    precisely the failure `contracts/impact.py` exists to prevent, and it would be
+    invisible in the output.
+    """
+    parsed = LocateImpactParams.model_validate(params)
+
+    from analyzer.ball import ContrastBlobDetector, detect_ball
+    from analyzer.ball.detector import BallDetectionError
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.contracts.impact import FusedImpact, ImpactSource
+    from analyzer.impact import fuse_impact
+
+    source, filtered, detected = _ball_inputs(parsed, reporter)
+
+    ball = None
+    try:
+        ball = detect_ball(
+            source,
+            filtered,
+            ContrastBlobDetector(parsed.ball),
+            phases=detected,
+            config=parsed.ball,
+            reporter=reporter,
+        )
+    except BallDetectionError:
+        # A clip with no measurable ball still has three other estimates, and the
+        # fusion's whole point is to report the best available one rather than to
+        # require the best possible one.
+        ball = None
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    club = None
+    if parsed.with_club:
+        try:
+            club = track_club(
+                source,
+                filtered,
+                HoughShaftDetector(parsed.club),
+                phases=detected,
+                config=parsed.club,
+                reporter=reporter,
+            )
+        except (ClubDetectionError, ProbeError):
+            club = None
+
+    fused = fuse_impact(
+        detected,
+        ball=ball,
+        club=club,
+        smoothing_window_s=filtered.report.config.smoothing.window_s,
+        frame_interval_s=_median_interval_s(filtered),
+    )
+    if fused is None:
+        raise _unsupported_input(
+            ValueError(
+                "No impact could be located in this clip by any of the four methods. "
+                "Phase detection found no swing, and no ball was seen to leave -- which "
+                "together mean there is no event here to time."
+            ),
+            "Check `analyzer phases` on this clip; it reports why no swing was found.",
+        )
+    assert isinstance(fused, FusedImpact)  # noqa: S101 - narrows for the caller
+    if fused.source is ImpactSource.BALL_DEPARTURE and ball is not None:
+        # Carried through so a reader of the fusion alone can see how much of the
+        # clip stood behind the observation it is reading.
+        fused.warnings.extend(ball.warnings)
+    return fused
+
+
+def _median_interval_s(filtered: Any) -> float | None:
+    """The clip's own frame interval, in real seconds.
+
+    Taken as a median rather than from a declared frame rate, because
+    variable-rate footage is the case Phase 1 exists to handle and `frame / fps`
+    is not when a frame was taken.
+    """
+    import numpy as np
+
+    times = np.asarray(filtered.t, dtype=float)
+    if times.size < 2:
+        return None
+    intervals = np.diff(times)
+    finite = intervals[np.isfinite(intervals) & (intervals > 0.0)]
+    return float(np.median(finite)) if finite.size else None
+
+
 # --- calibration (Phase 8) ------------------------------------------------
 
 
@@ -1693,6 +1944,8 @@ METHODS: dict[str, Method] = {
     "clear_calibration": _clear_calibration,
     "reconstruct": _reconstruct,
     "track_club": _track_club,
+    "detect_ball": _detect_ball,
+    "locate_impact": _locate_impact,
 }
 
 

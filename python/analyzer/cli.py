@@ -27,6 +27,7 @@ from rich.table import Table
 
 from analyzer import __version__
 from analyzer.calibration.apply import distortion_displacement
+from analyzer.contracts.ball import BallTrackingReport
 from analyzer.contracts.calibration import (
     BoardFamily,
     BoardSpec,
@@ -38,6 +39,7 @@ from analyzer.contracts.calibration import (
 from analyzer.contracts.club import ClubTrackingReport
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.impact import FusedImpact
 from analyzer.contracts.metrics import (
     CameraView,
     Metric,
@@ -2129,6 +2131,331 @@ def club(
     # clip produced no shaft rather than reading an empty report as success.
     if not result.tracked:
         raise typer.Exit(code=1)
+
+
+def _render_ball(result: BallTrackingReport) -> None:
+    """The departure first, because it is the only thing here anyone wants.
+
+    Laid out unlike every other review in this file, and deliberately. The club,
+    the calibration and the reconstruction reviews all lead with a table of how
+    well the thing was measured, because in each of those the measurement *is* the
+    output. Here the output is one instant, the per-frame track exists only to
+    support it, and a reader shown the coverage first would be reading the working
+    rather than the answer.
+    """
+    if result.departure is not None:
+        departure = result.departure
+        confidence = departure.confidence
+        style = "green" if confidence.overall >= 0.6 else "yellow"
+        console.print(
+            Panel(
+                f"Impact is between frame [bold]{departure.last_seen_frame}[/bold] "
+                f"({departure.last_seen_s:.3f} s), the last frame carrying a ball, and frame "
+                f"[bold]{departure.first_absent_frame}[/bold] ({departure.first_absent_s:.3f} s), "
+                f"the first carrying none.\n"
+                f"That bracket is [bold]{departure.interval_s * 1000:.1f} ms[/bold] wide -- one "
+                "frame interval, and impact is inside it.\n"
+                f"Confidence [{style}]{confidence.overall:.2f}[/{style}]  [dim]= established "
+                f"{confidence.establishment:.2f} x abrupt {confidence.abruptness:.2f} x "
+                f"permanent {confidence.permanence:.2f}[/dim]",
+                title="Ball departure -- an observation, not an estimate",
+                title_align="left",
+                border_style=style,
+            )
+        )
+        if departure.kinematic_frame is not None and departure.delta_s is not None:
+            direction = "early" if departure.delta_s > 0 else "late"
+            console.print(
+                f"[dim]Phase 4's hand-speed peak is frame {departure.kinematic_frame}, which runs "
+                f"{abs(departure.delta_s) * 1000:.0f} ms {direction} against this. "
+                "`analyzer impact` reconciles every estimate.[/dim]"
+            )
+    elif result.established is not None:
+        console.print(
+            "[yellow]A ball was found and it never left.[/yellow] [dim]No impact is reported "
+            "from it -- a practice swing, a clip that ends before contact, and a miss all look "
+            "exactly like this.[/dim]"
+        )
+
+    summary = Table(title="Ball detection", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("found", "[green]YES[/green]" if result.detected else "[yellow]NO[/yellow]")
+    summary.add_row("detector", f"{result.detector.name}  [dim]{result.detector.method}[/dim]")
+    summary.add_row("frames", f"{result.observed_frames} of {result.frame_count} carry a ball")
+    summary.add_row(
+        "coverage before departure",
+        f"{result.pre_departure_coverage:.0%}  [dim](after it the ball is correctly absent, "
+        "so a clip-wide rate would count the follow-through against it)[/dim]",
+    )
+    if result.slow_motion_factor != 1.0:
+        summary.add_row("slow motion", f"{result.slow_motion_factor:g}x  [dim]as supplied[/dim]")
+    console.print(summary)
+
+    established = result.established
+    if established is not None:
+        detail = Table(title="Identification", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "agreed on by",
+            f"{established.frames} of {established.searched_frames} frames searched",
+        )
+        margin_style = (
+            "green"
+            if established.margin >= 0.5
+            else "yellow"
+            if established.margin >= 0.2
+            else "red"
+        )
+        rival = (
+            ""
+            if established.runner_up_distance_torso is None
+            else f"  [dim](next-best stationary candidate "
+            f"{established.runner_up_distance_torso:.2f} torso lengths away)[/dim]"
+        )
+        detail.add_row(
+            "margin",
+            f"[{margin_style}]{established.margin:.2f}[/{margin_style}]{rival}",
+        )
+        detail.add_row(
+            "size",
+            f"{established.radius_torso:.3f} torso lengths radius  [dim](a golf ball is "
+            "0.047)[/dim]",
+        )
+        detail.add_row(
+            "scatter",
+            f"{established.spread_torso:.4f} torso lengths  [dim](a teed ball scatters by the "
+            "detector's noise and nothing else)[/dim]",
+        )
+        console.print(detail)
+
+    quality = result.quality
+    if quality is not None:
+        detail = Table(title="Quality", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "contrast",
+            f"{_opt(quality.median_contrast)} median  [dim](against the ring around it -- "
+            "the fit)[/dim]",
+        )
+        detail.add_row(
+            "margin",
+            f"{_opt(quality.median_margin)} median  [dim](over a co-located rival)[/dim]",
+        )
+        detail.add_row(
+            "stillness",
+            f"{_opt(quality.median_stillness)} median  [dim](against the established "
+            "position)[/dim]",
+        )
+        detail.add_row(
+            "confidence", f"{_opt(quality.median_confidence)} median  [dim](the product)[/dim]"
+        )
+        if quality.radius_px is not None:
+            style = (
+                "red" if quality.radius_px < 3 else "yellow" if quality.radius_px < 5 else "green"
+            )
+            detail.add_row(
+                "ball size on the sensor",
+                f"[{style}]{quality.radius_px:.1f} px[/{style}] radius  [dim](under about 3 px "
+                "a disc has no shape left to be round)[/dim]",
+            )
+        if quality.drift_torso is not None:
+            detail.add_row(
+                "camera drift",
+                f"{quality.drift_torso:.3f} torso lengths  [dim](the ball did not move, so "
+                "this is the camera: handheld, stabilised, or panned)[/dim]",
+            )
+        console.print(detail)
+
+    if result.refusals:
+        counts = ", ".join(
+            f"{reason.value} {count}" for reason, count in sorted(result.refusals.items())
+        )
+        console.print(f"[dim]Frames carrying no ball, by reason: {counts}[/dim]")
+
+    if result.refusal:
+        console.print(f"[yellow]{result.refusal}[/yellow]")
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def ball(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction places the search region.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    min_confidence: Annotated[
+        float | None,
+        typer.Option("--min-confidence", help="Below this a frame emits nothing."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Find the ball, and the frame at which it stopped being there."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if min_confidence is not None:
+        params["ball"] = {"min_confidence": min_confidence}
+
+    try:
+        result = _run_with_progress("detect_ball", params, "Looking for the ball")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, BallTrackingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_ball(result)
+
+    # Non-zero when no ball was found at all, so a script driving this learns that
+    # the clip produced nothing rather than reading an empty report as success. A
+    # ball that was found and did not depart is a success: it is the right answer
+    # for a practice swing.
+    if not result.detected:
+        raise typer.Exit(code=1)
+
+
+def _render_impact(result: FusedImpact) -> None:
+    """One instant, then every method's disagreement with it.
+
+    The disagreements are a table rather than a footnote because they are the
+    measurement this command exists to make: how far the estimates that do not
+    see the ball sit from the one that does.
+    """
+    style = "green" if result.observed else "yellow"
+    kind = "observed" if result.observed else "inferred"
+    bracket = (
+        f"impact is inside a {result.uncertainty_s * 1000:.1f} ms bracket"
+        if result.uncertainty_is_bracket and result.uncertainty_s is not None
+        else f"located within about {result.uncertainty_s * 1000:.0f} ms"
+        if result.uncertainty_s is not None
+        else "with no error bar available"
+    )
+    console.print(
+        Panel(
+            f"Frame [bold]{result.frame_index}[/bold] at [bold]{result.timestamp_s:.3f} s[/bold], "
+            f"from [bold]{result.source.value}[/bold] -- {bracket}.\n"
+            f"[dim]{result.methodology}[/dim]",
+            title=f"Impact ({kind})",
+            title_align="left",
+            border_style=style,
+        )
+    )
+
+    table = Table(title="Every estimate, and its distance from the one above", expand=True)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Frame", justify="right")
+    table.add_column("Time", justify="right")
+    table.add_column("Delta", justify="right")
+    table.add_column("Uncertainty", justify="right")
+    table.add_column("Confidence", justify="right")
+    for candidate in result.candidates:
+        chosen = candidate.source is result.source
+        name = f"[bold]{candidate.source.value}[/bold]" if chosen else candidate.source.value
+        delta = (
+            "[dim]reported[/dim]"
+            if chosen
+            else "-"
+            if candidate.delta_s is None
+            else f"{candidate.delta_s * 1000:+.0f} ms / {candidate.delta_frames:+d} f"
+        )
+        table.add_row(
+            name,
+            str(candidate.frame_index),
+            f"{candidate.timestamp_s:.3f} s",
+            delta,
+            "-" if candidate.uncertainty_s is None else f"{candidate.uncertainty_s * 1000:.0f} ms",
+            "-" if candidate.confidence is None else f"{candidate.confidence:.2f}",
+        )
+    console.print(table)
+
+    if not result.observed:
+        console.print(
+            "[dim]Only the ball_departure row is an observation. The rest are read off the "
+            "player's motion, and their uncertainties are a scale rather than a bracket -- "
+            "nothing guarantees the instant is inside them.[/dim]"
+        )
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def impact(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    with_club: Annotated[
+        bool,
+        typer.Option(
+            "--club/--no-club",
+            help="Also track the club for its independent estimate. Costs a second pass.",
+        ),
+    ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Reconcile every impact estimate for a clip into one instant with one provenance."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+        "with_club": with_club,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+
+    try:
+        result = _run_with_progress("locate_impact", params, "Locating impact")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, FusedImpact)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_impact(result)
+
+    # Exit zero even when the instant was inferred rather than seen. Every other
+    # command here reserves a non-zero exit for "produced nothing usable", and an
+    # inference clearly labelled as one is usable -- a clip with no visible ball
+    # is the ordinary case, not a failure. A script that needs an *observation*
+    # reads `observed` out of `--json`, which exists for exactly that.
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed

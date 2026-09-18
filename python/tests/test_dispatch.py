@@ -56,6 +56,8 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "clear_calibration": {"project_id": 1},
     "reconstruct": {"project_id": 1},
     "track_club": {"path": str(CFR_30FPS)},
+    "detect_ball": {"path": str(CFR_30FPS)},
+    "locate_impact": {"path": str(CFR_30FPS)},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and

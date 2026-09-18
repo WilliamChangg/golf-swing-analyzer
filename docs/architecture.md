@@ -361,8 +361,18 @@ noise.
 Impact is a kinematic estimate rather than an observation: nothing at this layer
 sees the ball or the club, and hand speed peaks slightly before the club reaches
 the ball. It is corroborated against an independent signal — the lowest point
-the hands reach after the top — and Phases 10 and 11 replace that corroboration
-with real evidence.
+the hands reach after the top.
+
+Phases 10 and 11 replaced that corroboration with real evidence, and **this layer
+did not change**. `analyzer.impact` sits above the three phases that produce an
+estimate and belongs to none of them; it ranks them rather than averaging them,
+reports one instant with a named provenance and an error bar, and keeps the
+others beside it with their deltas. Nothing there writes back down here, because
+an engine in which a number changes depending on which other analyses happened to
+run is an engine whose outputs cannot be compared across clips. On the one
+reference clip where the ball can be seen leaving, that comparison says the arc
+low lands within a frame of the observation and the speed peak twenty frames
+from it.
 
 ## Two-camera synchronisation
 
@@ -656,6 +666,69 @@ carried, since nothing in a video file records the exposure.
 the line drawn above, and it is the second marginal member of that set for the
 reason `sync` is the first: its mechanism would follow any rigid rod held in a
 pair of hands, and only the assumption that there is one is about golf.
+
+## Ball detection
+
+The first thing in this engine that measures by **watching something stop
+existing**. Every layer below reads a presence and the reading is taken off
+something in the picture; a golf ball sits in plain view doing nothing for
+hundreds of frames and then is not there, and the instant this layer exists to
+find is the boundary between those two states.
+
+**The ball in flight is the obvious target and is unanswerable.** It leaves at
+about 70 m/s, which is a metre-long smear at 1/60 s and out of frame before it
+has been drawn sharply once — the wall Phase 10 already met with the club head.
+The ball at rest is the opposite: still, high-contrast, and in one place for
+longer than any event in the clip lasts. So the measurement is taken where the
+evidence is, and impact is read off the edge of that interval.
+
+**The error bar is a bracket, and that is the layer's whole contribution.**
+Nothing here estimates a peak, fits a curve or smooths a signal, so nothing here
+has a resolution that degrades: the ball was present at one frame and absent at
+the next, so impact is _inside_ an interval one frame wide, at any frame rate.
+Every other impact estimate in this project carries a _scale_ instead — the width
+of the smoothing window the clip's frame rate forced — and `FusedImpact.uncertainty_is_bracket`
+exists so a consumer cannot read one as the other.
+
+**The identification is circular and the circle is closed rather than hidden.**
+Nothing else in a golf frame is a small still round object that disappears once
+and never returns, so that fact is what picks the ball out of the stationary
+candidates — and it is also what is being reported. The evidence is therefore
+partitioned between two confidences computed from disjoint inputs:
+`BallConfidence` scores one frame's observation, `DepartureConfidence` scores the
+instant, and neither reads the other's inputs. What survives the partition is the
+one thing a circular identification genuinely cannot check — if two stationary
+objects both depart, the clip cannot say which was the ball — and that is
+reported as `EstablishedBall.margin` rather than solved.
+
+**The region is anchored to the ground.** A teed ball rests on it, and the pose
+layer knows where it is because it knows where the ankles are. "Within a club
+length of the hands" is also true and is much weaker: a disc centred chest-high
+that on a vertical phone clip contains the sky, where a patch of cloud between
+two branches is rounder, better resolved and stiller than a ball a few pixels
+across. That was not a hypothetical — it was the reference clip's first result.
+[ADR-0015](decisions/ADR-0015-ball-departure-and-impact-precedence.md).
+
+## Impact, reconciled
+
+`analyzer.impact` sits above `phases`, `club` and `ball` and belongs to none of
+them, which is why it is a module rather than a member of any. Four estimates of
+one instant now exist across three phases, and reporting an instant from several
+places with several provenances is exactly the failure `contracts/phases.py`
+warned about when it kept tempo out of Phase 4.
+
+They are **ranked, not averaged**. Three are biased in a known direction and one
+is not; averaging an unbiased observation with a biased proxy moves the answer
+away from the truth while producing a provenance nobody can reason about. The
+order is a property of what each source measures rather than of how confident a
+particular clip's version happens to be — an observation beats a measurement of a
+coinciding quantity, which beats a proxy, and a proxy with no known bias beats one
+with a known one.
+
+The disagreements are kept, and they are not diagnostics: `kinematic − ball` is
+how the bias of the hand-speed peak becomes a number rather than a caveat, and an
+average would have destroyed the only quantity this layer adds that Phase 12 will
+need. Nothing here writes back down into the phases it reads.
 
 ## Projects
 

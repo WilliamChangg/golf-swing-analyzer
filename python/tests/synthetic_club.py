@@ -57,6 +57,7 @@ same frame rate and shutter carries about twice the blur measured here.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -105,6 +106,27 @@ ADDRESS_GRIP_PX = (
 """Where the hands sit at address, in pixels. The default pivot for a single
 rendered frame, so that a test that does not care about the swing still renders
 the club somewhere a club could be."""
+
+
+@dataclass(frozen=True)
+class RenderedBall:
+    """A ball drawn into a frame, and the truth it was drawn from.
+
+    Added for Phase 11 and kept here rather than in `synthetic_ball.py` for the
+    reason the shaft is driven by `synthetic.py`'s arc: a ball and a club that are
+    rendered by two different functions are two scenes that resemble each other,
+    and the question Phase 11 asks -- does the frame the ball vanishes at agree
+    with the frame the club arrives at -- cannot be asked of two such scenes.
+
+    `grey` carries the intensity so a sweep can drive the ball towards its
+    background, which is the capture variable this phase has that Phase 10's
+    shutter is: contrast against what it sits on.
+    """
+
+    x: float
+    y: float
+    radius_px: float
+    grey: float
 
 
 @dataclass(frozen=True)
@@ -265,6 +287,37 @@ def _draw_shaft(
     )
 
 
+def _draw_ground(canvas: NDArray[np.uint8], y: float, grey: int) -> None:
+    """A darker band below a horizon, which is what a ball actually sits on.
+
+    Off by default, so Phase 10's measurements are taken against the background
+    they were taken against. It exists because a ball floating on a flat field is
+    not the test that matters: the mat or turf under it puts a long straight
+    high-contrast edge within a ball's width of the thing being detected, and
+    whether the shape filter survives that is the question.
+    """
+    cv2.rectangle(canvas, (0, round(y)), (FRAME.width, FRAME.height), (grey,) * 3, -1)
+
+
+def _draw_ball(canvas: NDArray[np.uint8], ball: RenderedBall) -> None:
+    """The ball, antialiased, drawn before the shaft so the club can cover it.
+
+    Order matters and this is the realistic one: at impact the club head is
+    between the camera and the ball on a face-on view, so a ball drawn last would
+    show through a club that is physically in front of it -- and this phase's
+    central caveat is precisely that a covered ball and a departed one are the
+    same picture. A fixture that could not produce that picture could not test it.
+    """
+    cv2.circle(
+        canvas,
+        (round(ball.x), round(ball.y)),
+        max(1, round(ball.radius_px)),
+        (round(ball.grey),) * 3,
+        -1,
+        cv2.LINE_AA,
+    )
+
+
 def render(
     *,
     index: int = 0,
@@ -277,14 +330,21 @@ def render(
     occlusion: tuple[int, int, int, int] | None = None,
     noise: float = 3.0,
     seed: int = 0,
+    balls: tuple[RenderedBall, ...] = (),
+    ground_y: float | None = None,
+    ground_grey: int = 90,
 ) -> RenderedFrame:
     """One frame, and the truth it was rendered from."""
     pivot = grip if grip is not None else ADDRESS_GRIP_PX
     rng = np.random.default_rng(seed + index)
     canvas = _blank(rng, noise)
+    if ground_y is not None:
+        _draw_ground(canvas, ground_y, ground_grey)
     _draw_body(canvas)
     if clutter_x:
         _draw_clutter(canvas, clutter_x)
+    for ball in balls:
+        _draw_ball(canvas, ball)
     _draw_shaft(canvas, pivot, angle_deg, sweep_deg, length_px)
     if occlusion is not None:
         cv2.rectangle(
@@ -308,6 +368,9 @@ def swing(
     occlusion: tuple[int, int, int, int] | None = None,
     noise: float = 3.0,
     seed: int = 0,
+    balls_at: Callable[[int], tuple[RenderedBall, ...]] | None = None,
+    ground_y: float | None = None,
+    ground_grey: int = 90,
 ) -> list[RenderedFrame]:
     """A swing filmed at a declared frame rate and shutter.
 
@@ -320,6 +383,12 @@ def swing(
 
     The frame grid is `swing_sequence`'s, exactly, so frame `i` here and frame
     `i` of the pose sequence are the same instant.
+
+    `balls_at` is asked, per frame, which balls exist in it. A function rather
+    than a list because the whole of Phase 11 is about a ball that exists in some
+    frames and not others, and the frame it stops existing at is the thing being
+    measured -- so the fixture has to express presence per frame or it cannot
+    express the truth a result is scored against.
     """
     times = np.arange(0.0, duration_s, 1.0 / fps)
     angles = shaft_angle_deg(times)
@@ -340,6 +409,9 @@ def swing(
             occlusion=occlusion,
             noise=noise,
             seed=seed,
+            balls=() if balls_at is None else balls_at(index),
+            ground_y=ground_y,
+            ground_grey=ground_grey,
         )
         for index in range(times.size)
     ]

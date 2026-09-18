@@ -75,9 +75,20 @@ camera at address and is foreshortened past the minimum length, so "the club is
 easiest to find where it is slowest" turns out to be a face-on observation.
 
 `face-on/rory_face_on.mp4` also carries the only **observed** impact in the
-project: the ball is on the tee at frame 360 and gone at frame 361. Phase 4's
-kinematic estimate is the only thing in the pipeline that can be checked against
-a real event, and that check is recorded in the ADR.
+project: the ball is on the tee at frame 360 and gone at frame 361. That was
+first read off the frames by eye and is now measured — `analyzer ball` brackets
+it between exactly those two frames, with no warnings — which makes it the only
+event in this repository against which a kinematic estimate can be scored. It is
+scored in
+[../docs/decisions/ADR-0015-ball-departure-and-impact-precedence.md](../docs/decisions/ADR-0015-ball-departure-and-impact-precedence.md),
+and the answer is that peak hand speed lands 20 frames away while the lowest
+point of the hand arc lands within one.
+
+The same clip found six defects in Phase 11 that the synthetic fixture passed
+cleanly, including a search region anchored at the hands that identified a patch
+of **sky** as the ball, and a fixed drift reference that read the camera's own
+gentle motion as the ball departing 58 frames early. Every one of them produced a
+confident wrong answer rather than an error.
 
 ## Capture protocol
 
@@ -196,6 +207,47 @@ is the part that fails first:
 
 `analyzer club <clip>` prints the per-phase table first for that reason. If the
 downswing row is low, the shutter is the thing to change.
+
+### Filming so the ball can be timed (Phase 11)
+
+The ball is the only thing in the frame this system **observes** impact from.
+Everything else infers it from the player's motion. What that costs you is four
+things at capture time, and none of them is the shutter — a teed ball is not
+moving, so no exposure smears it.
+
+**Keep recording for two seconds after the strike.** Impact is read off the frame
+the ball stops being visible, and a ball that has gone and a ball that something
+moved in front of are the same picture at that instant. The only thing that tells
+them apart is the absence lasting, so a clip that stops shortly after contact has
+not made the check — `permanence` falls and the report says the instant is worth
+less. Two seconds is plenty.
+
+**One ball in the hitting area.** The ball is identified as the stationary,
+ball-sized thing that vanishes, and a second one that also gets hit, a white tee
+marker that gets picked up, or an alignment stick that rolls away is a rival the
+picture cannot resolve. `analyzer ball` reports an **identification margin** and
+drops it towards zero when more than one object departs.
+
+**A surface the ball contrasts with, and enough of the frame spent on it.** The
+one capture number that matters here is how many pixels across the ball is:
+
+| ball radius on the sensor | what it means                                     |
+| ------------------------- | ------------------------------------------------- |
+| under 3 px                | refused — a disc that small has no shape left     |
+| 3–5 px                    | found, but shape no longer separates it from turf |
+| over 8 px                 | shape works as well as it is going to             |
+
+That is measured rather than advised, and it is the main limit on the reference
+footage in this repository: on `face-on/rory_face_on.mp4` the ball is **4.4 px**
+in radius on a 576-wide phone clip, which is why the identification there rests
+on the ball being in one place for three hundred frames rather than on it looking
+round. Filming 1080p rather than 720p, or standing closer, buys this directly.
+
+**Frame the ball, not just the player.** The search region is a disc of three
+torso lengths around where the hands sit at address, which comfortably contains a
+teed ball — but a clip cropped to the upper body does not contain one at all, and
+`analyzer ball` reports that as `out_of_frame` rather than as a detection
+failure, because it is a framing fix.
 
 ### Synchronising the two cameras
 

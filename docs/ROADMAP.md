@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-10 complete (11 / 21).**
+**Progress: Phases 0-11 complete (12 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -19,8 +19,8 @@ advance past a broken phase.
 | 8   | Camera calibration    | ✅ **Done** | Coverage gates claims; reprojection error shown for what it is |
 | 9   | 3D reconstruction     | ✅ **Done** | Reconstruction error measured on synthetic ground truth        |
 | 10  | Club tracking         | ✅ **Done** | Shaft tracked; low confidence emits nothing                    |
-| 11  | Ball detection        | ⬜ Next     | Impact-frame agreement measured                                |
-| 12  | Temporal ML           | ⬜          | Leak-free splits; metrics only from a real labelled set        |
+| 11  | Ball detection        | ✅ **Done** | Impact-frame agreement measured                                |
+| 12  | Temporal ML           | ⬜ Next     | Leak-free splits; metrics only from a real labelled set        |
 | 13  | Coaching engine       | ⬜          | Every finding cites computed evidence                          |
 | 14  | Desktop UI            | ⬜          | Full workflow end-to-end                                       |
 | 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                                 |
@@ -1534,12 +1534,174 @@ be a face-on observation rather than a general one.
   finishes this once a fast-shutter clip exists:
   `uv run --project python python scripts/overlay_club.py <clip> --video`
 
-## Phase 11 — Ball detection ⬜
+## Phase 11 — Ball detection ✅
 
-- [ ] 11.1 `BallDetector` Protocol + confidence
-- [ ] 11.2 Impact corroboration fused with the Phase 4 estimate
-- [ ] 11.3 Measure agreement between ball-based and kinematic impact frames
-- [ ] 11.4 Commit
+`python/analyzer/ball/{detector,blob,track,extract}.py` · `python/analyzer/impact.py` ·
+[ADR-0015](decisions/ADR-0015-ball-departure-and-impact-precedence.md)
+
+The first thing this engine measures by **watching something stop existing**.
+Every layer below reads a presence — where a landmark is, where a shaft points,
+how deep a joint sits — and the reading is taken off a thing that is in the
+picture. A golf ball sits in plain view doing nothing for hundreds of frames and
+then is not there, and the instant this phase exists to find is the boundary
+between those two states.
+
+Tracking the ball in flight is the obvious ask and is unanswerable on consumer
+footage: it leaves at ~70 m/s, which is a metre-long smear at 1/60 s and out of
+frame before it has been drawn sharply once. Phase 10 met the same wall with the
+club head. So this measures the ball where the ball is **easy** — at rest — and
+reads impact off the edge of that interval.
+
+- [x] **11.1 `BallDetector` Protocol + confidence** — one Protocol, one classical
+      implementation (ROI → top-hat → components → geometry), and **two** separate
+      confidences computed from disjoint evidence: `BallConfidence` scores one
+      frame's observation, `DepartureConfidence` scores the instant. The
+      identification is circular — the ball is picked out partly by the fact that
+      it leaves — and the partition is what closes the circle rather than hiding it
+- [x] **11.2 Impact corroboration fused with the Phase 4 estimate** —
+      `analyzer/impact.py`, reporting **one** instant with one provenance and one
+      error bar. Four estimates now exist and they are **ranked, not averaged**:
+      three are biased in a known direction and one is not, and averaging moves the
+      answer away from the truth while producing a provenance nobody can name.
+      Every other estimate is kept beside it with its delta, because those deltas
+      are the measurement. **Nothing reaches back down into Phase 4**
+- [x] **11.3 Measure agreement between ball-based and kinematic impact frames** —
+      `scripts/benchmark_ball.py`, and on the reference footage
+- [x] **11.4 Commit**
+
+**The uncertainty is one frame interval, and it is a bracket.** Nothing here
+estimates a peak, fits a curve or smooths a signal, so nothing here has a
+resolution that degrades. The ball was present at one frame and absent at the
+next, so impact is **inside**:
+
+| fps | located | error | bracket | Phase 4's window | ratio |
+| --- | ------- | ----- | ------- | ---------------- | ----- |
+| 30  | exact   | 0     | 33.3 ms | 100 ms           | 3x    |
+| 60  | exact   | 0     | 16.7 ms | 100 ms           | 6x    |
+| 120 | exact   | 0     | 8.3 ms  | 100 ms           | 12x   |
+| 240 | exact   | 0     | 4.2 ms  | 100 ms           | 24x   |
+
+Phase 4's number is the width of the smoothing window its frame rate forced,
+which is a **scale the peak could have moved on**, not an interval it is inside.
+The two are not comparable and `FusedImpact.uncertainty_is_bracket` says which is
+which.
+
+**The shutter, which decided Phase 10, decides nothing here** — a ball at rest is
+not moving, so no exposure smears it. Located exactly at every shutter from 0.03
+to a full 360°. What replaces it as the capture variable is **contrast against
+the surface**, and it is a cliff in the same way:
+
+| ball vs turf | located | coverage |
+| ------------ | ------- | -------- |
+| 155 levels   | exact   | 100%     |
+| 105          | exact   | 100%     |
+| 75           | refused | 22%      |
+| 35           | refused | 0%       |
+
+**What refuses, and why each is right:**
+
+| case                          | outcome                  | what says so              |
+| ----------------------------- | ------------------------ | ------------------------- |
+| practice swing, ball stays    | no instant               | nothing departed          |
+| ball rolls off before the top | no instant               | outside the strike window |
+| clip ends 2 frames after      | instant, confidence 0.06 | permanence 0.06           |
+| a rival that also departs     | instant, margin **0.00** | warned                    |
+| ball covered over 10 frames   | 5 frames early           | abruptness 0.70, warned   |
+
+The occlusion row is the phase's **documented failure**, not a bug: at impact the
+club head is at the ball, so a covered ball and a departed one are the same
+picture. It only matters when the covering starts _before_ contact, and then the
+instant runs early by about half the covering — reported rather than fixed.
+
+### The first observed impact, and the number it settles
+
+`data/face-on/rory_face_on.mp4` at a factor of 7. The ball is bracketed between
+frames 360 and 361 — which is exactly what the Post-Phase-6 section recorded by
+eye, now measured, with no warnings and every factor clean:
+
+| source           | frame | delta                   | uncertainty    |
+| ---------------- | ----- | ----------------------- | -------------- |
+| `ball_departure` | 361   | **reported**            | 5 ms (bracket) |
+| `hand_low`       | 362   | +5 ms / +1 frame        | 100 ms (scale) |
+| `hand_speed`     | 381   | **+95 ms / +20 frames** | 100 ms (scale) |
+
+**This settles the question Phase 6 left open.** The roadmap asked whether to
+swap Phase 4's primary estimate for the lowest point of the hand arc. The arc low
+lands within **one frame** of the observation; peak hand speed lands twenty
+frames away — and **late**, which is the opposite of the direction the physics
+predicts and which `contracts/phases.py` has warned about since Phase 4. So the
+fusion's precedence puts `hand_low` above `hand_speed`, and Phase 4's own
+estimate is left exactly as it was: an engine in which a number changes depending
+on which other analyses happened to run cannot be compared across clips.
+
+One clip is not a correction. It is one clip, and the labelled set is Phase 12.
+
+**Cost:** 16 ms/frame to detect over 1.5 torso lengths of ground, and 34 ms to
+track a 312-frame clip once the candidates exist. Against ~17 ms/frame to extract
+the poses that must come first. A **rectangular** structuring element is what
+makes that affordable: OpenCV separates that one and nothing else, and an
+elliptical one of the same size costs 66 ms a frame on its own.
+
+### What real footage found, and the fixture did not ✅
+
+Six defects, every one of which produced a confident wrong answer rather than an
+error, and five of which the synthetic fixture passed cleanly.
+
+- **The search region was anchored at the hands, and contained the sky.** "Within
+  a club length of the hands" is true and is a much weaker statement than "on the
+  ground": it is a disc of ~2.5 torso lengths centred chest-high, which on a
+  vertical phone clip is the whole picture. The identification looks for a small
+  round thing that sits still for hundreds of frames and then stops being there,
+  and a patch of cloud between two branches is rounder, better resolved and
+  stiller than a ball 4 px across. The clip established on a point 126 px from the
+  top of the frame and reported impact **117 frames late**. Anchored at the
+  **ankle midpoint** — the pose layer knows where the ground is — the same clip
+  finds the ball.
+- **The drift reference was fixed, and the camera was not.** "A teed ball does not
+  move" is a statement about the world; this layer works in the image, where a
+  stationary ball moves whenever the camera does — handheld, stabilised, or a
+  repost with a slow pan. The ball's offset grew monotonically from 11 px to 14 px
+  through the swing while its contrast stayed healthy at 0.52–0.62, so `stillness`
+  decayed under the bound and the run ended **58 frames early**, with contrast
+  good, margin 1.00 and a plausible confidence. The reference now **follows**, which
+  is Phase 10's continuity argument in a different medium, and
+  `BallQuality.drift_torso` reports the camera motion instead of absorbing it.
+- **`min_circularity` was tuned on a fixture and rejected the only real ball in
+  the project.** A rendered ball scores 0.89 and everything else falls below 0.4,
+  which invites a bound at 0.65 and the belief that shape identifies a golf ball.
+  The real ball — 4.4 px in radius, compressed, with a ragged boundary — scores
+  **0.59**, while grass and compression blocks in the same size band score 0.11 to
+  0.71. At that size shape does not separate them at all. The bound is now a
+  sanity filter and the identification rests on persistence.
+- **The candidate cap sorted by area, which discards a golf ball.** A ball is one
+  of the _smallest_ things in the response; the real ball sat outside the largest
+  32 regions of its own frame. The size band now runs **before** the cap, and what
+  survives is ranked by closeness to a ball's expected size.
+- **A frame-widths distance was compared against a torso-lengths bound** — loose by
+  a factor of about four, which merged a teed ball with a tee marker 70 px away
+  into one object that then never departed. Found by the fixture's distractor case;
+  the ordinary clean clip passed throughout.
+- **Permanence was measured on the tracker's verdicts rather than on the
+  detector's candidates.** A dimming ball falls under the confidence bound and ends
+  the run early, so every frame after it is one the tracker rejected — and an
+  acceptance-based score reads 1.0 while the ball is plainly still in the picture.
+  Reading candidates notices; reading verdicts does not.
+
+**Open, and not resolved here:**
+
+- The club-head estimate never answered on any reference clip. Phase 10 already
+  recorded why: they are 24–30 fps with the hands lost to motion blur through the
+  downswing, and a club-head impact is refused whenever the downswing is less than
+  half tracked. The fusion has been exercised with three of its four sources on
+  real footage and all four only on the fixture.
+- **One clip has an observed impact.** Every statement above about the bias of the
+  kinematic estimate rests on it, and a bias measured once is an anecdote with a
+  number attached.
+- The synthetic fixture **cannot** measure the agreement this phase exists to
+  measure: one arc drives the hands, the club and the ball, so all four estimates
+  coincide by construction. It can show the fusion is wired correctly and nothing
+  more, and `scripts/benchmark_ball.py --sweep agreement` prints that caveat above
+  its own table.
 
 ## Phase 12 — Temporal ML ⬜
 
