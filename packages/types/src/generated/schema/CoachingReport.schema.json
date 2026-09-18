@@ -1,0 +1,630 @@
+{
+  "$defs": {
+    "CameraView": {
+      "description": "Where the camera stood relative to the player.\n\nThe single fact that decides what a projected measurement *means*. The same\nspine tilt is lateral side bend seen face-on and forward posture angle seen\ndown the line; the same hip displacement is a slide towards the target in one\nand a move towards the ball in the other. Nothing in the arithmetic\ndistinguishes them, so the view is measured and carried on every metric, and\nthe anatomical reading is stated per view rather than assumed.\n\nFACE_ON\n    Perpendicular to the target line, looking at the player. The shoulder\n    line lies across the frame, so rotation is measurable by foreshortening\n    and left and right are distinguishable.\nDOWN_THE_LINE\n    Along the target line. The shoulder line points towards the camera and\n    collapses, so rotation about the spine is not recoverable, and the\n    frame's horizontal axis runs towards and away from the ball.\n\n    **Which end of the target line is not determined.** A camera behind the\n    player and one in front of them foreshorten the shoulder line\n    identically, and nothing else here separates them. The measurable\n    consequences are the same either way, which is why one label covers\n    both; what it costs is the sign of anything measured along the frame's\n    horizontal axis, so those quantities are reported as image directions\n    rather than as \"towards the player\" or \"away from them\". The reference\n    clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.\nUNKNOWN\n    Oblique, or too little of the body tracked at address to tell. Not a\n    failure: an oblique camera genuinely supports some measurements and not\n    others, and saying so beats picking the nearer label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "unknown"
+      ],
+      "title": "CameraView",
+      "type": "string"
+    },
+    "CoachingConfig": {
+      "additionalProperties": false,
+      "description": "Policy for the coaching engine.\n\nAs everywhere else in this system, these are **structural bounds, not golf\nnorms**. Nothing here says what a good swing looks like; the thresholds that\ndo live on the rules, each with the citation it came from.",
+      "properties": {
+        "min_confidence": {
+          "default": 0.25,
+          "description": "Confidence below which a metric does not support a conclusion, even one the arithmetic would reach comfortably. Stated policy: it is roughly the level at which the anchor factor alone -- how sure Phase 4 is that this frame is the top at all -- stops supporting a statement about the top.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "phrasing": {
+          "$ref": "#/$defs/PhrasingMode",
+          "default": "off",
+          "description": "Off by default, and off is a complete configuration. Every finding already has a sentence; the model layer rewords, and a reworded finding is not a better-founded one."
+        },
+        "phrasing_endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Base URL of a language model running on this machine. Only used when `phrasing` is `local`. There is no remote default and no hosted fallback: a finding is a measurement of a person's body, and the decision to send one anywhere is not a default."
+        },
+        "phrasing_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Which local model to ask for, where the endpoint hosts several."
+        },
+        "phrasing_timeout_s": {
+          "default": 20.0,
+          "description": "How long to wait for the whole phrasing pass before giving up on it.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "CoachingConfig",
+      "type": "object"
+    },
+    "Comparison": {
+      "description": "Where a measured value sat relative to a published band.\n\n`WITHIN` is a finding, not a silence. \"This sits inside the range the source\nreports\" is an observation with evidence behind it, and a coaching engine that\nonly spoke when something was wrong would be reporting a selection rather than\na measurement.",
+      "enum": [
+        "below",
+        "within",
+        "above"
+      ],
+      "title": "Comparison",
+      "type": "string"
+    },
+    "Evidence": {
+      "description": "One measured quantity a finding rests on, with the frames to check it in.\n\nThe link the exit criterion is about: metric -> frames -> overlay. `frames`\nare frame indices into **this clip's video file**, so a player can be shown\nthe picture the number came from; `timestamps_s` are the matching instants on\na real clock, which on a slow-motion clip is a different thing entirely and\ndoes not index the file.",
+      "properties": {
+        "metric": {
+          "$ref": "#/$defs/MetricName"
+        },
+        "label": {
+          "description": "The metric's own display label, including its anchor.",
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        },
+        "basis": {
+          "$ref": "#/$defs/MetricBasis"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingPhase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "As the metric reported it, in the metric's own unit."
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "frames": {
+          "description": "Every frame whose landmarks entered this value. Indices into the video.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "timestamps_s": {
+          "description": "Real-clock instants for `frames`, where the detection supplied them. Empty rather than interpolated when it did not.",
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        "methodology": {
+          "description": "How the number was produced, carried from the metric.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "metric",
+        "label",
+        "value",
+        "unit",
+        "basis",
+        "confidence",
+        "frames",
+        "methodology"
+      ],
+      "title": "Evidence",
+      "type": "object"
+    },
+    "Finding": {
+      "description": "One conclusion, with everything needed to check it.\n\nThere is no severity and no score. A number that ranked findings against each\nother would be the single most quoted output of this system and the least\ndefensible one: it would need a scale relating degrees of shoulder turn to\nseconds of tempo, and nothing has measured one.",
+      "properties": {
+        "rule_id": {
+          "description": "Stable identifier, so a UI can link to one finding.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "observation": {
+          "description": "What was measured and how it compares, in words. Contains no number that is not in this finding's own evidence -- enforced by the same guard the phrasing layer is held to.",
+          "type": "string"
+        },
+        "comparison": {
+          "$ref": "#/$defs/Comparison"
+        },
+        "value": {
+          "type": "number"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        },
+        "bracket": {
+          "description": "The uncertainty the comparison had to clear, in the metric's unit. A value inside `bracket` of a band edge is refused as `UNRESOLVED` rather than reported as being on one side of it.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "band_low": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "band_high": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "margin": {
+          "description": "How far outside the nearer band edge the value sat, in its own unit. Zero for a `WITHIN` finding.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "source": {
+          "$ref": "#/$defs/ThresholdSource"
+        },
+        "evidence": {
+          "description": "At least one, always. A finding with no evidence cannot be produced by this engine -- the contract refuses it rather than the review.",
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "confidence": {
+          "description": "The weakest confidence among the metrics this finding rests on.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "phrased": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The phrasing layer's rewording of `observation`, present only when a model produced one **and** it passed the guard. `observation` is always there and is always what was measured; this is presentation."
+        }
+      },
+      "required": [
+        "rule_id",
+        "title",
+        "observation",
+        "comparison",
+        "value",
+        "unit",
+        "bracket",
+        "margin",
+        "source",
+        "evidence",
+        "confidence"
+      ],
+      "title": "Finding",
+      "type": "object"
+    },
+    "FindingRefusal": {
+      "description": "Why a rule that was considered produced nothing.\n\nEvery one of these is a different thing to do about it, which is why they are\na typed set and not a sentence. `BASIS_NOT_PERMITTED` is fixed by a second\ncamera and a calibration; `NO_THRESHOLD` is fixed by somebody publishing one;\n`UNRESOLVED` is fixed by a faster camera; `NO_METRIC` is usually fixed by\nmoving the one that filmed it.\n\n`SUPPLIED_TIMEBASE` is the one that cannot be fixed by anybody holding the\ncamera afterwards. A slow-motion clip's playback factor is not recorded in\nthe file; it is supplied by whoever ran the analysis, and every duration\nmeasured from that clip is that supplied number multiplied by something\nmeasured. Comparing one against a published band in seconds compares a\nstopwatch against a guess. A **ratio** of two durations from the same clip\nsurvives it, because the factor divides out -- the same shape of argument\nthat makes a length in torso lengths survive an unknown camera, one dimension\nover.",
+      "enum": [
+        "no_swing",
+        "no_metric",
+        "no_threshold",
+        "basis_not_permitted",
+        "view_mismatch",
+        "supplied_timebase",
+        "low_confidence",
+        "no_uncertainty",
+        "unresolved"
+      ],
+      "title": "FindingRefusal",
+      "type": "string"
+    },
+    "GuardRejection": {
+      "description": "One reason a candidate phrasing was thrown away.\n\nKept in the report rather than logged, because the rejection rate is the only\nevidence anybody has about whether the phrasing layer is safe to turn on. A\nmodel that is rewritten into silence nine times in ten is not a phrasing\nlayer, and the number that says so has to survive to the reader.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "offence": {
+          "description": "Which check failed, in a few words.",
+          "type": "string"
+        },
+        "token": {
+          "description": "The text that failed it.",
+          "type": "string"
+        },
+        "candidate": {
+          "description": "The full candidate, kept so it can be inspected.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "offence",
+        "token",
+        "candidate"
+      ],
+      "title": "GuardRejection",
+      "type": "object"
+    },
+    "MetricBasis": {
+      "description": "What kind of claim a metric's value is.\n\nTEMPORAL\n    A duration, or a ratio of durations. Depends on the clock and nothing\n    else, so it is unaffected by where the camera stood. The only basis in\n    this phase that measures the body rather than a picture of it.\n\nIMAGE_PLANE\n    A distance or a speed between two points as they appear in the frame,\n    divided by the subject's torso length. Exact as a statement about the\n    image; it under-reports any motion that ran towards or away from the\n    camera, which it cannot see at all.\n\nPROJECTED_ANGLE\n    The angle between two segments as they appear in the frame. Equal to the\n    real joint angle only when both segments lie in the image plane, and\n    smaller than it otherwise. Never a 3D joint angle.\n\nFORESHORTENED_ANGLE\n    A rotation about the vertical inferred from how much a body segment\n    shortened in the image: a shoulder line seen at 60% of its full width\n    has turned about 53 degrees away from the camera. It assumes the segment\n    was square to the camera at its reference frame, and it is blind to\n    direction -- a turn and its mirror image shorten identically -- so the\n    value is a magnitude.\n\nSPATIAL\n    A length, angle or speed between points **reconstructed in three\n    dimensions** from two calibrated views of the same instant. The only\n    basis here that is a statement about the body rather than about a\n    picture of it, and the reason every other one is named the way it is.\n\n    It is also the only basis whose meaning does not depend on the camera\n    view: a distance between two 3D points is the same distance from\n    anywhere, so a `SPATIAL` metric carries one anatomical reading instead\n    of one per view. What it does depend on is the *reconstruction*, whose\n    own error is reported per point and propagated into the metric's\n    `uncertainty` -- a 3D number is not automatically a better number, it is\n    a differently-conditioned one, and the conditioning is the ray\n    convergence angle rather than the camera position.",
+      "enum": [
+        "temporal",
+        "image_plane",
+        "projected_angle",
+        "foreshortened_angle",
+        "spatial"
+      ],
+      "title": "MetricBasis",
+      "type": "string"
+    },
+    "MetricName": {
+      "description": "Every quantity this engine knows how to measure.\n\nNamed per *quantity*, not per quantity-and-instant: `SPINE_TILT` at the top\nand at impact are the same measurement made twice, and they carry the same\nunit, basis and methodology. Which instant a particular value belongs to is\non the metric's `event` field, so the set of names does not grow by\nmultiplication every time another anchor becomes interesting.",
+      "enum": [
+        "spine_tilt",
+        "left_knee_flex",
+        "right_knee_flex",
+        "hip_sway",
+        "head_sway",
+        "head_lift",
+        "shoulder_turn",
+        "pelvis_turn",
+        "x_factor",
+        "shoulder_tilt",
+        "pelvis_tilt",
+        "hand_depth",
+        "hand_path_length",
+        "peak_hand_speed",
+        "lead_arm_angle",
+        "trail_arm_angle",
+        "shoulder_turn_3d",
+        "pelvis_turn_3d",
+        "x_factor_3d",
+        "lead_arm_angle_3d",
+        "trail_arm_angle_3d",
+        "peak_hand_speed_3d",
+        "backswing_duration",
+        "downswing_duration",
+        "follow_through_duration",
+        "takeaway_to_impact",
+        "tempo_ratio"
+      ],
+      "title": "MetricName",
+      "type": "string"
+    },
+    "MetricUnit": {
+      "description": "What a metric's value is in.\n\n`TORSO_LENGTHS` is the length unit throughout, rather than frame widths or\npixels. A distance in frame widths halves when the camera is moved twice as\nfar away; the same distance in the subject's own torso lengths does not. It\nis not a metric unit and does not pretend to be one -- it is a ratio of two\nmeasured image distances, which is exactly what survives an unknown camera.",
+      "enum": [
+        "degrees",
+        "seconds",
+        "ratio",
+        "torso_lengths",
+        "torso_lengths_per_s",
+        "metres_per_s"
+      ],
+      "title": "MetricUnit",
+      "type": "string"
+    },
+    "PhrasingMode": {
+      "description": "Where a finding's words come from.\n\nOFF\n    The rule's own sentence, assembled from the evidence. The default, and\n    the only mode that needs nothing installed.\nLOCAL\n    A language model running on this machine, handed the findings as\n    structured data and nothing else. Never the video, never the landmarks,\n    never a file path.",
+      "enum": [
+        "off",
+        "local"
+      ],
+      "title": "PhrasingMode",
+      "type": "string"
+    },
+    "PhrasingReport": {
+      "description": "What the optional language layer did, if anything.\n\n`attempted` is zero in the default configuration and that is the expected\nstate. Every count here is present so that \"the model rephrased nothing\" and\n\"the model was never asked\" cannot be confused, which is the same distinction\n`RefusedMetric` exists for one layer down.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/PhrasingMode",
+          "default": "off"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What produced the candidates. None when nothing did."
+        },
+        "attempted": {
+          "default": 0,
+          "type": "integer"
+        },
+        "accepted": {
+          "default": 0,
+          "type": "integer"
+        },
+        "rejected": {
+          "default": 0,
+          "type": "integer"
+        },
+        "rejections": {
+          "items": {
+            "$ref": "#/$defs/GuardRejection"
+          },
+          "type": "array"
+        },
+        "unavailable": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why no model was reached, when one was asked for. A phrasing layer that cannot be reached falls back to the rules' own sentences and says so; it never silently produces the default and calls it a model's work."
+        }
+      },
+      "title": "PhrasingReport",
+      "type": "object"
+    },
+    "RefusedFinding": {
+      "description": "A rule that was considered and deliberately produced nothing.\n\nReported rather than omitted, for the reason `RefusedMetric` is: a rule that\ndid not fire because the swing was fine and a rule that could not be applied\nat all look identical in a list of findings, and they mean opposite things.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "refusal": {
+          "$ref": "#/$defs/FindingRefusal"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/ThresholdSource"
+        }
+      },
+      "required": [
+        "rule_id",
+        "title",
+        "refusal",
+        "reason",
+        "source"
+      ],
+      "title": "RefusedFinding",
+      "type": "object"
+    },
+    "SwingEvent": {
+      "description": "The instants that divide a swing.\n\nTAKEAWAY - the hands begin moving away from the ball.\nTOP      - the backswing reverses; the hands are momentarily near rest.\nIMPACT   - estimated from hand kinematics, not observed. See module docstring.\nFINISH   - the hands come back to rest after the follow-through.",
+      "enum": [
+        "takeaway",
+        "top",
+        "impact",
+        "finish"
+      ],
+      "title": "SwingEvent",
+      "type": "string"
+    },
+    "SwingPhase": {
+      "description": "The intervals between events.",
+      "enum": [
+        "address",
+        "backswing",
+        "downswing",
+        "follow_through"
+      ],
+      "title": "SwingPhase",
+      "type": "string"
+    },
+    "ThresholdMethod": {
+      "description": "How the source of a threshold measured the number it published.\n\nThe field that decides which of this engine's measurements a borrowed number\nmay be compared against, because it decides what the number is *about*.\n\nTHREE_D_MOTION_CAPTURE\n    Optical or electromagnetic capture of markers in three dimensions. The\n    quantity is an angle or a distance in space, so it may only be compared\n    against a `SPATIAL` measurement -- which in this build means a stereo\n    calibration and a triangulated pair.\n\nINSTRUMENTED_SENSOR\n    A device worn on the body: a spine-mounted goniometer, an inertial unit,\n    a pressure mat. Also a measurement of the body rather than of a picture\n    of it, and so also `SPATIAL`.\n\nTWO_D_VIDEO\n    Measured off video, which is what this engine has. A duration measured\n    this way transfers directly, because a clock does not care where the\n    camera stood. An *angle* measured this way transfers only to footage from\n    the same camera position, which is why `filmed_from` exists and why a\n    source that does not state it cannot supply an angular threshold.\n\nCONVENTION\n    Published without a measurement protocol: instruction books, coaching\n    received wisdom, the numbers on the back of a training aid. Permits no\n    basis at all. See the module docstring.\n\nSAME_CLIP\n    No borrowed number at all. The comparison is between two measurements of\n    the same quantity, made the same way, by the same camera, on the same\n    swing, and what has to be cleared is their own combined uncertainty. The\n    only kind of threshold here that carries no population -- and therefore\n    the only one that says nothing about anybody else's swing.\n\n    What survives a projection is the **direction** of the change and not its\n    size: a foreshortening map is monotone, so a line that turned further\n    really did turn further, and by how much is a statement about the picture.\n    Rules using this say so in their own words.",
+      "enum": [
+        "three_d_motion_capture",
+        "instrumented_sensor",
+        "two_d_video",
+        "convention",
+        "same_clip"
+      ],
+      "title": "ThresholdMethod",
+      "type": "string"
+    },
+    "ThresholdSource": {
+      "description": "Where a threshold came from, and what it is therefore a threshold on.",
+      "properties": {
+        "citation": {
+          "description": "Author, work and year, as it would be written out.",
+          "type": "string"
+        },
+        "year": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Publication year, where there is one."
+        },
+        "population": {
+          "description": "Who the number was measured on, in words. A threshold set on tour professionals says nothing about whether an amateur's swing is working; it says how far it sits from theirs.",
+          "type": "string"
+        },
+        "sample_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How many people, where the source states it. None means it does not."
+        },
+        "method": {
+          "$ref": "#/$defs/ThresholdMethod"
+        },
+        "measures": {
+          "description": "What the source actually measured, in its own terms -- not what this engine measures. The two being different is the normal case and the reason `permitted_bases` is not derived from the metric.",
+          "type": "string"
+        },
+        "permitted_bases": {
+          "description": "The bases of this engine's measurements that this number may be compared against. Empty is a valid and common answer: it means the source measured something nothing here produces, and every rule resting on it is refused rather than approximated.",
+          "items": {
+            "$ref": "#/$defs/MetricBasis"
+          },
+          "type": "array"
+        },
+        "filmed_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CameraView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "For a `TWO_D_VIDEO` source, the camera position it measured from. Required before any angular or image-plane threshold from it may be used, because a projected angle is a fact about a camera position as much as about a body. None on a source that states only durations, which no camera position changes."
+        },
+        "note": {
+          "default": "",
+          "description": "Anything a reader needs in order not to over-read the number.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "citation",
+        "population",
+        "method",
+        "measures"
+      ],
+      "title": "ThresholdSource",
+      "type": "object"
+    }
+  },
+  "description": "Everything the coaching engine concluded about one swing.\n\n`computed` is false when there was no swing to reason about, and then both\nlists are empty rather than populated from whatever the metrics layer managed\nto produce anyway.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "computed": {
+      "type": "boolean"
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/$defs/Finding"
+      },
+      "type": "array"
+    },
+    "refused": {
+      "items": {
+        "$ref": "#/$defs/RefusedFinding"
+      },
+      "type": "array"
+    },
+    "rules_considered": {
+      "default": 0,
+      "description": "How many rules were evaluated, whatever came out of them.",
+      "type": "integer"
+    },
+    "view": {
+      "$ref": "#/$defs/CameraView",
+      "default": "unknown",
+      "description": "The camera position the metrics were measured from. Decides several rules."
+    },
+    "frame_interval_s": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "The clip's own clock resolution, in real seconds, as the swing events imply it. Every duration comparison's bracket comes from this, so a clip that did not supply one has its timing rules refused rather than compared against a threshold it cannot resolve."
+    },
+    "phrasing": {
+      "$ref": "#/$defs/PhrasingReport"
+    },
+    "config": {
+      "$ref": "#/$defs/CoachingConfig"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "computed"
+  ],
+  "title": "CoachingReport",
+  "type": "object"
+}

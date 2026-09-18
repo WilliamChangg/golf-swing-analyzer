@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-13 complete (14 / 21).**
+**Progress: Phases 0-14 complete (15 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -22,8 +22,8 @@ advance past a broken phase.
 | 11  | Ball detection        | ✅ **Done** | Impact-frame agreement measured                                |
 | 12  | Temporal ML           | ✅ **Done** | Leak-free splits; **no metrics — no labelled set exists**      |
 | 13  | Coaching engine       | ✅ **Done** | Every finding cites computed evidence; 9 of 12 rules refuse    |
-| 14  | Desktop UI            | ⬜ Next     | Full workflow end-to-end                                       |
-| 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                                 |
+| 14  | Desktop UI            | ✅ **Done** | Full workflow end-to-end; seek verified in a real browser      |
+| 15  | 3D visualisation      | ⬜ Next     | Scrub stays in sync with video                                 |
 | 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                     |
 | 17  | Performance           | ⬜          | Before/after numbers recorded                                  |
 | 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                         |
@@ -2085,17 +2085,195 @@ below: nothing here is worth caching.
   foreshortened rotations and nothing else. Those quantities are measurable; what
   is missing is a measurement of how well.
 
-## Phase 14 — Desktop UI ⬜
+## Phase 14 — Desktop UI ✅
 
-- [ ] 14.1 Project management (SQLite) + import flow
-- [ ] 14.2 Dual video player with frame-accurate seek
-- [ ] 14.3 Phase timeline
-- [ ] 14.4 Transport: play/pause, 0.25/0.5/1x, frame step, jump to impact/top
-- [ ] 14.5 Pose + club overlay canvas
-- [ ] 14.6 Metrics panel surfacing methodology and confidence
-- [ ] 14.7 Findings panel linked to evidence frames
-- [ ] 14.8 Playwright flows for the full workflow
-- [ ] 14.9 Commit
+`apps/desktop/src/features/{player,analysis,projects}/` ·
+`python/analyzer/{overlay.py,contracts/overlay.py}` ·
+[ADR-0018](decisions/ADR-0018-seeking-by-measured-time.md)
+
+**A video element cannot be asked for a frame.** It is asked for a time, and its
+decoder shows whichever frame is being displayed then — while every panel this
+project has built since Phase 4 reports frame indices. That gap is the whole
+phase: the conversion between them is a measurement, it is made in the engine,
+and the result is **checked against what the browser reports painting** rather
+than assumed.
+
+- [x] **14.1 Project management + import flow** — sessions in SQLite, clips
+      attached by content with a **declared** camera role; the picker runs in
+      Rust, which is what makes the asset protocol's scope mean anything
+- [x] **14.2 Dual video player with frame-accurate seek** — `SeekIndex` carries
+      every frame's presentation time and the midpoint to seek to; the player
+      reports the frame it actually landed on
+- [x] **14.3 Phase timeline** — lifted out of `PhasesPanel` into one component,
+      so the timeline under the video and the one in the inspector cannot form
+      two opinions about where the backswing is
+- [x] **14.4 Transport** — play/pause, 0.25/0.5/1x, frame step, event jumps.
+      Stepping is relative to the frame **on screen**, not the one last asked for
+- [x] **14.5 Pose + club overlay canvas** — the _filtered_ landmarks, converted
+      back to drawing coordinates by the engine; three states, and a blocked
+      landmark is drawn as absent
+- [x] **14.6 Metrics panel** — basis, decomposed confidence, measured
+      uncertainty, methodology, and the refusals in their own list
+- [x] **14.7 Findings panel linked to evidence frames** — every citation is a
+      jump target; an empty result is presented as a result
+- [x] **14.8 Playwright flows** — 18 added, including the seek verification
+      against a real decoder
+- [x] **14.9 Commit** — with the measurements below
+
+### What the obvious implementation would have cost
+
+`scripts/benchmark_seek.py`, over the clips this repository contains. Each cell
+is frames landed on the wrong one, against the timestamps the container carries:
+
+| clip                | frames | vfr | declared fps | measured fps | `frame / declared fps` | measured midpoints |
+| ------------------- | ------ | --- | ------------ | ------------ | ---------------------- | ------------------ |
+| cfr_30fps.mp4       | 60     | no  | 30.000       | 30.000       | 0 / 60                 | **0 / 60**         |
+| vfr_30_to_15fps.mp4 | 45     | yes | 23.684       | 22.759       | 39 / 45 (±6)           | **0 / 45**         |
+| PW_face-on.mp4      | 68     | no  | 27.470       | 30.000       | 56 / 68 (±5)           | **0 / 68**         |
+| iron_dtl.mp4        | 96     | yes | 30.063       | 30.063       | 0 / 96                 | **0 / 96**         |
+| rory_face_on.mp4    | 652    | no  | 30.006       | 30.000       | 651 / 652 (±1)         | **0 / 652**        |
+
+**Three different failures, and only one of them is variable frame rate.**
+
+`PW_face-on.mp4` is constant-rate, evenly spaced at exactly 30 fps, and its
+container **declares 27.470** — an 8.4% error that drifts six frames by the end
+of a 2.3 s clip. This is one of the two clips every phase since Phase 4 has been
+measured on.
+
+`rory_face_on.mp4` has a declared rate correct to four decimal places and still
+misses on 651 of its 652 frames, every one of them by exactly one. `i / 30.006`
+lands a few hundred nanoseconds _below_ frame `i`'s presentation time, and a
+frame boundary has another frame on the other side of it. That is the argument
+for midpoints, and it survives getting the rate exactly right.
+
+### The measurement that is not circular
+
+The table above compares two maps against the timestamps the container carries,
+which is a statement about arithmetic. `benchmark_seek.py` also asks OpenCV to
+perform the seeks, and **that column measures OpenCV**:
+`cv2.VideoCapture.set(CAP_PROP_POS_MSEC)` lands a frame early on a sizeable
+minority of seeks once the decoder has been read from — the same inaccuracy
+Phase 1 found and works around with `_scan_to`. On three of the five clips it
+cannot tell the two maps apart.
+
+So the evidence is a real player: `e2e/player.spec.ts` serves the real fixture
+bytes, Chromium decodes them, and `requestVideoFrameCallback` reports what was
+painted. Every measured target lands on its own frame; the naive map is measured
+alongside it in the same browser, on the same clip, in the same run, and does not.
+
+### What the browser test found that the design did not predict
+
+- **Chromium reports media time in whole microseconds.** A frame at
+  0.13333333… seconds comes back as `0.133333`, a third of a microsecond _below_
+  the container's timestamp. Looked up strictly, it falls into the previous
+  frame's interval — so the player would have reported a spurious one-frame miss
+  on about half the frames of every 30 fps clip. `frameAt` allows one
+  microsecond, which is the resolution of the number being looked up and four
+  thousand times smaller than one frame at 240 fps.
+- **A media element will not seek in a resource that does not advertise byte
+  ranges.** Without `Accept-Ranges` Chromium reports `seekable` as empty and
+  silently clamps every `currentTime` back to zero — while still loading the
+  clip, reporting its duration and buffering it end to end. It looks exactly
+  like a broken player rather than a missing header.
+- **The last frame of a clip can be unreachable.** Its target lies past the end
+  of the media, because how long it is displayed is not recorded; the browser
+  clamps to the declared duration, and on `vfr_30_to_15fps.mp4` that duration
+  _equals the last frame's own presentation time_. No map can reach it. The
+  player reports it as a residual rather than hiding it.
+
+### The permission this cost
+
+Phases 0 and 1 both recorded that the WebView never reads a file. A `<video>`
+element **is** the WebView reading a file, and no frame-accurate player avoids
+it. So the line is crossed as narrowly as the platform allows: the asset
+protocol's scope ships **empty**, a path enters it one file at a time and only
+through `commands::choose_clip`, and **there is deliberately no command that
+takes a path and grants access to it**. That last point is what carries the
+guarantee — the frontend cannot name a file it wants read — so `choose_clip`
+opens its own dialog in Rust, because a grant has to be tied to something the
+caller could not have fabricated.
+
+`dialog:allow-open` stays, and that was reconsidered rather than assumed. It
+serves the pickers that choose footage **the engine** reads and the WebView does
+not, and none of those paths can reach the asset scope because no command would
+put one there. `tauri-plugin-fs` is still absent and the WebView still cannot
+spawn a process.
+
+### Deliberate deviations from the original plan
+
+- **"Dual video player" ships as one player.** 14.2 asks for two, and the
+  two-camera screen it implies needs a second clip _aligned to the first_ — which
+  is a `SyncModel`, which a project has only after `analyzer project sync` has
+  run on a genuine simultaneous pair. This repository contains no such pair:
+  Phase 7 measured its only candidate at a 95.8 ms residual against a 2.4 ms
+  floor and concluded the two clips are **not the same swing**. Building a
+  side-by-side player here would have meant shipping a screen whose correctness
+  could not be demonstrated on any footage that exists. The frame-accurate
+  single player is the part that is demonstrable, and the second one is a
+  component beside it rather than a rebuild — `SeekIndex` is per clip and the
+  time map that would relate two of them is already a contract.
+- **A router still has not earned its place.** Phase 0 said one would arrive
+  with project management. It did not: what justifies a router is a URL worth
+  addressing, and nothing here is addressed from outside the window. No second
+  window, no deep link, no history to be wrong about.
+- **Two contracts were added that no earlier phase needed.** `SeekIndex`,
+  because the engine read the per-frame timestamps from Phase 1 onward and threw
+  them away at the contract boundary; and `PoseOverlay`, because the landmarks
+  worth drawing are the _filtered_ ones and converting them back into drawing
+  coordinates needs the aspect ratio, the filter's validity mask and the lens.
+  A UI doing that arithmetic would have been a second opinion about all three.
+- **The overlay draws filtered landmarks, not the estimator's output.** An
+  overlay here is an instrument: it exists so a number can be checked against
+  the frame it came from. Drawn from the raw landmarks it would sit slightly
+  elsewhere than the thing being checked, and every disagreement would be
+  unattributable. The cost is that a lens-corrected skeleton genuinely does not
+  sit on the pixels underneath it — by up to the tens of pixels Phase 8 measured
+  near the frame edge — and `PoseOverlay.undistorted` puts that on screen rather
+  than leaving it to be discovered.
+- **Four contracts were exported to TypeScript, each on the terms its own phase
+  set.** `Project`/`ProjectList` were withheld until project management existed
+  (14.1); `CoachingReport` until a findings panel drew it (14.7), and the
+  rendering questions that exclusion predicted did get answered by having to
+  answer them — a refusal is its own list rather than a greyed finding, and a
+  citation is a jump target rather than a link, because the video is on the same
+  screen. `SequenceFilterReport` remains out on its original terms: no panel
+  draws it, and Phase 14 renders the filter's _warnings_, not its report.
+- **The type generator needed fixing rather than the contract.**
+  `tuple[Landmark, Landmark]` is JSON Schema 2020-12 `prefixItems`, which
+  `json-schema-to-typescript` does not read — it emits `[unknown, unknown]`, a
+  type that compiles, carries nothing, and fails at the point of use.
+  `gen_types.py` now also writes the draft-07 tuple form. Reshaping
+  `POSE_CONNECTIONS` to a `list[list[Landmark]]` would have given up "exactly
+  two" in both languages to satisfy a generator in one.
+- **The app opens on the workflow, not on the environment report.** Diagnostics
+  were the right front door while the environment was the only thing the app
+  could tell you about.
+- **`preload="auto"` on the video.** A player built to be scrubbed should not
+  seek into an unfetched part of a local file; a swing clip is seconds long and
+  already on the machine.
+- **An unrelated defect in the e2e harness was found and fixed.** The fixture
+  stubbed `unregisterListener` on `__TAURI_INTERNALS__`; the event plugin keeps
+  its own `__TAURI_EVENT_PLUGIN_INTERNALS__`, so every progress subscription
+  teardown had been throwing an unhandled rejection inside the page — passing
+  the test while leaving the teardown path untested. Invisible until Phase 14
+  put four subscribe/unsubscribe cycles behind one click.
+
+### Cost
+
+`seek_index` is one probe of the container index: **72.6 ms**, the figure Phase 1
+measured, and deliberately uncached for Phase 3's reason. `pose_overlay` over a
+whole clip is the filter plus a conversion — milliseconds against the seconds
+pose extraction already cost. Nothing new is cached.
+
+**Open, and not resolved here:**
+
+- The seek map is verified in **Chromium**. The app ships on WKWebView, and
+  `tauri-driver` is not wired up, so the packaged binary's player has no
+  automated coverage. The residual display is the mitigation and not a
+  substitute: it makes a WKWebView that behaves differently visible to the
+  person using it rather than silent.
+- No two-camera screen, for the reason above: no pair of clips in this
+  repository is two views of one swing.
 
 ## Phase 15 — 3D visualisation ⬜
 

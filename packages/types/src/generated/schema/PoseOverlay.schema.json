@@ -1,0 +1,325 @@
+{
+  "$defs": {
+    "ContentKey": {
+      "description": "Identity of a file's contents, used to key derived artifacts.\n\nThe algorithm travels with the digest so a cache written under one scheme is\nnever silently compared against a digest produced by another.",
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/HashAlgorithm"
+        },
+        "digest": {
+          "description": "Lowercase hex sha256 digest.",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "File size at the time the digest was taken.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "size_bytes"
+      ],
+      "title": "ContentKey",
+      "type": "object"
+    },
+    "FrameGeometry": {
+      "description": "The displayed pixel dimensions IMAGE landmarks were normalised against.\n\nCarried with the landmarks because IMAGE space is **anisotropic** and\nnothing downstream can discover that on its own. x is divided by the frame\nwidth and y by the frame height, so on a 1080x1920 clip one pixel of\nvertical travel becomes 1/1920 while one pixel of horizontal travel becomes\n1/1080: the same displacement in pixels counts for 0.5625 as much going down\nas going across. Any Euclidean quantity that mixes the two -- a distance, a\nspeed, an angle -- is wrong by an amount that depends only on the shape of\nthe frame, and nothing about the result looks wrong.\n\nOne number fixes it, and it is not recoverable from the landmarks: the\naspect ratio. It is recorded here, at the point where it is still known,\nrather than re-derived later by probing a video file that may have moved.",
+      "properties": {
+        "width": {
+          "description": "Displayed frame width in pixels, after rotation.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        },
+        "height": {
+          "description": "Displayed frame height in pixels, after rotation.",
+          "exclusiveMinimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "title": "FrameGeometry",
+      "type": "object"
+    },
+    "HashAlgorithm": {
+      "description": "How a `ContentKey` digest was computed.\n\nSHA256          - the whole file. Use when the answer must be an integrity\n                  check, as it is for model weights.\nSHA256_SAMPLED  - size, plus sha256 over three fixed windows of the file.\n                  **This is not an integrity check.** It exists because\n                  hashing every byte of a multi-gigabyte recording on every\n                  open costs seconds, and a cache key only has to change\n                  when the file changes, not prove that it did not.",
+      "enum": [
+        "sha256",
+        "sha256-sampled-v1"
+      ],
+      "title": "HashAlgorithm",
+      "type": "string"
+    },
+    "Landmark": {
+      "description": "The 33 body landmarks produced by MediaPipe's pose models.\n\nThe integer values are the model's own output indices, so this enum doubles\nas the mapping: `result.pose_landmarks[0][Landmark.LEFT_WRIST]` is the left\nwrist. Keeping the values rather than renumbering means there is no\ntranslation table to get wrong.",
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32
+      ],
+      "title": "Landmark",
+      "type": "integer"
+    },
+    "OverlayFrame": {
+      "description": "Everything drawn over one frame of the clip.",
+      "properties": {
+        "frame_index": {
+          "type": "integer"
+        },
+        "timestamp_s": {
+          "description": "Real-clock time from the first frame, after any slow-motion factor has been divided out. On a slowed clip this is **not** where the frame sits in the video file, which is what the player seeks by -- see `SeekIndex`.",
+          "type": "number"
+        },
+        "points": {
+          "description": "One entry per landmark asked for, in ascending landmark order.",
+          "items": {
+            "$ref": "#/$defs/OverlayPoint"
+          },
+          "type": "array"
+        },
+        "shaft": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverlayShaft"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The club, when it was tracked and found on this frame. Null otherwise."
+        }
+      },
+      "required": [
+        "frame_index",
+        "timestamp_s",
+        "points"
+      ],
+      "title": "OverlayFrame",
+      "type": "object"
+    },
+    "OverlayPoint": {
+      "description": "One landmark on one frame, ready to be drawn.\n\n`x` and `y` are null exactly when `state` is `blocked`. They are not NaN:\nJSON has no NaN, and a serialiser that emitted one would produce a document\nno strict parser accepts -- so the absence is carried in the type where a\nTypeScript consumer has to handle it.",
+      "properties": {
+        "landmark": {
+          "$ref": "#/$defs/Landmark",
+          "description": "The model's own landmark index; see `Landmark`."
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fraction of the displayed width. Null when blocked."
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Fraction of the displayed height, measured downward. Null when blocked."
+        },
+        "state": {
+          "$ref": "#/$defs/OverlayState"
+        },
+        "visibility": {
+          "description": "What the estimator reported for this landmark on this frame, carried through unchanged -- including on frames the gate rejected. It is the estimator's own opinion of itself and this project has measured it being confidently wrong: see the Post-Phase 6 note, where both shoulders scored 1.00 across frames whose implied turn varied by 27 degrees. Shown, never trusted.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "landmark",
+        "x",
+        "y",
+        "state",
+        "visibility"
+      ],
+      "title": "OverlayPoint",
+      "type": "object"
+    },
+    "OverlayShaft": {
+      "description": "The club shaft on one frame, as a segment in drawing coordinates.\n\nThe grip end is the hand anchor the search started from rather than\nsomething the detector found, exactly as `ShaftObservation` records -- so a\nreader watching the segment track the hands is watching a constraint that\nwas applied, not a measurement that was obtained.\n\n`reaches_head` is the field to draw differently on. False means the evidence\nstopped before the end of the club, so the tip is where the image stopped\ndrawing a line and **not** the club head. Drawing the two the same way would\nput a club head on screen in every frame where the club was blurred or\npointing at the camera, which is precisely where a reader would most want to\nknow that nothing was found.",
+      "properties": {
+        "grip_x": {
+          "type": "number"
+        },
+        "grip_y": {
+          "type": "number"
+        },
+        "tip_x": {
+          "type": "number"
+        },
+        "tip_y": {
+          "type": "number"
+        },
+        "reaches_head": {
+          "description": "Whether `tip` is the club head or merely the end of the supported evidence.",
+          "type": "boolean"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "grip_x",
+        "grip_y",
+        "tip_x",
+        "tip_y",
+        "reaches_head",
+        "confidence"
+      ],
+      "title": "OverlayShaft",
+      "type": "object"
+    },
+    "OverlayState": {
+      "description": "How much the system actually knows about where a landmark is.\n\nThree values rather than a nullable position, because the two ways of not\nknowing are different and only one of them is a problem with the recording.\n\nOBSERVED  - the estimator reported this landmark on this frame and the\n            confidence gate kept it. The position is supported by an\n            observation of this frame.\nFILLED    - the position is supported, but not by an observation of this\n            frame: either the gap policy bridged a short absence, or the\n            local fit was carried by neighbouring frames. Drawn, and drawn\n            differently, because a reader checking a metric against a frame\n            should be able to see that this particular frame contributed\n            nothing to it.\nBLOCKED   - no position is supported here at all, so `x` and `y` are null.\n            This is the state Phase 4 found on the down-the-line clip, where\n            motion blur smeared the wrists for 1.92 s exactly when they were\n            moving fastest. An overlay that interpolated across it would\n            hide the one thing worth seeing.",
+      "enum": [
+        "observed",
+        "filled",
+        "blocked"
+      ],
+      "title": "OverlayState",
+      "type": "string"
+    }
+  },
+  "description": "Filtered landmarks over a range of frames, in the frame they are drawn in.\n\nA range rather than a clip, because the caller is a canvas: a 60 s clip at\n240 fps is 14,400 frames of 33 landmarks, and serialising all of it to draw\none of them is half a million points to move so that thirty-three can be\nused. The range is also why `frames` carries its own indices rather than\nbeing positional -- a consumer holding two ranges should not have to\nremember where each one started.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "video_path": {
+      "type": "string"
+    },
+    "content_key": {
+      "$ref": "#/$defs/ContentKey"
+    },
+    "geometry": {
+      "$ref": "#/$defs/FrameGeometry",
+      "description": "The displayed pixel size the coordinates are fractions of. Carried so a canvas can size itself, and so a caller can tell that a clip is portrait without probing the file again."
+    },
+    "start_frame": {
+      "type": "integer"
+    },
+    "end_frame": {
+      "description": "Exclusive, as every frame range in this project is.",
+      "type": "integer"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/OverlayFrame"
+      },
+      "type": "array"
+    },
+    "landmarks": {
+      "description": "Which landmarks each frame carries, in the order they appear.",
+      "items": {
+        "$ref": "#/$defs/Landmark"
+      },
+      "type": "array"
+    },
+    "connections": {
+      "description": "Skeleton edges to draw, from `POSE_CONNECTIONS`. Sent rather than left to the consumer so that the app cannot grow a second opinion about human anatomy; Phase 9's bone-length checks read the same tuple. Edges whose endpoints were not both requested are omitted.",
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "$ref": "#/$defs/Landmark"
+          },
+          {
+            "$ref": "#/$defs/Landmark"
+          }
+        ],
+        "type": "array",
+        "items": [
+          {
+            "$ref": "#/$defs/Landmark"
+          },
+          {
+            "$ref": "#/$defs/Landmark"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "slow_motion_factor": {
+      "description": "The factor the timestamps were divided by. 1.0 for an ordinary recording.",
+      "type": "number"
+    },
+    "undistorted": {
+      "description": "Whether a lens correction was applied to these positions. When true they will not sit exactly on the raw pixels of the frame underneath, by up to the tens of pixels Phase 8 measured near the frame edge -- which is a real disagreement between the picture and the measurement, and belongs on screen rather than hidden.",
+      "type": "boolean"
+    },
+    "club_tracked": {
+      "description": "Whether club tracking was asked for. False means every `shaft` is null because nothing looked, which is not the same as nothing being found.",
+      "type": "boolean"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "video_path",
+    "content_key",
+    "geometry",
+    "start_frame",
+    "end_frame",
+    "frames",
+    "landmarks",
+    "connections",
+    "slow_motion_factor",
+    "undistorted",
+    "club_tracked"
+  ],
+  "title": "PoseOverlay",
+  "type": "object"
+}

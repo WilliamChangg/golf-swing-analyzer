@@ -70,7 +70,11 @@ impl EngineError {
         Self::new("spawn", message)
     }
 
-    fn transport(message: impl Into<String>) -> Self {
+    /// Visible to `commands` because the file picker lives there and can fail
+    /// before any request reaches the engine — a dialog that cannot be awaited,
+    /// or a path the platform will not give as UTF-8. Those are transport
+    /// failures in the same sense a broken pipe is: the analysis never started.
+    pub(crate) fn transport(message: impl Into<String>) -> Self {
         Self::new("transport", message)
     }
 

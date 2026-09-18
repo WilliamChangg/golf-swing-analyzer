@@ -180,3 +180,76 @@ class VideoMetadata(BaseModel):
         default_factory=list,
         description="Caveats that affect how the clip may be analysed, e.g. variable frame rate.",
     )
+
+
+class SeekIndex(BaseModel):
+    """Every frame's presentation time, and the time to seek to in order to land on it.
+
+    Named for what it is used for rather than for what it holds, because
+    `ingestion.probe.FrameIndex` already holds the raw version -- the timestamps
+    and the keyframe flags, as read. This is that, plus the one derived quantity
+    a player needs and nothing else in the system does.
+
+    **A video element cannot be asked for a frame.** It is asked for a *time*,
+    and its decoder picks whichever frame is being displayed then. Every panel
+    this project has built since Phase 4 reports frame indices -- impact at
+    frame 46, the address baseline over frames 0 to 12 -- so putting a picture
+    behind those numbers needs a map from an index to a time that lands on it.
+
+    `frame / fps` is not that map, and this is the same argument Phase 1 is
+    built on one layer up: on variable-rate footage the interval between frames
+    is not constant, so dividing by an average rate accumulates error until the
+    frame under the playhead is not the frame the panel is talking about. The
+    timestamps here are the presentation times of the frames a decoder actually
+    emits, which is what `probe` already reads and until now discarded at the
+    contract boundary.
+
+    **`seek_targets_s` is not `timestamps_s`, and the difference is the point of
+    this contract.** Frame *i* is displayed from `timestamps_s[i]` until
+    `timestamps_s[i + 1]`, so its own timestamp is the instant the frame appears
+    -- a boundary, with frame *i - 1* on the other side of it. Asking for that
+    exact time is asking a decoder to resolve a tie, and which side it falls is
+    decided by rounding nobody controls: the container's rational time base, the
+    double the time is carried as, and the decoder's own comparison. The
+    midpoint of the interval is the furthest point from both boundaries, so it
+    is the target that survives all three, and that is what is stored here.
+
+    Both lists are relative to the first frame, matching `PoseFrame.timestamp_s`
+    and every other time in this system. They are also the inverse map: a player
+    that observes the presentation time it actually landed on can look it up
+    here and report the frame it really showed, rather than the frame it asked
+    for. Those differ, and a player that assumed otherwise would be the third
+    place in this project where an unmeasured clock quietly biased a number.
+    """
+
+    schema_version: int = VIDEO_SCHEMA_VERSION
+    path: str
+    content_key: ContentKey
+    source: TimestampSource = Field(
+        description=(
+            "Where the times came from. `container_rate` means they were "
+            "synthesised, so seeking by them is a guess of exactly the kind this "
+            "contract exists to avoid -- see `warnings`."
+        )
+    )
+    frame_count: int
+    timestamps_s: list[float] = Field(
+        description="Presentation time of each frame, relative to the first. Strictly increasing."
+    )
+    seek_targets_s: list[float] = Field(
+        description=(
+            "Where to seek to in order to land on each frame: the midpoint of "
+            "the interval that frame is displayed for."
+        )
+    )
+    last_interval_s: float | None = Field(
+        default=None,
+        description=(
+            "How long the final frame is assumed to be displayed, since the "
+            "container does not record it. Taken as the last observed interval, "
+            "which is the same assumption `VideoTiming.duration_s` makes. None "
+            "when the clip has fewer than two frames and there is no interval to "
+            "observe."
+        ),
+    )
+    warnings: list[str] = Field(default_factory=list)

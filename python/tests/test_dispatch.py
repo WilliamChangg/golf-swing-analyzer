@@ -59,6 +59,8 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "track_club": {"path": str(CFR_30FPS)},
     "detect_ball": {"path": str(CFR_30FPS)},
     "locate_impact": {"path": str(CFR_30FPS)},
+    "seek_index": {"path": str(CFR_30FPS)},
+    "pose_overlay": {"path": "poses.parquet"},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -68,13 +70,27 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
 # only safe to call here because `conftest.isolated_data` redirects the database
 # into `tmp_path`. Without that this table would create projects in the
 # developer's real data directory on every run.
-_FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
+#
+# `seek_index` qualifies for the same reason `probe_video` does -- it is two
+# ffprobe passes over a committed 60-frame fixture and touches nothing else.
+_FAST_METHODS = {
+    "doctor",
+    "probe_video",
+    "create_project",
+    "list_projects",
+    "seek_index",
+}
 
 # `calibrate_camera` and `calibrate_stereo` are absent from the fast set and from
 # the slow one: both need board footage, which this repository does not contain,
 # and a stub would exercise the dispatch wiring against a fixture rather than
 # against the engine. `tests/test_calibration.py` covers the path they call into,
 # from rendered board views, which is the stronger test of the two.
+#
+# `pose_overlay` is absent from both sets because it reads a stored pose
+# sequence, which means extracting one first -- the same reason `filter_poses`
+# and `compute_metrics` are absent. `tests/test_overlay.py` drives the builder it
+# calls into directly, from a synthetic sequence whose landmarks are inputs.
 #
 # `reconstruct` is absent for the same reason and one more: it needs a project
 # holding two calibrated clips *and* an alignment between them, which is three

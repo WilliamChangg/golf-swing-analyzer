@@ -57,7 +57,7 @@ from analyzer.contracts.projects import Project, ProjectList
 from analyzer.contracts.reconstruction import ReconstructionReport
 from analyzer.contracts.rpc import EngineError
 from analyzer.contracts.sync import SyncModel
-from analyzer.contracts.video import TimestampSource, VideoMetadata
+from analyzer.contracts.video import SeekIndex, TimestampSource, VideoMetadata
 from analyzer.dispatch import call
 from analyzer.progress import CallbackReporter
 
@@ -283,6 +283,101 @@ def probe(
         typer.echo(json.dumps(metadata.model_dump(mode="json"), indent=2))
     else:
         _render_metadata(metadata)
+
+
+def _render_seek_index(index: SeekIndex) -> None:
+    """The frame/time map, and what the obvious alternative would have done.
+
+    The comparison column is the point of printing this at all. A list of
+    timestamps is not interesting; a list of the frames `frame / fps` would have
+    displayed instead of the one asked for is, and it is the only way to see
+    without a video player that a clip's declared rate is wrong.
+    """
+    import bisect
+
+    console.print(f"[bold]{Path(index.path).name}[/bold]")
+    console.print(f"  {index.frame_count} frames, times from [cyan]{index.source.value}[/cyan]")
+
+    metadata = call("probe_video", {"path": index.path})
+    assert isinstance(metadata, VideoMetadata)  # noqa: S101 - narrows the dispatch return type
+    nominal = metadata.timing.nominal_fps
+
+    def displayed(at: float) -> int:
+        return max(bisect.bisect_right(index.timestamps_s, at) - 1, 0)
+
+    table = Table(expand=True)
+    table.add_column("frame", justify="right")
+    table.add_column("shown at", justify="right")
+    table.add_column("seek to", justify="right")
+    table.add_column("frame / declared fps", justify="right")
+
+    # The first and last few frames, and the rest elided: the interesting rows
+    # are at the ends and a 652-frame clip would otherwise scroll a terminal.
+    shown = (
+        range(index.frame_count)
+        if index.frame_count <= 12
+        else [*range(6), *range(index.frame_count - 6, index.frame_count)]
+    )
+    previous = -1
+    for frame in shown:
+        if previous >= 0 and frame != previous + 1:
+            table.add_row("…", "", "", "")
+        naive = "—"
+        if nominal:
+            landed = displayed(frame / nominal)
+            naive = "[green]lands here[/green]" if landed == frame else f"[red]frame {landed}[/red]"
+        table.add_row(
+            str(frame),
+            f"{index.timestamps_s[frame]:.6f}s",
+            f"{index.seek_targets_s[frame]:.6f}s",
+            naive,
+        )
+        previous = frame
+    console.print(table)
+
+    if nominal:
+        wrong = sum(1 for frame in range(index.frame_count) if displayed(frame / nominal) != frame)
+        tone = "green" if wrong == 0 else "yellow"
+        console.print(
+            f"  declared {nominal:.3f} fps, measured "
+            f"{metadata.timing.measured_fps or float('nan'):.3f} fps — "
+            f"[{tone}]`frame / declared fps` would miss on {wrong} of "
+            f"{index.frame_count} frames[/{tone}]"
+        )
+
+    for warning in index.warnings:
+        console.print(f"  [yellow]{warning}[/yellow]")
+
+
+@app.command()
+def frames(
+    path: Annotated[Path, typer.Argument(help="Video file to inspect.")],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the whole map as JSON instead of a table.")
+    ] = False,
+) -> None:
+    """Every frame's presentation time, and the time to seek to to display it.
+
+    What the desktop player runs on. Worth having on the command line because it
+    is the only way to check, without opening a video, whether a clip's declared
+    frame rate would put the playhead on the frame a panel is talking about --
+    and on two of this repository's own reference clips it would not.
+    """
+    try:
+        index = call("seek_index", {"path": str(path)})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(index, SeekIndex)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(index.model_dump(mode="json"), indent=2))
+    else:
+        _render_seek_index(index)
 
 
 def _render_filter(report: SequenceFilterReport) -> None:

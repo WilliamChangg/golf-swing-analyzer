@@ -11,9 +11,12 @@ Three processes, one machine, no network.
 │  ┌──────────────────────┐        ┌───────────────────────┐  │
 │  │ WebView (React/TS)   │        │ Rust core             │  │
 │  │                      │        │                       │  │
-│  │  features/health     │ invoke │  commands.rs          │  │
-│  │  features/video   ───┼───────►│  engine/mod.rs        │  │
-│  │  lib/ipc.ts          │        │  engine/resolve.rs    │  │
+│  │  features/analysis   │ invoke │  commands.rs          │  │
+│  │  features/player  ───┼───────►│  engine/mod.rs        │  │
+│  │  features/projects   │        │  engine/resolve.rs    │  │
+│  │  features/video      │        │                       │  │
+│  │  features/health     │  asset │  asset_protocol_scope │  │
+│  │  lib/ipc.ts       ◄──┼────────┤  (one file at a time) │  │
 │  │  components/ui       │        │                       │  │
 │  └──────────────────────┘        └───────────┬───────────┘  │
 └───────────────────────────────────────────────┼─────────────┘
@@ -33,6 +36,15 @@ Three processes, one machine, no network.
 The Rust core is a **transport and process supervisor**. It contains no computer
 vision, no biomechanics, and no analysis state. Everything measurable lives in
 Python, which keeps it runnable and testable without compiling Rust.
+
+The second arrow is new in Phase 14 and is the only path by which the WebView
+reads a file. A `<video>` element cannot be fed over the RPC channel, so the
+asset protocol serves the clip directly — from a scope that ships **empty** and
+is extended one file at a time by `commands::choose_clip`, which opens its own
+dialog in Rust and admits exactly what came back. There is deliberately no
+command that takes a path and grants access to it, which is what keeps the
+frontend unable to name a file it wants read. See
+[ADR-0018](decisions/ADR-0018-seeking-by-measured-time.md).
 
 ## The engine boundary
 

@@ -1447,6 +1447,194 @@ def _median_interval_s(filtered: Any) -> float | None:
     return float(np.median(finite)) if finite.size else None
 
 
+# --- the desktop player (Phase 14) ----------------------------------------
+#
+# Two methods that exist because a video element is a different kind of consumer
+# from everything above. Every other method here answers a question about a
+# swing; these two answer questions about a *file* and a *canvas*, which the
+# engine is nonetheless the only component entitled to answer.
+#
+# `seek_index` because a player seeks by time and every panel reports frames,
+# and `frame / fps` is not the conversion -- the same fact Phase 1 is built on.
+# `pose_overlay` because the landmarks worth drawing are the filtered ones, and
+# converting them back into drawing coordinates needs the aspect ratio, the
+# filter's own validity mask and, where there is one, the lens. A UI that did
+# that arithmetic itself would be a second opinion about all three.
+
+
+class SeekIndexParams(BaseModel, extra="forbid"):
+    """Parameters for `seek_index`."""
+
+    path: str = Field(description="Absolute path to the video file.")
+
+
+def _seek_index(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    """Every frame's presentation time, and the time to seek to to display it."""
+    parsed = SeekIndexParams.model_validate(params)
+
+    from analyzer.ingestion import seek_index
+
+    try:
+        return seek_index(Path(parsed.path))
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+class PoseOverlayParams(BaseModel, extra="forbid"):
+    """Parameters for `pose_overlay`.
+
+    Takes the same filtering and slow-motion inputs as `compute_metrics` and for
+    the same reason: the overlay is checked against the metrics panel beside it,
+    and a skeleton drawn under a different smoothing window than the numbers
+    would disagree with them in a way that looks like a measurement error.
+    """
+
+    path: str = Field(
+        description=(
+            "A pose Parquet file, or the video it was extracted from -- in which "
+            "case the content-keyed cache is consulted for its landmarks. A video "
+            "is required when `club` is true, since a shaft is found in the pixels."
+        )
+    )
+    model: str | None = Field(default=None, description="Which model's extraction to draw.")
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(
+        default=None,
+        description=(
+            "Exclusive end of the range. None draws to the end of the clip, which "
+            "is refused for a clip longer than the range limit rather than "
+            "silently truncated."
+        ),
+    )
+    filter: FilterConfig = Field(default_factory=FilterConfig)
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description="Only read when `club` is true, to report the tracker's per-phase coverage.",
+    )
+    club: ClubConfig = Field(default_factory=ClubConfig)
+    with_club: bool = Field(
+        default=False,
+        description=(
+            "Also track the club and include its shaft on each frame. Off by "
+            "default because it costs a full decode of the clip, against "
+            "milliseconds for the landmarks -- so the skeleton appears while the "
+            "club is still being looked for, rather than neither appearing until "
+            "both are ready."
+        ),
+    )
+    project_id: int | None = Field(
+        default=None,
+        description=(
+            "Apply this project's calibration to the landmarks, matching "
+            "`compute_metrics`. The drawn skeleton then will not sit exactly on "
+            "the frame underneath, which is what the correction *is*; "
+            "`PoseOverlay.undistorted` says so."
+        ),
+    )
+    slow_motion_factor: float = Field(default=1.0, gt=0.0)
+
+
+def _pose_overlay(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Filtered landmarks over a frame range, in the coordinates they are drawn in."""
+    parsed = PoseOverlayParams.model_validate(params)
+
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.overlay import OverlayError, build_overlay
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if parsed.with_club and source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Drawing the club reads the video, not a pose file: a shaft is found in "
+                "the pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself, or ask for the skeleton alone with `with_club` false.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    intrinsics, _ = _calibration_for(parsed.project_id, sequence)
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        intrinsics=intrinsics,
+        reporter=reporter,
+    )
+
+    # The default end is the clip, not the range limit: a long clip asked for
+    # whole is refused by name rather than silently truncated to its first
+    # `MAX_OVERLAY_FRAMES` frames, which would put a skeleton over the first
+    # eight seconds and nothing after it with no indication why.
+    end = parsed.end_frame if parsed.end_frame is not None else int(filtered.t.size)
+    club = _club_for_overlay(parsed, filtered, reporter) if parsed.with_club else None
+
+    try:
+        overlay = build_overlay(
+            filtered,
+            video_path=sequence.video_path,
+            content_key=sequence.video_content_key,
+            start_frame=parsed.start_frame,
+            end_frame=end,
+            club=club,
+            club_requested=parsed.with_club,
+        )
+    except OverlayError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    if parsed.with_club and club is None:
+        overlay.warnings.append(
+            "The club was asked for and could not be tracked in this clip, so every frame "
+            "below carries a skeleton and no shaft. The landmarks are unaffected: they are "
+            "measured from a stored pose sequence and the club is measured from the pixels."
+        )
+    overlay.warnings.extend(filtered.report.warnings)
+    return overlay
+
+
+def _club_for_overlay(parsed: PoseOverlayParams, filtered: Any, reporter: ProgressReporter) -> Any:
+    """Track the club for drawing, returning None rather than failing the overlay.
+
+    A club that cannot be found is not a reason to draw no skeleton. The two are
+    independent evidence and the overlay reports `club_tracked` either way, so a
+    reader can tell "nothing looked" from "looked and found nothing" -- which is
+    the same distinction `ClubTrack` itself is built around.
+    """
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.phases import SignalError, detect_phases
+
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        detected = None
+
+    try:
+        return track_club(
+            Path(parsed.path),
+            filtered,
+            HoughShaftDetector(parsed.club),
+            phases=detected,
+            config=parsed.club,
+            reporter=reporter,
+        )
+    except (ClubDetectionError, ProbeError):
+        return None
+
+
 # --- calibration (Phase 8) ------------------------------------------------
 
 
@@ -2013,6 +2201,8 @@ METHODS: dict[str, Method] = {
     "track_club": _track_club,
     "detect_ball": _detect_ball,
     "locate_impact": _locate_impact,
+    "seek_index": _seek_index,
+    "pose_overlay": _pose_overlay,
 }
 
 

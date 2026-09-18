@@ -6,13 +6,14 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-13 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-14 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
 > explicit coordinate frames with measured camera-view tagging, two-camera time
 > alignment, camera calibration, multi-view 3D reconstruction, club shaft
-> tracking, ball detection, the temporal-ML apparatus and the coaching engine are
-> built and verified. **Nothing has been reconstructed, calibrated or
+> tracking, ball detection, the temporal-ML apparatus, the coaching engine and
+> the desktop workflow — a frame-accurate player, a pose overlay, and the
+> metrics and findings panels — are built and verified. **Nothing has been reconstructed, calibrated or
 > club-tracked from real footage** — no board capture and no simultaneous
 > two-camera recording exists in this repository, and the club figures come from
 > a rendered shaft whose angle is an input, so every figure in §9 and §10a is
@@ -104,15 +105,24 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — the desktop UI is Phase 14._ A clip can be imported,
-inspected, run through pose estimation, filtered into trajectories with
-derivatives, segmented into swing phases, measured, aligned against a second
-camera, reconstructed into 3D positions in metres with both cameras calibrated,
-and reasoned about. All of it from the app's **Video** screen except project
-management, reconstruction and coaching, and all of it from a terminal:
+A clip can be imported, inspected, run through pose estimation, filtered into
+trajectories with derivatives, segmented into swing phases, measured, aligned
+against a second camera, reconstructed into 3D positions in metres with both
+cameras calibrated, and reasoned about.
+
+The app's **Swing** screen runs that whole chain on one clip and puts a
+frame-accurate player under it, with the pose overlay, the measurements and the
+findings on the same screen — because each of the last three is only checkable
+against the first. **Sessions** manages which clips belong together, **Video**
+keeps the stage-by-stage panels for checking one step in isolation, and
+**Environment** is the health report. Reconstruction, club tracking, ball
+detection and labelling remain terminal-only.
+
+Everything is available from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
+uv run --project python analyzer frames  path/to/swing.mov   # frame/time map for seeking
 uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
 uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
 uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
@@ -768,7 +778,79 @@ swing would be the most quoted output of this system and the one with the least
 behind it: it would need a scale relating degrees of turn to seconds of tempo,
 and nobody has measured one.
 
-## 13. Model architecture
+## 13. The player, and why seeking is a measurement
+
+Every panel in this app reports **frame indices** — impact at frame 46, an
+address baseline over frames 0 to 12, a finding citing frames 13 to 38. A
+`<video>` element cannot be asked for a frame. It is asked for a **time**, and
+its decoder shows whichever frame is being displayed then.
+
+So the conversion has to come from somewhere, and `frame / fps` is not it. That
+is the same mistake [section 6](#6-supported-video-formats) describes one layer
+down: on variable-rate footage the interval between frames is not constant, so
+dividing by an average accumulates error until the frame under the playhead is
+not the frame the panel beside it is talking about. Nothing about the resulting
+picture looks wrong.
+
+Measured over the clips in this repository (`scripts/benchmark_seek.py`), each
+cell counting frames the map lands on the wrong one:
+
+| clip                | frames | vfr | declared fps | measured fps | `frame / declared fps` | measured midpoints |
+| ------------------- | ------ | --- | ------------ | ------------ | ---------------------- | ------------------ |
+| cfr_30fps.mp4       | 60     | no  | 30.000       | 30.000       | 0 / 60                 | **0 / 60**         |
+| vfr_30_to_15fps.mp4 | 45     | yes | 23.684       | 22.759       | 39 / 45 (±6)           | **0 / 45**         |
+| PW_face-on.mp4      | 68     | no  | 27.470       | 30.000       | 56 / 68 (±5)           | **0 / 68**         |
+| iron_dtl.mp4        | 96     | yes | 30.063       | 30.063       | 0 / 96                 | **0 / 96**         |
+| rory_face_on.mp4    | 652    | no  | 30.006       | 30.000       | 651 / 652 (±1)         | **0 / 652**        |
+
+**Only one of those three failures is variable frame rate.**
+
+`PW_face-on.mp4` is constant-rate, evenly spaced at exactly 30 fps, and its
+container **declares 27.470** — an 8.4% error that drifts six frames across a
+2.3 s clip. It is one of the two clips every phase since Phase 4 has been
+measured on.
+
+`rory_face_on.mp4` has a declared rate right to four decimal places and still
+misses on 651 of 652 frames, every one by exactly one. `i / 30.006` lands a few
+hundred nanoseconds _below_ frame `i`'s presentation time, and a frame boundary
+has another frame on the other side of it.
+
+### What the app does instead
+
+The engine reads the per-frame presentation timestamps out of the container —
+it has done since Phase 1 — and `SeekIndex` now carries them, plus the **midpoint
+of the interval each frame is displayed for**. The midpoint is the furthest
+point from both boundaries, so it survives every source of rounding at once.
+
+Then the answer is checked. `requestVideoFrameCallback` reports the presentation
+time of the frame actually painted; the player looks it up and shows the
+difference from the frame it asked for. `currentTime` is not a substitute —
+browsers commonly leave it at the value requested, so reading it back confirms
+the seek against itself. Where the API is absent, the player says **"seeks are
+unverified"** rather than showing a residual of zero it never measured.
+
+That last part is the point. A player that seeks by `frame / fps` and displays
+the number it asked for looks correct on every clip in the table above,
+including the two it is five frames wrong on.
+
+### The overlay draws what the numbers were computed from
+
+The skeleton is the **filtered** trajectory converted back into drawing
+coordinates by the engine, not the estimator's raw output. An overlay here is an
+instrument: it exists so a metric can be checked against the frame it came from,
+and drawn from the raw landmarks it would sit slightly elsewhere than the thing
+being checked — leaving every disagreement unattributable.
+
+Three states are drawn differently, because only one of them is a measurement of
+that frame. **Observed** is solid. **Filled** is hollow: the position is
+supported, but not by an observation of this frame. **Blocked** is not drawn at
+all — the case where motion blur lost the wrists for 1.92 s exactly when they
+were moving fastest, which an overlay that interpolated across would hide.
+
+Full reasoning, including what the browser test found that the design did not
+predict, in [ADR-0018](docs/decisions/ADR-0018-seeking-by-measured-time.md).
+
+## 14. Model architecture
 
 **No model is trained on real swings, and none can be.** Phase 12 built the whole
 apparatus — labelling tool, versioned features, player-grouped splits, a TCN
@@ -822,20 +904,20 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
-## 14. Testing
+## 15. Testing
 
 ```bash
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                     |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 1,255 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                 |
-| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                                                                             |
-| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                                                                        |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| pytest     | 1,286 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                    |
+| Vitest     | 152   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management                                                                                                                                           |
+| Playwright | 48    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, and **frame-accurate seek against a real decoder**                                                                                                                                                                                                                       |
 
-All 1,400 pass as of Phase 13.
+All 1,498 pass as of Phase 14.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -942,7 +1024,7 @@ CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
 
-## 15. Performance benchmarks
+## 16. Performance benchmarks
 
 Measured on the reference machine. Every figure here came out of a script in
 `scripts/`; none is estimated.
@@ -1422,7 +1504,7 @@ concluded about the layers below it.
 
 A general benchmark harness arrives in Phase 17.
 
-## 16. Limitations
+## 17. Limitations
 
 - **macOS/Apple silicon only, so far.** Nothing is known to be Windows- or
   Linux-incompatible, but neither has been tested, and the MediaPipe wheel
@@ -1431,7 +1513,22 @@ A general benchmark harness arrives in Phase 17.
   MediaPipe Tasks Python API on this platform.
 - **Playwright does not drive the real WebView.** It runs against the Vite dev
   server with the Tauri IPC bridge stubbed. Real-WebView automation needs
-  `tauri-driver` and a platform WebDriver, which is not set up.
+  `tauri-driver` and a platform WebDriver, which is not set up. One consequence
+  is specific and worth naming: the frame-accurate seek is verified in
+  **Chromium**, and the app ships on WKWebView. The player's residual display is
+  the mitigation and not a substitute — it makes a WebView that behaves
+  differently visible to the person using it rather than silent.
+- **The last frame of a clip may not be reachable by seeking.** How long a final
+  frame is displayed is not recorded in any container, so its seek target lies
+  past the end of the media; the browser clamps to the declared duration, and
+  where that duration equals the last frame's own presentation time there is no
+  time inside the media at which it is shown. No map can fix that. The player
+  reports it as a one-frame residual rather than hiding it.
+- **There is no two-camera player.** A side-by-side view needs two clips aligned
+  to each other, which needs a stored `SyncModel`, which needs a genuine
+  simultaneous pair. This repository contains none: the only two-angle candidate
+  aligns at a 95.8 ms residual against a 2.4 ms floor, which is the system
+  correctly reporting that the two clips are not the same swing.
 - **Engine requests are serialised.** A mutex guards the worker; concurrent
   request multiplexing is not implemented because nothing needs it yet.
 - **Nothing can tell that two clips show the same swing.** Synchronisation
@@ -1744,7 +1841,7 @@ A general benchmark harness arrives in Phase 17.
   missing is a measurement of how well.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
-## 17. Future work
+## 18. Future work
 
 Phases 14-20: desktop visualisation, 3D rendering, swing comparison, performance
 work, model management, test hardening and documentation. Sequencing,
