@@ -6,20 +6,22 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-11 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-13 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
 > explicit coordinate frames with measured camera-view tagging, two-camera time
 > alignment, camera calibration, multi-view 3D reconstruction, club shaft
-> tracking and ball detection are built and verified. No coaching engine exists
-> yet. **Nothing has been reconstructed, calibrated or club-tracked from real
-> footage** — no board capture and no simultaneous two-camera recording exists in
-> this repository, and the club figures come from a rendered shaft whose angle is
-> an input, so every figure in §9 and §10a is synthetic and is a floor. The ball
-> is the exception: impact has been **observed** on one real clip, and §10b says
-> what that one clip does and does not settle. Sections below marked _Not yet
-> implemented_ say so rather than describing features that do not exist. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> tracking, ball detection, the temporal-ML apparatus and the coaching engine are
+> built and verified. **Nothing has been reconstructed, calibrated or
+> club-tracked from real footage** — no board capture and no simultaneous
+> two-camera recording exists in this repository, and the club figures come from
+> a rendered shaft whose angle is an input, so every figure in §9 and §10a is
+> synthetic and is a floor. The ball is the exception: impact has been
+> **observed** on one real clip, and §10b says what that one clip does and does
+> not settle. The coaching engine ships twelve rules of which **nine are refused
+> on every recording this system can currently make**, for reasons §12 sets out.
+> Sections below marked _Not yet implemented_ say so rather than describing
+> features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -27,8 +29,9 @@ never leaves it.
 
 The goal is a serious computer-vision system, not a wrapper that forwards video
 to a language model. The analysis pipeline produces structured quantitative
-evidence; any LLM layer added later only translates that evidence into coaching
-language and is forbidden from inventing measurements.
+evidence; the LLM layer, now built, only rewords that evidence, is off by
+default, never sees a frame, and is held to a deterministic guard that discards
+any sentence containing a number the evidence does not.
 
 Design commitments that shape everything else:
 
@@ -101,12 +104,12 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phase 13 outstanding._ A clip can be imported,
+_Partially implemented — the desktop UI is Phase 14._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
 derivatives, segmented into swing phases, measured, aligned against a second
-camera, and — with both cameras calibrated — reconstructed into 3D positions in
-metres. All of it from the app's **Video** screen except project management and
-reconstruction, and all of it from a terminal:
+camera, reconstructed into 3D positions in metres with both cameras calibrated,
+and reasoned about. All of it from the app's **Video** screen except project
+management, reconstruction and coaching, and all of it from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -157,6 +160,11 @@ uv run --project python analyzer labels                           # the set, and
 uv run --project python analyzer dataset                          # features, classes, imbalance
 uv run --project python analyzer train                            # split, fit, score, register
 uv run --project python analyzer models                           # what each may claim
+
+# Conclusions, and the far longer list of things that cannot be concluded.
+uv run --project python analyzer coach faceon.mov
+uv run --project python analyzer coach faceon.mov --slow-motion 7
+uv run --project python analyzer coach faceon.mov --phrase-with http://127.0.0.1:11434/api/generate
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -240,9 +248,22 @@ video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
 (`$XDG_DATA_HOME` elsewhere) rather than in the cache, and clips are identified by
 content so moving a file does not break the record of what it is.
 
+Coaching is the only layer here that draws a conclusion rather than measuring
+one, and most of what it does is decline to. Each rule declares the source of the
+threshold it compares against — who published it, on whom, and **by what
+method** — and a threshold measured by three-dimensional motion capture is not a
+threshold on a rotation this engine inferred from how much a line shortened in
+one photograph. Nine of the twelve shipped rules are refused for that reason or
+because no number has ever been published for the quantity at all. Every finding
+that survives carries the frames its numbers were measured on, and no sentence in
+the report — including the engine's own — may contain a number absent from that
+evidence. §12 has the numbers and
+[ADR-0017](docs/decisions/ADR-0017-borrowed-thresholds-and-the-guard.md) the
+reasoning.
+
 The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
-`detect_phases`, `compute_metrics`, `track_club`, `detect_ball`, `locate_impact`,
-`sync_clips`, `sync_project`,
+`detect_phases`, `compute_metrics`, `coach_swing`, `track_club`, `detect_ball`,
+`locate_impact`, `sync_clips`, `sync_project`,
 `create_project`, `list_projects`, `get_project`, `delete_project`, `add_clip`,
 `remove_clip`, `relocate_clip`, `calibrate_camera`, `calibrate_stereo`,
 `get_calibration`, `clear_calibration` and `reconstruct`.
@@ -296,7 +317,7 @@ MPS does not make pose inference GPU-accelerated.
 ## 8. Computer vision pipeline
 
 _Complete through Phase 12._ Six stages are built; what sits on top of them is
-in §10, §11 and §12.
+in §10, §11 and §13.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -615,7 +636,139 @@ backswing, downswing, follow-through and takeaway-to-impact durations with the
 tempo ratio. Each is declared once, with its unit and basis, so a unit written
 next to a computation cannot drift from the one in the documentation.
 
-## 12. Model architecture
+## 12. Coaching methodology
+
+The layer that turns measurements into sentences, and the first one where being
+wrong is expensive rather than embarrassing. A wrong angle is a wrong number; a
+wrong finding is a golfer changing their swing.
+
+Twelve rules ship. **Five can reach a comparison at all**, and seven are refused
+before a clip is looked at, because the refusal is about the threshold rather
+than about the footage. On the four reference clips only two rules have ever
+produced a finding, and both are timing rules.
+
+### Why a borrowed threshold usually cannot be used
+
+Golf coaching runs on numbers with no papers behind them. Ninety degrees of
+shoulder turn, forty-five degrees of X-factor, three-to-one tempo. Hard-coded as
+`THRESHOLD = 90.0` they look identical, and they are not. So every rule carries a
+`ThresholdSource` stating who published the number, on whom, and by what method —
+and the method decides what the number may be compared against:
+
+| the source measured with         | it is a threshold on | rules |
+| -------------------------------- | -------------------- | ----- |
+| three-dimensional motion capture | a `spatial` metric   | 1     |
+| video                            | what that camera saw | 3     |
+| this clip, against itself        | its own uncertainty  | 2     |
+| no stated protocol               | **nothing at all**   | 6     |
+
+A `convention` source permits no basis. That is not an oversight awaiting a
+citation: a number with no published measurement protocol has no quantity
+attached to it, so there is nothing here it could be a threshold on.
+
+The reference footage shows what the alternative costs. On a tour
+professional's face-on clip this engine measures a **shoulder turn of 53.0 ± 5.5
+degrees at the top**. The player is not restricted; the measurement is a
+foreshortening estimate from one camera, which under-reports by tens of degrees
+and says so in its `basis`. A rule comparing that against "about ninety" —
+however heavily caveated — tells a tour player to turn more.
+
+Two rules sit either side of the same gap, and the pair is the point:
+`rotation.x_factor_top` has a number (from a 1992 magazine article) and no
+protocol; `rotation.x_factor_top_3d` has a protocol and no number this project
+has read a figure it can cite. Both are in the registry, refused for different
+reasons, because a coaching engine that silently omitted the numbers every golf
+app displays would look like it had forgotten them.
+
+### What a comparison has to clear
+
+A value is only reported as being on one side of a band if it clears the band by
+more than its own **bracket**. Durations get one frame interval. Angles and
+distances get whatever uncertainty the metric layer measured, and are refused
+where it measured none. The tempo ratio gets a figure of its own, because the
+backswing and downswing share an endpoint: one frame of ambiguity at the top
+lengthens one and shortens the other at once.
+
+That turns out to decide whether the three usable rules ever fire
+(`scripts/benchmark_coaching.py --sweep resolution`, on a 0.800 s backswing over
+a 0.233 s downswing — the amateur reference clip exactly):
+
+| fps | bracket on the ratio | distance to the nearer band edge | outcome     |
+| --- | -------------------- | -------------------------------- | ----------- |
+| 30  | 0.738                | 0.371                            | **refused** |
+| 60  | 0.341                | 0.371                            | reported    |
+| 120 | 0.164                | 0.371                            | reported    |
+| 240 | 0.081                | 0.371                            | reported    |
+
+**At 30 fps a swing's tempo cannot be compared against the published band at
+all.** The band is 1.37 wide and one frame at the top is worth 0.74 of it; the
+crossover for this swing is 56 fps. The number every golf app puts on its front
+page is not resolvable by the camera most of them are pointed at. The source is
+more careful than its readers: Tour Tempo publishes frame counts — 18/6, 21/7,
+24/8 — and not a ratio, because 3:1 exactly is a ratio of two integers rather
+than a measurement with a resolution.
+
+A related gate refuses absolute durations on any clip whose slow-motion factor
+was supplied rather than measured, which is every slow-motion clip: nothing in a
+conformed file records it. The **ratio** survives, because a factor stretching
+both durations equally divides out of their quotient — the same argument that
+puts lengths in torso lengths, one dimension over.
+
+### What four real clips produced
+
+`scripts/benchmark_coaching.py --sweep clips`:
+
+| clip                     | view          | ms/frame | findings | refused | fired                        |
+| ------------------------ | ------------- | -------- | -------- | ------- | ---------------------------- |
+| amateur, face-on, 30 fps | face_on       | 33.3     | **0**    | 12      | —                            |
+| amateur, DTL, 30 fps     | down_the_line | 33.3     | 2        | 10      | tempo.ratio, tempo.downswing |
+| tour, face-on, 7x slow   | face_on       | 4.8      | 1        | 11      | tempo.ratio                  |
+| tour, DTL, 7x slow       | down_the_line | 4.8      | 1        | 11      | tempo.ratio                  |
+
+Every finding on every clip is temporal. Nothing measured in the image plane
+produced a comparison this engine would stand behind, from either camera
+position, on either golfer.
+
+The tour clip's surviving finding reports a tempo of **1.83:1** against a tour
+band of 2.43–3.80. The numbers are right and the conclusion is not about the
+swing: the finding cites the backswing, the downswing and the frames each came
+from, and following those frames leads to the takeaway, which this project had
+already flagged as suspect on slowed footage. That is the argument for citing
+evidence. **A finding that carries its frames can be discovered to be wrong; a
+sentence of advice cannot.**
+
+### The guard, and the language layer under it
+
+No sentence in a report may contain a number its evidence does not. The guard
+checks numerals to the precision they are written at, spelled-out numbers,
+units this system cannot produce, units it can produce but did not here,
+quantities nothing in the project measures, claims about where the ball went, and
+causal claims. Over a corpus of fourteen plausible inventions it rejects all
+fourteen while keeping three faithful rewordings, at 34 µs per candidate.
+
+It runs over the **engine's own sentences** in the test suite as well as over any
+model's. That is not symmetry for its own sake — the first thing it ever caught
+was a rule template that said "the two measurements", where the spelled-out "two"
+was a quantity absent from the evidence. The template was reworded rather than
+the guard relaxed.
+
+The phrasing layer is off by default, and off is a complete configuration: every
+finding already has a sentence. Turned on, it talks to a model on this machine —
+loopback is enforced in code, not documented as a convention — and receives the
+findings as JSON with no frame, no landmark and no file path in it. A candidate
+with one offence is discarded whole, not repaired, and the engine's own sentence
+ships. **No language model has ever phrased a finding in this repository**, because
+none is installed on the machine it was built on; every path is exercised against
+fakes, and `PhrasingReport` carries the counts that would make a later run
+evidence rather than an impression.
+
+**There is no score.** No severity, no grade, no ranking between findings, and a
+test asserts the absence of those field names. A single number summarising a
+swing would be the most quoted output of this system and the one with the least
+behind it: it would need a scale relating degrees of turn to seconds of tempo,
+and nobody has measured one.
+
+## 13. Model architecture
 
 **No model is trained on real swings, and none can be.** Phase 12 built the whole
 apparatus — labelling tool, versioned features, player-grouped splits, a TCN
@@ -669,20 +822,20 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
-## 13. Testing
+## 14. Testing
 
 ```bash
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                               |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 1,091 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                           |
-| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                       |
-| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                  |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,255 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                 |
+| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                                                                             |
+| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                                                                        |
 
-All 1,236 pass as of Phase 12.
+All 1,400 pass as of Phase 13.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -789,7 +942,7 @@ CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
 
-## 14. Performance benchmarks
+## 15. Performance benchmarks
 
 Measured on the reference machine. Every figure here came out of a script in
 `scripts/`; none is estimated.
@@ -1223,9 +1376,53 @@ featurise, 82 ms per clip to train 40 epochs, 0.7 ms per clip to run. Training
 the entire corpus costs less than extracting poses from one clip, which is the
 correct shape for this phase — the expensive thing was never the model.
 
+### The coaching engine
+
+`scripts/benchmark_coaching.py`. Two of its four sweeps measure the registry
+rather than a recording, and those are the phase's result.
+
+**What the rules can conclude, before a camera is switched on** (`--sweep
+inventory`):
+
+| verdict                 | rules | what would change it    |
+| ----------------------- | ----- | ----------------------- |
+| usable                  | 5     | —                       |
+| no measurement protocol | 4     | somebody publishing one |
+| no published number     | 3     | somebody publishing one |
+
+**The capture rate a tempo comparison needs** (`--sweep resolution`), held at the
+amateur reference clip's own swing — 0.800 s over 0.233 s, tempo 3.43 — and
+varying only the clock:
+
+| fps | bracket | to the nearer band edge | outcome         |
+| --- | ------- | ----------------------- | --------------- |
+| 30  | 0.738   | 0.371                   | **cannot tell** |
+| 60  | 0.341   | 0.371                   | reported        |
+| 120 | 0.164   | 0.371                   | reported        |
+| 240 | 0.081   | 0.371                   | reported        |
+
+Crossover at **56 fps**. The bracket is what one frame of ambiguity at the top is
+worth, and the top is shared between the two durations, so it moves the ratio far
+more than it moves either of them.
+
+**The engine over every reference clip with an extraction** (`--sweep clips`):
+zero findings on the 30 fps face-on amateur clip, two on the 30 fps
+down-the-line one, one on each tour clip. All four findings across all four clips
+are temporal.
+
+**The guard** (`--sweep guard`): 14 of 14 plausible inventions rejected, 3 of 3
+faithful rewordings kept, **34 µs** per candidate. Four of the fourteen are
+number offences and two of those contain no digits — "ninety degrees" and
+"forty-five degrees" — because the invention this most needs to catch is the one
+golf coaching quotes in words.
+
+**Cost**: `coach()` over twelve rules is **0.05 ms**, against seconds per clip
+for pose extraction. Nothing here is worth caching, which is what Phases 3 and 5
+concluded about the layers below it.
+
 A general benchmark harness arrives in Phase 17.
 
-## 15. Limitations
+## 16. Limitations
 
 - **macOS/Apple silicon only, so far.** Nothing is known to be Windows- or
   Linux-incompatible, but neither has been tested, and the MediaPipe wheel
@@ -1517,14 +1714,42 @@ A general benchmark harness arrives in Phase 17.
   equalises the sample rate and cannot equalise the filter: a 30 fps clip needs a
   167 ms window where a 120 fps clip uses 100 ms, and a wider window flattens the
   velocity peak. `DatasetSummary` reports it rather than averaging over it.
+- **Nine of the twelve coaching rules cannot fire, and no recording changes
+  that.** Six rest on a number with no published measurement protocol, and three
+  name a quantity for which nothing has published a threshold in any unit. This
+  is a fact about what golf instruction publishes, not about this engine, and it
+  is reported per rule rather than by omitting the rule.
+- **At 30 fps no tempo comparison is possible at all.** One frame of ambiguity at
+  the top is worth 0.74 of a band that is 1.37 wide. A phone recording at its
+  default rate produces a coaching report with zero findings on it, which is the
+  correct answer and an unsatisfying one.
+- **A finding compares against a population, not against a target.** Tour Tempo's
+  band describes tour professionals. A swing outside it is a swing unlike theirs,
+  which is not the same as a swing that is working badly, and nothing in this
+  system measures the second thing.
+- **The phrasing layer has never met a language model.** No local model is
+  installed on the machine this was built on, so the protocol, the request shape,
+  the guard integration and every failure path are exercised against fakes.
+- **The guard cannot tell whether a sentence is about the right finding.** A
+  model given two findings could describe the first using the second's numbers
+  and pass every check, because every number would be in the evidence. This is
+  why `Finding.observation` is never replaced and the model's version sits beside
+  it. Its spelled-out-number table is also finite and starts at two: "one" is
+  excluded because in English it is usually a pronoun, so "one degree of tilt"
+  gets through.
+- **Most same-clip comparisons refuse for want of an uncertainty.** Phase 6
+  quantifies uncertainty for the foreshortened rotations and for nothing else, so
+  a rule asking whether the spine angle changed from address to impact is refused
+  even though both values were measured. The quantity is measurable; what is
+  missing is a measurement of how well.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
-## 16. Future work
+## 17. Future work
 
-Phases 13-20: the coaching engine, desktop visualisation, 3D rendering, swing
-comparison, performance work, model management, test hardening and
-documentation. Sequencing, deliverables, and exit
-criteria per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 14-20: desktop visualisation, 3D rendering, swing comparison, performance
+work, model management, test hardening and documentation. Sequencing,
+deliverables, and exit criteria per phase are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
 and settled the first of the two things a second view needs: the relation between
@@ -1556,6 +1781,14 @@ Five open items carry forward:
   single player. Three people would produce a split; eight would allow a number
   to be quoted. `data/README.md` says what to record and asks for consent in
   writing before anyone else's swing enters a training set.
+- **What the coaching engine is short of divides cleanly, and only half of it is
+  a recording.** Its three timing rules would fire on ordinary footage shot above
+  about 60 fps, which is a capture away. `rotation.x_factor_top_3d` needs a
+  stereo calibration _and_ a citable range for the quantity it triangulates, and
+  the first of those is the same missing two-camera session as everything above.
+  The six convention rules need neither: they need somebody to publish a
+  measurement protocol for a number the sport has quoted for thirty years, and no
+  phase of this project can supply one.
 
 ## Licence
 

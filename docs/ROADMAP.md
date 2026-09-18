@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-12 complete (13 / 21).**
+**Progress: Phases 0-13 complete (14 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -21,8 +21,8 @@ advance past a broken phase.
 | 10  | Club tracking         | ✅ **Done** | Shaft tracked; low confidence emits nothing                    |
 | 11  | Ball detection        | ✅ **Done** | Impact-frame agreement measured                                |
 | 12  | Temporal ML           | ✅ **Done** | Leak-free splits; **no metrics — no labelled set exists**      |
-| 13  | Coaching engine       | ⬜ Next     | Every finding cites computed evidence                          |
-| 14  | Desktop UI            | ⬜          | Full workflow end-to-end                                       |
+| 13  | Coaching engine       | ✅ **Done** | Every finding cites computed evidence; 9 of 12 rules refuse    |
+| 14  | Desktop UI            | ⬜ Next     | Full workflow end-to-end                                       |
 | 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                                 |
 | 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                     |
 | 17  | Performance           | ⬜          | Before/after numbers recorded                                  |
@@ -1919,19 +1919,171 @@ the correct shape for this phase: the expensive thing was never the model.
 - `random_clip_split` measures nothing on the corpus available, so the cost of a
   leaky split remains an argument rather than a number.
 
-## Phase 13 — Coaching engine ⬜
+## Phase 13 — Coaching engine ✅
 
-LLM layer receives **only** structured findings, never video, and is off by
-default. Output is validated against the evidence; any number not present in the
-evidence is rejected.
+`python/analyzer/coaching/{registry,engine,bracket,evidence,guard,phrasing,local}.py` ·
+`python/analyzer/contracts/coaching.py` ·
+[ADR-0017](decisions/ADR-0017-borrowed-thresholds-and-the-guard.md)
 
-- [ ] 13.1 `Finding` contract + rule engine
-- [ ] 13.2 Rule set with sourced, documented thresholds
-- [ ] 13.3 Evidence linking (metric → frames → overlay)
-- [ ] 13.4 Optional local LLM phrasing layer
-- [ ] 13.5 Guard rejecting invented numbers
-- [ ] 13.6 Tests: rule firing, insufficient evidence, LLM guard
-- [ ] 13.7 Commit
+**Twelve rules, and across four reference clips two of them ever fire.** Five can
+reach a comparison at all; seven are refused before a clip is looked at. That is
+not a gap in the engine: it is what happens when every borrowed threshold is made
+to declare how it was measured, and most of golf coaching's numbers turn out to
+have been measured in three dimensions, or not measured at all.
+
+- [x] **13.1 `Finding` contract + rule engine** — a finding carries the
+      comparison, the margin, the bracket it had to clear, the source with its
+      population and method, and the evidence. **No severity and no score**, and
+      a test asserts the absence of those field names
+- [x] **13.2 Rule set with sourced, documented thresholds** —
+      `ThresholdSource.permitted_bases` decides what a number may be compared
+      against, `CONVENTION` permits nothing, and every band states the arithmetic
+      that produced it from the source's own published figures
+- [x] **13.3 Evidence linking** — metric → frames → real-clock instants, all or
+      none so the two lists are never misaligned. Frames index the video file;
+      timestamps do not, on a slow-motion clip
+- [x] **13.4 Optional local LLM phrasing layer** — off by default, loopback
+      enforced in code, handed the findings as JSON and never a frame, a landmark
+      or a path
+- [x] **13.5 Guard rejecting invented numbers** — numbers, units, quantities
+      nothing here measures, ball-flight outcomes and causal claims. Applied to
+      this engine's own sentences too
+- [x] **13.6 Tests** — 164 added (all pytest)
+- [x] **13.7 Commit** — with the measurements below
+
+### The registry, before any clip is involved
+
+`scripts/benchmark_coaching.py --sweep inventory`:
+
+| verdict                 | rules | what would change it    |
+| ----------------------- | ----- | ----------------------- |
+| usable                  | 5     | —                       |
+| no measurement protocol | 4     | somebody publishing one |
+| no published number     | 3     | somebody publishing one |
+
+Six of the twelve cite a source with no published measurement protocol; two of
+those publish no number either. **No recording changes either count.**
+
+The pair that names the phase sits either side of one gap: `rotation.x_factor_top`
+has a number (forty-five degrees, from a 1992 magazine article) and no protocol;
+`rotation.x_factor_top_3d` has a protocol (three-dimensional capture) and no
+number this project has read a figure it can cite.
+
+### What four real clips produced
+
+`scripts/benchmark_coaching.py --sweep clips`:
+
+| clip                     | view          | ms/frame | found | refused | fired                        |
+| ------------------------ | ------------- | -------- | ----- | ------- | ---------------------------- |
+| amateur, face-on, 30 fps | face_on       | 33.3     | **0** | 12      | —                            |
+| amateur, DTL, 30 fps     | down_the_line | 33.3     | 2     | 10      | tempo.ratio, tempo.downswing |
+| tour, face-on, 7x slow   | face_on       | 4.8      | 1     | 11      | tempo.ratio                  |
+| tour, DTL, 7x slow       | down_the_line | 4.8      | 1     | 11      | tempo.ratio                  |
+
+Every finding on every clip is temporal. Nothing measured in the image plane
+produced a comparison this engine would stand behind, from either camera
+position, on either golfer.
+
+### The measurement that decides whether the survivors ever fire
+
+A tempo ratio's bracket is what one frame of ambiguity at the top moves it by,
+and the top is shared: it lengthens the backswing and shortens the downswing at
+once. Held at the amateur clip's own swing — 0.800 s over 0.233 s, tempo 3.43 —
+and varying only the clock (`--sweep resolution`):
+
+| fps | bracket | to the nearer band edge | outcome                 |
+| --- | ------- | ----------------------- | ----------------------- |
+| 30  | 0.738   | 0.371                   | cannot resolve the band |
+| 60  | 0.341   | 0.371                   | resolved                |
+| 120 | 0.164   | 0.371                   | resolved                |
+| 240 | 0.081   | 0.371                   | resolved                |
+
+**At 30 fps the measurement cannot resolve the band**; the crossover for this
+swing is 56 fps. The published band is 1.37 wide and one frame at the top is
+worth 0.74 of it. The tempo figure every golf app shows is not resolvable by the
+camera that most of them are pointed at.
+
+Tour Tempo itself publishes frame counts — 18/6, 21/7, 24/8 — and not a ratio,
+which is the more careful of the two. 3:1 exactly is a ratio of two integers.
+
+### What the engine tells a tour professional
+
+On `rory_face_on.mp4` at a factor of 7, the one rule that fires reports a tempo
+of **1.83:1** against a tour band of 2.43–3.80, with a bracket of 0.04. The
+numbers are right and the conclusion is not about the swing: the finding cites
+the backswing, the downswing and the frames each came from, and following those
+frames leads to the takeaway — which the Phase 6 amendment had already flagged as
+suspect on slowed footage.
+
+That is the argument for citing evidence, and it is not transparency in the
+abstract. **A finding that carries its frames is a finding somebody can discover
+is wrong. A sentence of advice is not.**
+
+### The guard
+
+`--sweep guard`, over fourteen plausible inventions and three faithful
+rewordings:
+
+| check                            | caught |
+| -------------------------------- | ------ |
+| number not in evidence           | 4      |
+| unit this system cannot measure  | 3      |
+| quantity nothing here measures   | 3      |
+| claim about where the ball went  | 2      |
+| causal claim nothing here tested | 2      |
+
+14 of 14 rejected, 3 of 3 faithful rewordings kept, 34 µs per candidate.
+
+The four number cases include two with no digits in them — "ninety degrees" and
+"forty-five degrees" — because the invention this engine most needs to catch is
+the one golf coaching quotes in words.
+
+**The guard's first catch was this engine's own sentence.** The same-clip
+template read "more than the X degrees the two measurements leave open"; the
+guard read the spelled-out "two" as a quantity absent from the evidence and
+rejected it. The template was reworded. Teaching the guard to ignore small
+counting words would have widened the hole it exists to close.
+
+### Cost
+
+`coach()` over twelve rules: **0.05 ms**. Against seconds per clip for pose
+extraction, which is the same conclusion Phases 3 and 5 reached about the layers
+below: nothing here is worth caching.
+
+### What the build found on the way
+
+- **A supplied slow-motion factor disqualifies every comparison in seconds, and
+  no comparison that is a ratio.** Nothing in a conformed file records the
+  factor, so a duration measured from such a clip is a measured number multiplied
+  by a guess. A ratio of two durations from the same clip divides it back out —
+  the same argument that puts lengths in torso lengths, one dimension over. The
+  gate is `SUPPLIED_TIMEBASE`, and it exists because the first run of the engine
+  reported the tour clip's backswing against a band in seconds without blinking.
+- **The gate order matters, and `BASIS_NOT_PERMITTED` has to sit above
+  `NO_METRIC`.** A reader told "this clip could not measure your shoulder turn"
+  goes and re-films; the re-filmed clip is then refused for the basis instead.
+- **The evidence's frame indices had to be kept out of the number allowance.** A
+  metric measured over the address phase cites 161 consecutive frames. Folding
+  those into the set of quotable numbers would licence every small integer in the
+  language, and "ninety degrees of shoulder turn" would be accepted on any clip
+  with a frame 90.
+
+**Open, and not resolved here:**
+
+- The phrasing layer has never been run against a language model in this
+  repository, because none is installed on the machine it was built on. Every
+  path is tested against fakes.
+- The guard's spelled-out-number table is finite and starts at two. "One" is
+  excluded because in English it is usually a pronoun, so a model writing "one
+  degree of tilt" gets through.
+- The guard cannot tell whether a sentence is about the _right_ finding. A model
+  given two findings could describe the first with the second's numbers and pass
+  every check. This is why `observation` is never replaced and `phrased` sits
+  beside it.
+- `posture.spine_tilt_impact` and every other same-clip rule on a projected angle
+  refuses as `NO_UNCERTAINTY`, because Phase 6 quantifies uncertainty for the
+  foreshortened rotations and nothing else. Those quantities are measurable; what
+  is missing is a measurement of how well.
 
 ## Phase 14 — Desktop UI ⬜
 

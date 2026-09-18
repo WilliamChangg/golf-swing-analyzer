@@ -132,13 +132,13 @@ across that range, which is why the system gates on the angle and refuses below
 
 ### Settings
 
-| Setting        | Recommendation               | Why                                                                                                          |
-| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Frame rate     | **≥ 120 fps**, 240 preferred | Downswing lasts ~0.25 s; at 30 fps that is ~8 frames total, far too coarse to locate impact or measure tempo |
-| Shutter speed  | **1/1000 s or faster**       | Measured: shaft detection dies above ~10 px of smear, and it is a cliff. See below                           |
-| Resolution     | 1080p is sufficient          | Frame rate and shutter matter far more than resolution                                                       |
-| Stabilisation  | **Off**                      | Digital stabilisation warps the frame non-rigidly, corrupting geometry                                       |
-| Focus/exposure | Locked                       | Refocus mid-swing changes apparent scale                                                                     |
+| Setting        | Recommendation               | Why                                                                                                                                          |
+| -------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frame rate     | **≥ 120 fps**, 240 preferred | Downswing lasts ~0.25 s; at 30 fps that is ~8 frames total. Measured: below ~56 fps no tempo comparison is possible at all (Phase 13, below) |
+| Shutter speed  | **1/1000 s or faster**       | Measured: shaft detection dies above ~10 px of smear, and it is a cliff. See below                                                           |
+| Resolution     | 1080p is sufficient          | Frame rate and shutter matter far more than resolution                                                                                       |
+| Stabilisation  | **Off**                      | Digital stabilisation warps the frame non-rigidly, corrupting geometry                                                                       |
+| Focus/exposure | Locked                       | Refocus mid-swing changes apparent scale                                                                                                     |
 
 ### Framing and environment
 
@@ -332,6 +332,45 @@ When labelling, `--player` and `--session` are required and have no defaults. A
 wrong value there is invisible and inflates every number measured afterwards, so
 it is worth deciding the naming scheme before the first clip rather than during
 it.
+
+### Filming so a tempo can be compared (Phase 13)
+
+The coaching engine will only say which side of a published range a swing's
+tempo falls on if the measurement is finer than the distance to the range's
+edge. That turns out to be a demanding requirement, and it is arithmetic rather
+than opinion.
+
+A tempo ratio is the backswing divided by the downswing, and the two share an
+endpoint: moving the top by one frame lengthens one and shortens the other at
+once. So the ratio's uncertainty is far larger than either duration's, and
+largest exactly where the number is quoted — on a short downswing.
+
+Measured on the reference amateur clip's own swing, varying nothing but the clock
+(`scripts/benchmark_coaching.py --sweep resolution`):
+
+| fps | uncertainty in the ratio | distance to the nearer band edge | outcome         |
+| --- | ------------------------ | -------------------------------- | --------------- |
+| 30  | 0.738                    | 0.371                            | **cannot tell** |
+| 60  | 0.341                    | 0.371                            | reported        |
+| 120 | 0.164                    | 0.371                            | reported        |
+| 240 | 0.081                    | 0.371                            | reported        |
+
+**A 30 fps recording supports no tempo comparison at all**; the crossover for
+that swing is 56 fps. `analyzer coach` on the 30 fps face-on reference clip
+produces zero findings, which is the correct answer and an unsatisfying one.
+
+Two smaller things follow from the same arithmetic:
+
+- **Declare the slow-motion factor, and know that it buys you the ratio and not
+  the durations.** Absolute durations are refused on any clip whose factor was
+  supplied rather than measured, because the number compared against a band in
+  seconds would be a measurement multiplied by a guess. The ratio survives, since
+  a factor that stretches both durations equally divides out of their quotient.
+- **The takeaway is the weak event, and a fast capture is what moves it.** Tempo
+  is measured from the takeaway, the top and impact, and the first of those is
+  the hardest to place: on the tour footage this engine reads a tempo of 1.83:1
+  where a tour swing is known for about 3:1, and the finding's own cited frames
+  point at the takeaway rather than at the swing.
 
 ## Camera calibration (Phase 8)
 

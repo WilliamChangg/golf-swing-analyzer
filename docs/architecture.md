@@ -116,6 +116,7 @@ club/           the shaft: a ray from the hands, and when to emit nothing
 ball/           the ball at rest, and the frame it stops being there
 impact.py       four estimates of one instant, ranked rather than averaged
 biomechanics/   measured metrics, with units, confidence and methodology
+coaching/       findings, the thresholds they borrow, and the guard on what may be said
 ml/             labels, features, splits, a learned detector, and what may be claimed
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
@@ -130,9 +131,8 @@ that reaches it. Its dependency direction is the ordinary one — it reads
 engine intact, which is the correct relationship between an evaluation harness
 and the thing it evaluates.
 
-Later phases add `coaching` as a sibling package. Golf-specific reasoning is
-confined to `phases`, `sync`, `club`, `ball`, `ml`, `biomechanics` and
-`coaching`; everything below is
+Golf-specific reasoning is confined to `phases`, `sync`, `club`, `ball`, `ml`,
+`biomechanics` and `coaching`; everything below is
 general computer vision that would serve any moving body. `sync` and `club` are
 the marginal members of that set. `sync`'s mechanism — an affine time map and a
 masked cross-correlation — would align any pair of recordings of anything, and
@@ -188,6 +188,29 @@ spatial metrics are refused by name; on a project without a stereo rig they are
 refused one step earlier by the calibration gate, whose reason names the
 calibration rather than the missing reconstruction — the more actionable of the
 two answers, and so the one that wins.
+
+`coaching` is the only package above `biomechanics`, and it is the only one whose
+output is a claim rather than a number. Its entry point is `coach(metrics,
+phases, config, times)` — a `MetricSet`, a detection, and optionally the clip's
+per-frame timestamps so that each cited frame can carry a real-clock instant
+alongside it. It never reads a pixel, a landmark or a file path, which is what
+makes it testable against metric sets built by hand and what makes the phrasing
+layer's promise about what leaves the machine checkable rather than asserted.
+
+Its dependency on `biomechanics` is not only for the values. Every rule is
+gated on the `basis` of the metric it names — taken from the metric registry,
+so the gate applies whether or not this clip produced the measurement — and the
+threshold it compares against declares which bases it may be compared against at
+all. A number from three-dimensional capture is a threshold on a `spatial`
+measurement and on nothing else. That gate is the reason `MetricBasis` was made a
+typed field three phases before anything consumed it, and it is why nine of the
+twelve shipped rules refuse on every recording this system can currently make.
+See [ADR-0017](decisions/ADR-0017-borrowed-thresholds-and-the-guard.md).
+
+The optional language layer sits inside `coaching` rather than beside it, under
+a deterministic guard that also runs over the engine's own sentences. The
+direction is one-way: findings are produced first and phrased second, so no model
+can change which findings exist.
 
 ## Video ingestion
 

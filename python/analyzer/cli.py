@@ -38,6 +38,7 @@ from analyzer.contracts.calibration import (
     StereoCalibration,
 )
 from analyzer.contracts.club import ClubTrackingReport
+from analyzer.contracts.coaching import CoachingReport, Comparison, FindingRefusal
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.impact import FusedImpact
@@ -599,26 +600,35 @@ _GROUP_TITLES: dict[MetricGroup, str] = {
 }
 
 
-def _format_value(metric: Metric) -> str:
+def _format_measure(value: float, unit: MetricUnit, uncertainty: float | None = None) -> str:
     """Render a value with its unit, at a precision the measurement can support.
 
     The uncertainty rides alongside where there is one. A turn of 53 degrees and
     a turn of 53 give-or-take 13 are different findings, and only one of them is
     worth telling a player.
+
+    Takes the parts rather than a `Metric` so that a finding's evidence renders
+    identically to the metrics panel. The same number shown two ways in one
+    application is a reader's problem to reconcile, and there is no reason to
+    give them one.
     """
-    if metric.unit is MetricUnit.DEGREES:
-        if metric.uncertainty is not None:
-            return f"{metric.value:+.1f} +/-{metric.uncertainty:.0f} deg"
-        return f"{metric.value:+.1f} deg"
-    if metric.unit is MetricUnit.SECONDS:
-        return f"{metric.value:.3f} s"
-    if metric.unit is MetricUnit.RATIO:
-        return f"{metric.value:.2f} : 1"
-    if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
-        return f"{metric.value:.2f} torso/s"
-    if metric.unit is MetricUnit.METRES_PER_S:
-        return f"{metric.value:.2f} m/s"
-    return f"{metric.value:+.3f} torso"
+    if unit is MetricUnit.DEGREES:
+        if uncertainty is not None:
+            return f"{value:+.1f} +/-{uncertainty:.0f} deg"
+        return f"{value:+.1f} deg"
+    if unit is MetricUnit.SECONDS:
+        return f"{value:.3f} s"
+    if unit is MetricUnit.RATIO:
+        return f"{value:.2f} : 1"
+    if unit is MetricUnit.TORSO_LENGTHS_PER_S:
+        return f"{value:.2f} torso/s"
+    if unit is MetricUnit.METRES_PER_S:
+        return f"{value:.2f} m/s"
+    return f"{value:+.3f} torso"
+
+
+def _format_value(metric: Metric) -> str:
+    return _format_measure(metric.value, metric.unit, metric.uncertainty)
 
 
 def _render_metrics(result: MetricSet) -> None:
@@ -2930,6 +2940,197 @@ def models() -> None:
             "-" if evaluation is None else ("yes" if evaluation.claims_permitted else "no"),
         )
     console.print(table)
+
+
+_REFUSAL_TAG: dict[FindingRefusal, str] = {
+    FindingRefusal.NO_SWING: "no swing",
+    FindingRefusal.NO_METRIC: "not measured",
+    FindingRefusal.NO_THRESHOLD: "no threshold exists",
+    FindingRefusal.BASIS_NOT_PERMITTED: "wrong kind of number",
+    FindingRefusal.VIEW_MISMATCH: "wrong camera",
+    FindingRefusal.SUPPLIED_TIMEBASE: "supplied timebase",
+    FindingRefusal.LOW_CONFIDENCE: "low confidence",
+    FindingRefusal.NO_UNCERTAINTY: "no uncertainty",
+    FindingRefusal.UNRESOLVED: "cannot resolve",
+}
+
+_COMPARISON_STYLE: dict[Comparison, str] = {
+    Comparison.BELOW: "yellow",
+    Comparison.WITHIN: "green",
+    Comparison.ABOVE: "yellow",
+}
+
+
+def _render_coaching(report: CoachingReport) -> None:
+    summary = Table(title="Coaching", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("rules considered", str(report.rules_considered))
+    summary.add_row("findings", f"{len(report.findings)}")
+    summary.add_row("refused", f"{len(report.refused)}")
+    summary.add_row("camera view", report.view.value)
+    if report.frame_interval_s is not None:
+        summary.add_row(
+            "clock resolution",
+            f"{report.frame_interval_s * 1000:.1f} ms between frames "
+            f"({1.0 / report.frame_interval_s:.0f} per real second)",
+        )
+    phrasing = report.phrasing
+    summary.add_row(
+        "phrasing",
+        f"{phrasing.mode.value}"
+        + (f" via {phrasing.provider}" if phrasing.provider else "")
+        + (
+            f" — {phrasing.accepted} kept, {phrasing.rejected} rejected"
+            if phrasing.attempted
+            else ""
+        ),
+    )
+    console.print(summary)
+
+    for finding in report.findings:
+        style = _COMPARISON_STYLE[finding.comparison]
+        body = [
+            finding.observation,
+            "",
+            f"[dim]source:[/dim] {finding.source.citation}",
+            f"[dim]measured on:[/dim] {finding.source.population}",
+        ]
+        if finding.phrased is not None:
+            body.insert(1, f"\n[dim]phrased:[/dim] {finding.phrased}")
+        for item in finding.evidence:
+            shown = item.frames if len(item.frames) <= 6 else [item.frames[0], item.frames[-1]]
+            span = (
+                f"frames {shown[0]}-{shown[-1]}"
+                if len(item.frames) > 6
+                else "frames " + ", ".join(str(frame) for frame in shown)
+            )
+            body.append(
+                f"[dim]evidence:[/dim] {item.label} = "
+                f"{_format_measure(item.value, item.unit, item.uncertainty)} "
+                f"({span}, confidence {item.confidence:.2f})"
+            )
+        console.print(
+            Panel(
+                "\n".join(body),
+                title=f"[{style}]{finding.comparison.value}[/{style}] {finding.title}",
+                title_align="left",
+                subtitle=f"[dim]{finding.rule_id}[/dim]",
+                subtitle_align="right",
+            )
+        )
+
+    if report.refused:
+        refusals = Table(title="Refused", title_justify="left", expand=True)
+        refusals.add_column("rule", no_wrap=True)
+        # The tag rides with the reason rather than taking a column of its own:
+        # the reasons are the readable part and a third narrow column squeezes
+        # them into a ribbon on an eighty-column terminal.
+        refusals.add_column("why", overflow="fold", ratio=2)
+        for entry in report.refused:
+            refusals.add_row(
+                entry.rule_id,
+                f"[yellow]{_REFUSAL_TAG[entry.refusal]}[/yellow] — {entry.reason}",
+            )
+        console.print(refusals)
+
+    for rejection in report.phrasing.rejections:
+        console.print(
+            f"[red]guard[/red] {rejection.rule_id}: {rejection.offence} "
+            f"({rejection.token!r}) — the engine's own sentence was used instead."
+        )
+    if report.phrasing.unavailable:
+        console.print(f"[yellow]![/yellow] {report.phrasing.unavailable}")
+
+    console.print(
+        "[dim]Every finding above cites the frames its numbers were measured on. "
+        "No sentence here contains a number absent from that evidence — the same "
+        "guard is applied to the engine's own words and to any model's.\n"
+        "There is no score: a single number summarising a swing would need a scale "
+        "relating degrees of turn to seconds of tempo, and nobody has measured one.[/dim]"
+    )
+
+    for warning in report.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def coach(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
+    project: Annotated[
+        int | None,
+        typer.Option("--project", help="Apply this project's camera calibration."),
+    ] = None,
+    phrasing: Annotated[
+        str | None,
+        typer.Option(
+            "--phrase-with",
+            help=(
+                "Base URL of a language model on THIS machine to reword the findings. "
+                "Loopback only. Off by default, and off is complete."
+            ),
+        ),
+    ] = None,
+    phrasing_model: Annotated[
+        str | None, typer.Option("--phrase-model", help="Which local model to ask for.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Reach the conclusions a swing's measurements support, and refuse the rest."""
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if project is not None:
+        params["project_id"] = project
+    if phrasing is not None:
+        params["coaching"] = {
+            "phrasing": "local",
+            "phrasing_endpoint": phrasing,
+            "phrasing_model": phrasing_model,
+        }
+
+    try:
+        result = call("coach_swing", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, CoachingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_coaching(result)
+
+    # Non-zero when no conclusion was reached, so a script driving this learns
+    # that the swing produced nothing rather than reading silence as approval.
+    if not result.findings:
+        raise typer.Exit(code=1)
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed

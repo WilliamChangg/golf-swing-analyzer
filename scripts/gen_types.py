@@ -55,6 +55,14 @@ EXPORTS: tuple[tuple[str, str], ...] = (
 # developer operations over a corpus that does not ship, nothing in `dispatch`
 # reaches `analyzer.ml`, and a TypeScript `ModelCard` would be a type for a
 # capability the desktop app does not have and is not going to be given.
+#
+# `analyzer.contracts.coaching` is the first case since `SequenceFilterReport`
+# where the type is genuinely going to be drawn and is still not exported. The
+# findings panel is Phase 14.7 and nothing renders a `Finding` today, so
+# exporting one now would describe the plan rather than the app. It goes in with
+# the panel, which is also when the rendering questions it raises -- how a
+# refusal is shown, whether a citation is a link -- get answered by having to
+# answer them.
 
 BANNER = """\
 /**

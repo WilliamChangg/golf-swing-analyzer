@@ -32,6 +32,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "filter_poses": {"path": "poses.parquet"},
     "detect_phases": {"path": "poses.parquet"},
     "compute_metrics": {"path": "poses.parquet"},
+    "coach_swing": {"path": "poses.parquet"},
     "sync_clips": {
         "reference": {"path": "a.parquet"},
         "target": {"path": "b.parquet"},

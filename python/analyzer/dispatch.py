@@ -21,6 +21,7 @@ from analyzer.contracts.ball import BallConfig
 from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
 from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.club import ClubConfig
+from analyzer.contracts.coaching import CoachingConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
@@ -364,16 +365,22 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
     )
 
 
-def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
-    """Measure the biomechanics metrics for a clip's stored landmarks.
+def _metrics_chain(
+    parsed: ComputeMetricsParams, reporter: ProgressReporter
+) -> tuple[Any, Any, Any]:
+    """Landmarks to filtered trajectories to phases to metrics, for one clip.
 
     Runs the whole chain rather than taking a detection as input: filtering is
     milliseconds and detection is cheaper still, so recomputing them here costs
     nothing measurable and removes the possibility of metrics being measured
     against a detection produced under a different filter configuration.
-    """
-    parsed = ComputeMetricsParams.model_validate(params)
 
+    Shared by `compute_metrics` and `coach_swing` so that the two can never
+    disagree about a swing. A coaching report derived from a different filter
+    configuration than the metrics panel beside it would be the worst kind of
+    bug: both halves defensible, and the numbers in one not the numbers in the
+    other.
+    """
     from analyzer.biomechanics import BodyError, compute_metrics
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.phases import SignalError, detect_phases
@@ -410,7 +417,66 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
         raise _unsupported_input(exc, None) from exc
 
     result.warnings = [*result.warnings, *notes]
+    return filtered, detected, result
+
+
+def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Measure the biomechanics metrics for a clip's stored landmarks."""
+    _, _, result = _metrics_chain(ComputeMetricsParams.model_validate(params), reporter)
     return result
+
+
+class CoachSwingParams(ComputeMetricsParams):
+    """Parameters for `coach_swing`.
+
+    Everything `compute_metrics` takes, because coaching is a layer on top of
+    measuring and re-measures rather than accepting a `MetricSet` from a caller.
+    A report reached from numbers this process did not produce would cite frames
+    it had never read.
+    """
+
+    coaching: CoachingConfig = Field(
+        default_factory=CoachingConfig,
+        description=(
+            "When a measurement supports a conclusion, and whether a local "
+            "language model is asked to reword the findings. Phrasing is off by "
+            "default and off is a complete configuration."
+        ),
+    )
+
+
+def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Reach every conclusion this clip's measurements support, and refuse the rest.
+
+    The findings are produced first and phrased second, in that order and never
+    the other way around. A phrasing pass that could change which findings exist
+    would be a language model deciding what was measured.
+    """
+    parsed = CoachSwingParams.model_validate(params)
+
+    from analyzer.coaching.engine import coach
+    from analyzer.coaching.phrasing import PhrasingError, phrase
+    from analyzer.contracts.coaching import PhrasingReport
+
+    filtered, detected, metrics = _metrics_chain(parsed, reporter)
+    report = coach(metrics, detected, parsed.coaching, times=filtered.t.tolist())
+
+    try:
+        report.phrasing = phrase(report.findings, parsed.coaching)
+    except PhrasingError as exc:
+        # Not an error for the call: every finding already carries its own
+        # sentence, and a phrasing layer that could fail the analysis would make
+        # an optional component load-bearing. The mode is recorded anyway, so
+        # that a report which asked for a model and did not get one cannot be
+        # read as one that never asked.
+        report.phrasing = PhrasingReport(mode=parsed.coaching.phrasing, unavailable=str(exc))
+        if exc.remediation:
+            report.warnings.append(exc.remediation)
+
+    # Carried through so a reader of the findings sees what the measurements
+    # warned about, without having to fetch the metric set separately.
+    report.warnings.extend(metrics.warnings)
+    return report
 
 
 def _reconstruction_for_metrics(
@@ -1929,6 +1995,7 @@ METHODS: dict[str, Method] = {
     "filter_poses": _filter_poses,
     "detect_phases": _detect_phases,
     "compute_metrics": _compute_metrics,
+    "coach_swing": _coach_swing,
     "sync_clips": _sync_clips,
     "create_project": _create_project,
     "list_projects": _list_projects,
