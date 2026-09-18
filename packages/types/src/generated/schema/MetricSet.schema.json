@@ -182,12 +182,13 @@
       "type": "object"
     },
     "MetricBasis": {
-      "description": "What kind of claim a metric's value is.\n\nTEMPORAL\n    A duration, or a ratio of durations. Depends on the clock and nothing\n    else, so it is unaffected by where the camera stood. The only basis in\n    this phase that measures the body rather than a picture of it.\n\nIMAGE_PLANE\n    A distance or a speed between two points as they appear in the frame,\n    divided by the subject's torso length. Exact as a statement about the\n    image; it under-reports any motion that ran towards or away from the\n    camera, which it cannot see at all.\n\nPROJECTED_ANGLE\n    The angle between two segments as they appear in the frame. Equal to the\n    real joint angle only when both segments lie in the image plane, and\n    smaller than it otherwise. Never a 3D joint angle.\n\nFORESHORTENED_ANGLE\n    A rotation about the vertical inferred from how much a body segment\n    shortened in the image: a shoulder line seen at 60% of its full width\n    has turned about 53 degrees away from the camera. It assumes the segment\n    was square to the camera at its reference frame, and it is blind to\n    direction -- a turn and its mirror image shorten identically -- so the\n    value is a magnitude.",
+      "description": "What kind of claim a metric's value is.\n\nTEMPORAL\n    A duration, or a ratio of durations. Depends on the clock and nothing\n    else, so it is unaffected by where the camera stood. The only basis in\n    this phase that measures the body rather than a picture of it.\n\nIMAGE_PLANE\n    A distance or a speed between two points as they appear in the frame,\n    divided by the subject's torso length. Exact as a statement about the\n    image; it under-reports any motion that ran towards or away from the\n    camera, which it cannot see at all.\n\nPROJECTED_ANGLE\n    The angle between two segments as they appear in the frame. Equal to the\n    real joint angle only when both segments lie in the image plane, and\n    smaller than it otherwise. Never a 3D joint angle.\n\nFORESHORTENED_ANGLE\n    A rotation about the vertical inferred from how much a body segment\n    shortened in the image: a shoulder line seen at 60% of its full width\n    has turned about 53 degrees away from the camera. It assumes the segment\n    was square to the camera at its reference frame, and it is blind to\n    direction -- a turn and its mirror image shorten identically -- so the\n    value is a magnitude.\n\nSPATIAL\n    A length, angle or speed between points **reconstructed in three\n    dimensions** from two calibrated views of the same instant. The only\n    basis here that is a statement about the body rather than about a\n    picture of it, and the reason every other one is named the way it is.\n\n    It is also the only basis whose meaning does not depend on the camera\n    view: a distance between two 3D points is the same distance from\n    anywhere, so a `SPATIAL` metric carries one anatomical reading instead\n    of one per view. What it does depend on is the *reconstruction*, whose\n    own error is reported per point and propagated into the metric's\n    `uncertainty` -- a 3D number is not automatically a better number, it is\n    a differently-conditioned one, and the conditioning is the ray\n    convergence angle rather than the camera position.",
       "enum": [
         "temporal",
         "image_plane",
         "projected_angle",
-        "foreshortened_angle"
+        "foreshortened_angle",
+        "spatial"
       ],
       "title": "MetricBasis",
       "type": "string"
@@ -322,6 +323,12 @@
         "peak_hand_speed",
         "lead_arm_angle",
         "trail_arm_angle",
+        "shoulder_turn_3d",
+        "pelvis_turn_3d",
+        "x_factor_3d",
+        "lead_arm_angle_3d",
+        "trail_arm_angle_3d",
+        "peak_hand_speed_3d",
         "backswing_duration",
         "downswing_duration",
         "follow_through_duration",
@@ -338,7 +345,8 @@
         "seconds",
         "ratio",
         "torso_lengths",
-        "torso_lengths_per_s"
+        "torso_lengths_per_s",
+        "metres_per_s"
       ],
       "title": "MetricUnit",
       "type": "string"

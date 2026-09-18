@@ -56,7 +56,11 @@ function Field({
   label: string;
   value: string;
   note?: string;
-  tone?: "good" | "warn" | "bad";
+  // Explicitly `| undefined` because `exactOptionalPropertyTypes` is on, which
+  // makes "absent" and "present and undefined" different types. A caller that
+  // computes a tone conditionally passes the second, and it means the same
+  // thing here: no tone.
+  tone?: "good" | "warn" | "bad" | undefined;
 }) {
   const colour =
     tone === "bad"
@@ -306,7 +310,10 @@ function Result({ result }: { result: CameraCalibration }) {
         <div className="grid gap-6 sm:grid-cols-2">
           <CoverageFields coverage={quality.coverage} />
           <CoverageMap
-            observations={result.detection.observations}
+            // Optional in the contract, because `DetectionReport.observations`
+            // has a default. An absent list and an empty one mean the same
+            // thing to a map of where the board landed: nothing to draw.
+            observations={result.detection.observations ?? []}
             width={intrinsics.image_width}
             height={intrinsics.image_height}
           />

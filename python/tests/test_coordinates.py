@@ -176,10 +176,18 @@ class TestRefusals:
         with pytest.raises(CoordinateError, match=space.value):
             require_reachable(space)
 
-    def test_the_refusal_names_the_phase_that_supplies_the_frame(self) -> None:
-        with pytest.raises(CoordinateError, match="Phase 8"):
+    def test_the_refusal_names_what_supplies_the_frame(self) -> None:
+        """Not a phase number: the thing that produces it, or the thing it lacks.
+
+        CAMERA is produced by this build and is still refused here, because it is
+        not a *conversion* of one clip's landmarks -- it is a measurement made
+        from two of them. WORLD is refused because nothing measures a gravity
+        direction or a target line, which is a fact about the capture rather than
+        about a phase not having happened yet.
+        """
+        with pytest.raises(CoordinateError, match="triangulated from two calibrated views"):
             require_reachable(LandmarkSpace.CAMERA)
-        with pytest.raises(CoordinateError, match="Phase 9"):
+        with pytest.raises(CoordinateError, match="gravity direction and a target line"):
             require_reachable(LandmarkSpace.WORLD)
 
     def test_a_reachable_frame_passes(self) -> None:
@@ -188,7 +196,7 @@ class TestRefusals:
 
     def test_hip_local_is_not_reachable_from_a_picture(self) -> None:
         """It would mean recovering the depth the picture lost."""
-        with pytest.raises(CoordinateError, match="Phase 9"):
+        with pytest.raises(CoordinateError, match="depth the picture lost"):
             convert(
                 np.array([[0.5, 0.5, 0.0]]),
                 LandmarkSpace.IMAGE,
@@ -196,8 +204,14 @@ class TestRefusals:
                 PORTRAIT,
             )
 
-    def test_converting_into_an_unreachable_frame_is_refused(self) -> None:
-        with pytest.raises(CoordinateError, match="Phase 8"):
+    def test_camera_space_is_a_measurement_and_never_a_conversion(self) -> None:
+        """Even though this build produces CAMERA, no conversion reaches it.
+
+        One picture cannot become three dimensions by arithmetic. It takes a
+        second calibrated view of the same instant, which is a measurement, and
+        `convert` is not where a measurement lives.
+        """
+        with pytest.raises(CoordinateError, match="triangulated from two calibrated views"):
             convert(
                 np.array([[0.5, 0.5, 0.0]]),
                 LandmarkSpace.IMAGE,

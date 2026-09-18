@@ -23,6 +23,7 @@ key on.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import numpy as np
@@ -60,16 +61,55 @@ ARC_TOP_ANGLE = 2.2
 # The torso has to be real: detection judges hand travel in torso lengths, so a
 # fixture with every landmark stacked on one point has no scale to measure
 # against and every ratio it produces is meaningless.
+#
+# The ankles are on the ground, and they are here for Phase 11: a teed ball rests
+# on the ground, so the ball search region is anchored at the ankle midpoint
+# rather than at the hands. Without them every landmark this fixture does not
+# name falls back to a single point near the top of the frame, and a region
+# anchored there would search the sky -- which is precisely the failure the real
+# footage produced and the anchor exists to avoid.
 TORSO_LENGTH = 0.25
+GROUND_Y = 0.95
 BODY: dict[int, tuple[float, float]] = {
     int(Landmark.LEFT_SHOULDER): (0.45, 0.25),
     int(Landmark.RIGHT_SHOULDER): (0.55, 0.25),
     int(Landmark.LEFT_HIP): (0.46, 0.25 + TORSO_LENGTH),
     int(Landmark.RIGHT_HIP): (0.54, 0.25 + TORSO_LENGTH),
+    int(Landmark.LEFT_ANKLE): (0.46, GROUND_Y),
+    int(Landmark.RIGHT_ANKLE): (0.54, GROUND_Y),
 }
 
 
-def arc_angle(t: NDArray[np.float64]) -> NDArray[np.float64]:
+@dataclass(frozen=True)
+class SwingShape:
+    """The parameters of one swing, so that more than one swing can exist.
+
+    The module's constants are the defaults, so every caller that predates this
+    gets exactly the signal it was written against. Phase 12 needs a corpus of
+    swings that differ from each other -- different tempos, different arcs,
+    different people -- because a learned detector trained on one repeated swing
+    learns that swing, and a split that holds out players needs players to hold
+    out. Varying the parameters is the only honest way this fixture can supply
+    that, and `tests/synthetic_labels.py` says plainly what it still cannot.
+    """
+
+    takeaway_s: float = TAKEAWAY_S
+    top_s: float = TOP_S
+    impact_s: float = IMPACT_S
+    arc_radius: float = ARC_RADIUS
+    arc_low_height: float = ARC_LOW_HEIGHT
+    arc_top_angle: float = ARC_TOP_ANGLE
+
+    @property
+    def finish_s(self) -> float:
+        """The descent and the follow-through are mirror images in this model."""
+        return self.top_s + 2 * (self.impact_s - self.top_s)
+
+
+DEFAULT_SHAPE = SwingShape()
+
+
+def arc_angle(t: NDArray[np.float64], shape: SwingShape = DEFAULT_SHAPE) -> NDArray[np.float64]:
     """Angle of the hands along their arc, zero at the bottom.
 
     The hands are modelled on a circle rather than on a vertical line, because
@@ -85,30 +125,33 @@ def arc_angle(t: NDArray[np.float64]) -> NDArray[np.float64]:
     zero -- the lowest point of the arc, and the instant impact is defined to be.
     """
     angle = np.zeros_like(t)
+    finish_s = shape.finish_s
 
-    rising = (t >= TAKEAWAY_S) & (t < TOP_S)
-    u = (t[rising] - TAKEAWAY_S) / (TOP_S - TAKEAWAY_S)
-    angle[rising] = ARC_TOP_ANGLE * np.sin(np.pi / 2 * u) ** 2
+    rising = (t >= shape.takeaway_s) & (t < shape.top_s)
+    u = (t[rising] - shape.takeaway_s) / (shape.top_s - shape.takeaway_s)
+    angle[rising] = shape.arc_top_angle * np.sin(np.pi / 2 * u) ** 2
 
-    sweeping = (t >= TOP_S) & (t <= FINISH_S)
-    u = (t[sweeping] - TOP_S) / (FINISH_S - TOP_S)
-    angle[sweeping] = ARC_TOP_ANGLE * np.cos(np.pi * u)
+    sweeping = (t >= shape.top_s) & (t <= finish_s)
+    u = (t[sweeping] - shape.top_s) / (finish_s - shape.top_s)
+    angle[sweeping] = shape.arc_top_angle * np.cos(np.pi * u)
 
-    after = t > FINISH_S
-    angle[after] = -ARC_TOP_ANGLE
+    after = t > finish_s
+    angle[after] = -shape.arc_top_angle
     return angle
 
 
-def hand_path(t: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
+def hand_path(
+    t: NDArray[np.float64], shape: SwingShape = DEFAULT_SHAPE
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]:
     """The arc as an image-space path.
 
     Returns x and y with y in image convention (increasing downward), so the
     detector's conversion to an upward height is genuinely exercised rather than
     bypassed by handing it a signal that already points the right way.
     """
-    angle = arc_angle(t)
-    height = ARC_LOW_HEIGHT + ARC_RADIUS * (1.0 - np.cos(angle))
-    return 0.5 + ARC_RADIUS * np.sin(angle), 1.0 - height
+    angle = arc_angle(t, shape)
+    height = shape.arc_low_height + shape.arc_radius * (1.0 - np.cos(angle))
+    return 0.5 + shape.arc_radius * np.sin(angle), 1.0 - height
 
 
 def pose_sequence(
@@ -120,16 +163,23 @@ def pose_sequence(
     detected: NDArray[np.bool_] | None = None,
     per_landmark_visibility: dict[int, NDArray[np.float64]] | None = None,
     path: str = "/data/synthetic.mov",
+    body: dict[int, tuple[float, float]] | None = None,
 ) -> PoseSequence:
     """A pose sequence whose wrists follow the given path on a still body.
 
     `per_landmark_visibility` overrides the shared value for named landmarks,
     which is how down-the-line footage behaves: one wrist is hidden behind the
     other, and which one changes through the swing.
+
+    `body` replaces the static landmarks, which is how one fixture becomes more
+    than one subject: everything this engine measures is scaled by torso length,
+    so two bodies of different proportions are the cheapest test that the scaling
+    is real rather than a constant that happens to cancel.
     """
     vis = np.full(t.size, 0.95) if visibility is None else visibility
     overrides = per_landmark_visibility or {}
     seen = np.ones(t.size, dtype=bool) if detected is None else detected
+    skeleton = body if body is not None else BODY
     wrists = {int(Landmark.LEFT_WRIST), int(Landmark.RIGHT_WRIST)}
 
     frames = []
@@ -145,7 +195,7 @@ def pose_sequence(
                 offset = 0.01 if landmark == int(Landmark.LEFT_WRIST) else -0.01
                 px, py = float(x[index]) + offset, float(y[index])
             else:
-                px, py = BODY.get(landmark, (0.5, 0.2))
+                px, py = skeleton.get(landmark, (0.5, 0.2))
             channel = overrides.get(landmark)
             points.append(
                 LandmarkPoint(
@@ -201,6 +251,7 @@ def swing_sequence(
     *,
     world_start_s: float = 0.0,
     time_scale: float = 1.0,
+    shape: SwingShape = DEFAULT_SHAPE,
     **kwargs: object,
 ) -> PoseSequence:
     """One camera's recording of the swing.
@@ -217,5 +268,5 @@ def swing_sequence(
     sync layer can only report as residual.
     """
     clock = np.arange(0.0, duration_s, 1.0 / fps)
-    x, y = hand_path(world_start_s + clock / time_scale)
+    x, y = hand_path(world_start_s + clock / time_scale, shape)
     return pose_sequence(x, y, clock, **kwargs)  # type: ignore[arg-type]

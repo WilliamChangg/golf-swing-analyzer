@@ -36,11 +36,18 @@ class SignalUnit(StrEnum):
     """What a filtered value is actually in.
 
     Named rather than assumed, because the unit is the difference between a
-    measurement and a number that looks like one. Nothing here is a calibrated
-    metric quantity: IMAGE space is normalised to the frame, and HIP_LOCAL is
-    MediaPipe's hip-centred output, which is only roughly metric and carries no
-    camera geometry. The `APPROX_` prefix is there so that a call site
+    measurement and a number that looks like one. Only one frame here is a
+    calibrated metric quantity: IMAGE space is normalised to the frame, and
+    HIP_LOCAL is MediaPipe's hip-centred output, which is only roughly metric and
+    carries no camera geometry. The `APPROX_` prefix is there so that a call site
     formatting a value cannot spell "metres" without reading it.
+
+    `M` is the exception and has no prefix, because it is genuinely metres:
+    CAMERA coordinates are triangulated from two calibrated views, and their
+    scale descends from a board square measured with a ruler. The two spellings
+    sitting side by side is the point -- `APPROX_M` and `M` look similar and are
+    not the same claim, and a reader who has to choose between them has to think
+    about which one they have.
     """
 
     NORMALIZED_FRAME = "normalized_frame"
@@ -52,6 +59,9 @@ class SignalUnit(StrEnum):
     APPROX_M = "approx_m"
     APPROX_M_PER_S = "approx_m_per_s"
     APPROX_M_PER_S2 = "approx_m_per_s2"
+    M = "m"
+    M_PER_S = "m_per_s"
+    M_PER_S2 = "m_per_s2"
 
 
 _UNITS: dict[LandmarkSpace, tuple[SignalUnit, SignalUnit, SignalUnit]] = {
@@ -74,6 +84,16 @@ _UNITS: dict[LandmarkSpace, tuple[SignalUnit, SignalUnit, SignalUnit]] = {
         SignalUnit.APPROX_M,
         SignalUnit.APPROX_M_PER_S,
         SignalUnit.APPROX_M_PER_S2,
+    ),
+    # Real metres, and the only entry here that is. A CAMERA coordinate is
+    # triangulated from two calibrated views and its scale descends from a
+    # printed board square measured with a ruler. Nothing in this table converts
+    # between the rows: `unit_for` names what a value is in, and there is no
+    # arithmetic that turns frame widths into metres without a camera.
+    LandmarkSpace.CAMERA: (
+        SignalUnit.M,
+        SignalUnit.M_PER_S,
+        SignalUnit.M_PER_S2,
     ),
 }
 

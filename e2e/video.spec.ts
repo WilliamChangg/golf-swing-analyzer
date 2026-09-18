@@ -380,7 +380,9 @@ test.describe("camera calibration", () => {
   /** Load a clip, then point the calibration panel at board footage. */
   async function calibrate(page: Page, result: unknown) {
     await loadClip(page, {
-      "plugin:dialog|open": { result: "/Users/example/data/calibration/faceon.mov" },
+      "plugin:dialog|open": {
+        result: "/Users/example/data/calibration/faceon.mov",
+      },
       calibrate_camera: { result },
     });
     await page.getByRole("button", { name: /Choose board footage/ }).click();
@@ -420,7 +422,9 @@ test.describe("camera calibration", () => {
     await calibrate(page, GOOD_CALIBRATION);
 
     await expect(page.getByText("68.9° across")).toBeVisible();
-    await expect(page.getByText(/a phone.s main camera sees about 65/)).toBeVisible();
+    await expect(
+      page.getByText(/a phone.s main camera sees about 65/),
+    ).toBeVisible();
   });
 
   test("refuses a capture that fits better and determines less", async ({

@@ -13,7 +13,7 @@ puts it. Phase 8 needed a rule for deciding whether a calibration may be used,
 and gating on that number is the obvious rule.
 
 It is also wrong, in a way that is worse than merely uninformative: the number
-gets *better* as the calibration gets worse.
+gets _better_ as the calibration gets worse.
 
 ## The measurement
 
@@ -69,13 +69,13 @@ when the question is "what did these measurements fail to constrain at all".
 sampled — and not on how well the model fits them.**
 
 `CoverageReport` measures three things, each detecting a degeneracy that the
-residual makes look *better*:
+residual makes look _better_:
 
-| field              | degeneracy it detects                                  |
-| ------------------ | ------------------------------------------------------ |
-| `tilt_range_deg`   | focal length not separable from distance               |
-| `image_fraction`   | distortion fitted to a region that has almost none     |
-| `scale_range`      | the lens measured at a single working distance         |
+| field            | degeneracy it detects                              |
+| ---------------- | -------------------------------------------------- |
+| `tilt_range_deg` | focal length not separable from distance           |
+| `image_fraction` | distortion fitted to a region that has almost none |
+| `scale_range`    | the lens measured at a single working distance     |
 
 The reprojection error is still computed, still reported, and still gates — at
 1.0 px, deliberately loose. It catches gross failure: a mis-specified board, the
@@ -130,7 +130,7 @@ The camera here is synthetic. The renderer applies the exact distortion model th
 fit inverts, and the images contain no motion blur, no rolling shutter, no
 defocus, no JPEG ringing on the marker borders, and no printed sheet that has
 bowed a millimetre off flat. **Every error in the table above is a floor.** What
-the sweep establishes is the *shape* of the relationship — that the residual is
+the sweep establishes is the _shape_ of the relationship — that the residual is
 blind to a degeneracy and coverage is not — which is a claim about the estimator
 rather than about any particular camera, and it is the claim the decision rests
 on.
@@ -158,5 +158,5 @@ degeneracy does not recover the focal length; it just fits everything worse.
 detect the degeneracy honestly, and it was not built because it needs the held-out
 views to differ from the fitted ones in the way that matters — which is the same
 coverage question, measured indirectly and more expensively. `CoverageReport`
-asks it directly and can say *which* axis is missing, which is what a person
+asks it directly and can say _which_ axis is missing, which is what a person
 holding a board can act on.

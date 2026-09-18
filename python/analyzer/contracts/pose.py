@@ -132,12 +132,16 @@ class LandmarkSpace(StrEnum):
         body. MediaPipe calls these "world landmarks"; they are not calibrated
         world coordinates and carry no camera geometry.
     CAMERA
-        Metres in three dimensions, centred on the camera. Needs intrinsics,
-        which arrive with calibration in Phase 8. **Not produced by this build.**
+        Metres in three dimensions, centred on the reference camera. Produced by
+        triangulating two calibrated views of the same instant, which is Phase 9
+        -- so it is **not readable from a stored pose sequence**, which is one
+        clip and therefore one projection. `analyzer.reconstruction` is where it
+        comes from.
     WORLD
-        Metres in three dimensions, in a frame fixed to the scene. Needs a
-        calibrated stereo pair, which arrives in Phase 9. **Not produced by this
-        build.**
+        Metres in three dimensions, in a frame fixed to the scene. **Not
+        produced by this build**, and not for want of arithmetic: a scene-fixed
+        frame needs a gravity direction and a target line, and a stereo pair
+        supplies neither. See `docs/coordinate-systems.md` for what would.
     """
 
     IMAGE = "image"
@@ -152,16 +156,25 @@ class LandmarkSpace(StrEnum):
 # explicit is what stops the store growing a column for a frame nothing fills.
 STORED_SPACES: tuple[LandmarkSpace, ...] = (LandmarkSpace.IMAGE, LandmarkSpace.HIP_LOCAL)
 
-# What a frame this build cannot produce is waiting for. Consulted when a caller
-# asks for one, so the error names the phase rather than saying "unsupported".
+# What a frame cannot be read from **one clip's stored landmarks**, and why.
+# Consulted when a caller asks for one, so the error names what supplies the
+# frame rather than reporting an unsupported value.
+#
+# CAMERA is now produced by this build, and it is still listed here, which is the
+# distinction worth keeping: it is not a conversion of a stored sequence, it is a
+# measurement made from two of them. A `landmark_series` call that returned
+# CAMERA would have had to invent the depth a single projection destroyed.
 UNREACHABLE_SPACES: dict[LandmarkSpace, str] = {
     LandmarkSpace.CAMERA: (
-        "camera coordinates need the intrinsic matrix and distortion "
-        "coefficients that calibration produces in Phase 8"
+        "camera coordinates are metres in three dimensions and cannot be read "
+        "from one clip, which is one projection; they are triangulated from two "
+        "calibrated views of the same instant by analyzer.reconstruction"
     ),
     LandmarkSpace.WORLD: (
-        "world coordinates need triangulation against a calibrated stereo "
-        "pair, which arrives in Phase 9"
+        "world coordinates need a scene-fixed frame -- a gravity direction and a "
+        "target line -- and a calibrated stereo pair supplies neither; "
+        "triangulation produces CAMERA, and docs/coordinate-systems.md records "
+        "what a capture would have to contain to fix the rest"
     ),
 }
 

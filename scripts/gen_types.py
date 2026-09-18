@@ -41,6 +41,7 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.metrics", "MetricSet"),
     ("analyzer.contracts.sync", "SyncModel"),
     ("analyzer.contracts.calibration", "CameraRig"),
+    ("analyzer.contracts.reconstruction", "ReconstructionReport"),
 )
 
 # `Project` and `ProjectList` are deliberately *not* exported. They are reachable
@@ -48,6 +49,12 @@ EXPORTS: tuple[tuple[str, str], ...] = (
 # management is Phase 14.1 -- and exporting types nothing draws would make the
 # app's type surface a description of the plan rather than of the app. Same
 # reasoning that kept `SequenceFilterReport` out until Phase 4 built its panel.
+#
+# `analyzer.contracts.labels` and `analyzer.contracts.ml` are not exported for a
+# stronger reason: they are never reaching the app. Labelling and training are
+# developer operations over a corpus that does not ship, nothing in `dispatch`
+# reaches `analyzer.ml`, and a TypeScript `ModelCard` would be a type for a
+# capability the desktop app does not have and is not going to be given.
 
 BANNER = """\
 /**

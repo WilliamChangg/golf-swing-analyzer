@@ -54,6 +54,10 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     },
     "get_calibration": {"project_id": 1},
     "clear_calibration": {"project_id": 1},
+    "reconstruct": {"project_id": 1},
+    "track_club": {"path": str(CFR_30FPS)},
+    "detect_ball": {"path": str(CFR_30FPS)},
+    "locate_impact": {"path": str(CFR_30FPS)},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -70,6 +74,12 @@ _FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
 # and a stub would exercise the dispatch wiring against a fixture rather than
 # against the engine. `tests/test_calibration.py` covers the path they call into,
 # from rendered board views, which is the stronger test of the two.
+#
+# `reconstruct` is absent for the same reason and one more: it needs a project
+# holding two calibrated clips *and* an alignment between them, which is three
+# pieces of state that only exist together on a real session.
+# `tests/test_reconstruction.py` drives the engine it calls into directly, from a
+# synthetic body whose 3D positions are inputs.
 
 
 class TestCall:
@@ -365,3 +375,40 @@ class TestDetectPhases:
         with pytest.raises(EngineError) as excinfo:
             dispatch.call("detect_phases", {"path": str(bogus)})
         assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
+
+
+class TestTrackClub:
+    """The one analysis method that cannot take a pose file instead of a clip."""
+
+    def test_a_pose_file_is_refused_by_name(self, tmp_path: Path) -> None:
+        """And the refusal says why, rather than reporting a missing video.
+
+        Every other method above Phase 2 accepts either a Parquet or the clip it
+        came from, so a caller reaching for the same habit here gets an error
+        that explains the difference: a shaft is found in the pixels, and a
+        stored pose sequence does not contain any.
+        """
+        poses = TestFilterPoses._write_poses(tmp_path)
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("track_club", {"path": str(poses)})
+        assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
+        assert "pixels" in str(excinfo.value)
+
+    def test_a_video_with_no_extraction_says_which_command_to_run(self) -> None:
+        """The hand anchors come from the cache, so the error names the gap."""
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("track_club", {"path": str(CFR_30FPS)})
+        assert excinfo.value.code == ErrorCode.UNSUPPORTED_INPUT
+        assert "analyzer extract" in str(excinfo.value.data or {})
+
+    def test_rejects_an_unknown_parameter_rather_than_ignoring_it(self) -> None:
+        with pytest.raises(EngineError) as excinfo:
+            dispatch.call("track_club", {"path": str(CFR_30FPS), "clubs": {}})
+        assert excinfo.value.code == ErrorCode.INVALID_PARAMS
+
+    def test_the_configuration_is_reachable_from_the_parameters(self) -> None:
+        """A knob that cannot be set over RPC is a knob the desktop app cannot offer."""
+        parsed = dispatch.TrackClubParams.model_validate(
+            {"path": "clip.mp4", "club": {"min_confidence": 0.8}}
+        )
+        assert parsed.club.min_confidence == 0.8

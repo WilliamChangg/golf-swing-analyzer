@@ -17,17 +17,19 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, ValidationError
 
+from analyzer.contracts.ball import BallConfig
 from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
 from analyzer.contracts.camera import CameraRole
+from analyzer.contracts.club import ClubConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
 from analyzer.contracts.pose import LandmarkSpace
+from analyzer.contracts.reconstruction import ReconstructionConfig
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
-from analyzer.paths import cache_dir
 from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
@@ -174,6 +176,7 @@ def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
     rather than reporting a missing file.
     """
     from analyzer.pose.estimator import resolve_model
+    from analyzer.pose.store import cached_sequence_path
 
     candidate = Path(parsed.path)
     if candidate.suffix == ".parquet":
@@ -181,7 +184,7 @@ def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
 
     metadata = probe_video(candidate)
     entry, _ = resolve_model(parsed.model)
-    poses = cache_dir() / "poses" / metadata.content_key.as_path_segment() / f"{entry.name}.parquet"
+    poses = cached_sequence_path(metadata.content_key, entry.name)
     if not poses.exists():
         raise EngineError(
             f"No extracted poses for {candidate.name} with model '{entry.name}'.",
@@ -344,6 +347,21 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
             "records this, so it is supplied rather than measured."
         ),
     )
+    reconstruct: bool = Field(
+        default=True,
+        description=(
+            "Also triangulate this clip against its partner, where the project is "
+            "a calibrated, aligned pair, so that the metrics whose basis is "
+            "`spatial` can be measured.\n\n"
+            "It costs nothing on the ordinary project, because it does nothing "
+            "there: an uncalibrated or unaligned or single-clip project returns "
+            "no reconstruction before any work is done, and the spatial metrics "
+            "are refused by the calibration gate. False is for measuring the "
+            "single-camera result on a pair that could do better, which is how "
+            "the projected and reconstructed versions of the same quantity get "
+            "compared."
+        ),
+    )
 
 
 def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
@@ -384,11 +402,107 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
         intrinsics=intrinsics,
         reporter=reporter,
     )
+    reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
     try:
         detected = detect_phases(filtered, parsed.phases)
-        return compute_metrics(filtered, detected, parsed.metrics, status)
+        result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
     except (SignalError, BodyError) as exc:
         raise _unsupported_input(exc, None) from exc
+
+    result.warnings = [*result.warnings, *notes]
+    return result
+
+
+def _reconstruction_for_metrics(
+    parsed: ComputeMetricsParams, sequence: Any, filtered: Any, reporter: ProgressReporter
+) -> tuple[Any, list[str]]:
+    """Triangulate this clip against its partner, when the project supports it.
+
+    Returns `(None, [])` for every project that is not a calibrated, aligned pair,
+    which is the ordinary case and a silent one: the spatial metrics are then
+    refused by the calibration gate, whose reason names the calibration rather
+    than this function's inability to find a partner. A project that *is* a
+    calibrated pair but whose clips are not aligned gets a warning, because there
+    the fix is one command away.
+    """
+    from analyzer.contracts.calibration import CalibrationStatus
+    from analyzer.projects import ProjectError, ProjectStore
+    from analyzer.reconstruction import ReconstructionError, reconstruct_pair
+
+    if parsed.project_id is None or not parsed.reconstruct:
+        return None, []
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    if project.rig is None or project.rig.status() is not CalibrationStatus.STEREO:
+        return None, []
+
+    digest = sequence.video_content_key.digest
+    this = next((entry for entry in project.clips if entry.content_key.digest == digest), None)
+    others = [entry for entry in project.clips if this is not None and entry.id != this.id]
+    if this is None or len(others) != 1:
+        return None, []
+    other = others[0]
+
+    time_map = _stored_time_map(project, this.id, other.id)
+    if time_map is None:
+        return None, [
+            "This project's cameras are calibrated as a stereo pair, so a 3D reconstruction "
+            "is possible -- but the two clips' clocks have not been related, and "
+            "triangulation is only meaningful between two views of the same instant. "
+            "`analyzer project sync` relates them."
+        ]
+
+    reconstruct_params = ReconstructParams(
+        project_id=parsed.project_id,
+        reference_clip_id=this.id,
+        target_clip_id=other.id,
+        model=parsed.model,
+        filter=parsed.filter,
+        phases=parsed.phases,
+    )
+    try:
+        return (
+            reconstruct_pair(
+                filtered,
+                _filtered_for_clip(project, other, reconstruct_params, reporter),
+                project.rig,
+                time_map,
+                reference_role=this.role,
+                target_role=other.role,
+                reference_name=this.name,
+                target_name=other.name,
+            ),
+            [],
+        )
+    except ReconstructionError as exc:
+        # A reconstruction that cannot be produced is not a reason to produce no
+        # metrics: everything the single camera supports is still measurable, and
+        # the spatial family is refused by name with this as the reason.
+        return None, [f"No 3D reconstruction was produced for this pair: {exc}"]
+
+
+def _stored_time_map(project: Project, reference_id: int, target_id: int) -> Any:
+    """The project's alignment for one ordered pair, inverting a stored reverse one.
+
+    A project stores one `SyncModel` per ordered pair, and which clip was the
+    reference when it was fitted has nothing to do with which clip is the
+    reference now -- that choice belongs to whoever is asking, and it only
+    decides which camera the reconstructed metres are centred on.
+    `TimeMap.inverse` is what makes the two questions independent.
+    """
+    for entry in project.syncs:
+        if entry.model.time_map is None or not entry.model.aligned:
+            continue
+        if entry.reference_clip_id == reference_id and entry.target_clip_id == target_id:
+            return entry.model.time_map
+        if entry.reference_clip_id == target_id and entry.target_clip_id == reference_id:
+            return entry.model.time_map.inverse()
+    return None
 
 
 def _calibration_for(project_id: int | None, sequence: Any) -> tuple[Any, CalibrationStatus]:
@@ -891,6 +1005,382 @@ def _choose_pair(
     return reference, only_other(reference.id)
 
 
+# --- club tracking (Phase 10) ---------------------------------------------
+
+
+class TrackClubParams(BaseModel, extra="forbid"):
+    """Parameters for `track_club`.
+
+    `path` is a **video**, and it is the only analysis method here that cannot
+    take a pose Parquet instead. Everything else above Phase 2 measures the
+    landmarks; this measures the pixels, and a stored pose file does not contain
+    any. The landmarks are still needed -- they say where the hands are -- so
+    this resolves them from the content-keyed cache the way every other method
+    does, and requires that the footage they came from is still on disk.
+    """
+
+    path: str = Field(description="Absolute path to the video file. Not a pose Parquet.")
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction supplies the hand anchors. None uses the default.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy for the hand trajectory the search is anchored on.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description=(
+            "Structural bounds a motion must satisfy to be reported as a swing. "
+            "A detected swing is what makes per-phase coverage reportable, which "
+            "is the number this phase's verdict rests on; a clip with no swing in "
+            "it is still tracked, and says so."
+        ),
+    )
+    club: ClubConfig = Field(
+        default_factory=ClubConfig, description="Search geometry, and when to emit nothing."
+    )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. It reaches the "
+            "club layer through the timestamps, which decide the prediction "
+            "window and every rate reported here."
+        ),
+    )
+
+
+def _track_club(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Track the club through a clip, anchored on its filtered hand trajectory.
+
+    **No lens correction is applied here, and that is deliberate rather than
+    missing.** Every other consumer of `filter_sequence` undistorts the landmarks
+    when a calibration is available, because a lens displaces a landmark by tens
+    of pixels near the frame edge. Doing that here would be actively wrong: the
+    detector searches the *raw* frame, so an undistorted anchor would point at a
+    place in the image where the hands are not, and the search region, the
+    support ray and the reported grip all hang off it.
+
+    Correcting this properly means undistorting the **frame**, which is a remap
+    per frame rather than a transform per landmark, and it matters for a second
+    reason a landmark does not have: a straight club in the world is a *curved*
+    line in a distorted image, so the straight-line model a Hough transform rests
+    on is itself violated near the edge. Neither is fixed here; the club is
+    tracked in the picture as taken, which is what the picture contains.
+    """
+    parsed = TrackClubParams.model_validate(params)
+
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Club tracking reads the video, not a pose file: a shaft is found in the "
+                "pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself. Its landmarks are resolved from the cache automatically.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
+    )
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        # Not fatal here, unlike everywhere else. Phases decide what coverage is
+        # reported *against*; the club is in the frame either way, and a clip the
+        # detector will not call a swing is exactly the clip where seeing where
+        # the club went is most useful.
+        detected = None
+
+    try:
+        return track_club(
+            source,
+            filtered,
+            HoughShaftDetector(parsed.club),
+            phases=detected,
+            config=parsed.club,
+            reporter=reporter,
+        )
+    except ClubDetectionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+# --- ball detection and impact fusion (Phase 11) --------------------------
+
+
+class DetectBallParams(BaseModel, extra="forbid"):
+    """Parameters for `detect_ball`.
+
+    `path` is a **video** for `TrackClubParams`' reason: this measures pixels, and
+    a stored pose sequence does not contain any. The landmarks are still needed --
+    they say where the player is standing, which is where the search region goes --
+    so they are resolved from the content-keyed cache the way every other method
+    does.
+    """
+
+    path: str = Field(description="Absolute path to the video file. Not a pose Parquet.")
+    model: str | None = Field(
+        default=None,
+        description="Which model's extraction places the search region. None uses the default.",
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description="Smoothing policy for the hand trajectory the region is anchored on.",
+    )
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description=(
+            "Structural bounds a motion must satisfy to be reported as a swing. A "
+            "detected swing is what lets the departure be checked against where a "
+            "strike can happen, and what restricts the identification to the "
+            "frames before the top; a clip with no swing in it is still searched, "
+            "and says so."
+        ),
+    )
+    ball: BallConfig = Field(
+        default_factory=BallConfig, description="Search geometry, and when to emit nothing."
+    )
+    slow_motion_factor: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "How many times slower than real time the clip plays. It reaches this "
+            "layer through the timestamps, which decide the permanence window and "
+            "the interval the departure is bracketed by."
+        ),
+    )
+
+
+def _ball_inputs(parsed: DetectBallParams, reporter: ProgressReporter) -> tuple[Path, Any, Any]:
+    """Resolve a clip to its filtered landmarks and detected phases.
+
+    Shared by `detect_ball` and `locate_impact`, which need exactly the same
+    preparation. Kept as a function rather than duplicated because the two would
+    otherwise drift on the one detail that matters: `detect_phases` failing is not
+    fatal here, and a copy that forgot would refuse the clips this layer is most
+    useful on.
+    """
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Ball detection reads the video, not a pose file: a ball is found in the "
+                "pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself. Its landmarks are resolved from the cache automatically.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        reporter=reporter,
+    )
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        # Not fatal, for `_track_club`'s reason: the ball is in the frame whether
+        # or not the motion around it is called a swing. What is lost is the gate,
+        # and the report says so rather than quietly reporting an ungated instant
+        # as if it had been checked.
+        detected = None
+    return source, filtered, detected
+
+
+def _detect_ball(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Find the ball in a clip and the frame at which it stopped being there.
+
+    **No lens correction is applied, for `_track_club`'s reason and one more.**
+    The detector searches the raw frame, so an undistorted anchor would point at a
+    place in the image where the player is not. The extra reason is specific here:
+    the measurement is a *time*, not a position, and a lens does not move an
+    object between frames -- so distortion costs this phase nothing it would
+    otherwise have, which is not true of anything else that reads pixels.
+    """
+    parsed = DetectBallParams.model_validate(params)
+
+    from analyzer.ball import ContrastBlobDetector, detect_ball
+    from analyzer.ball.detector import BallDetectionError
+
+    source, filtered, detected = _ball_inputs(parsed, reporter)
+    try:
+        return detect_ball(
+            source,
+            filtered,
+            ContrastBlobDetector(parsed.ball),
+            phases=detected,
+            config=parsed.ball,
+            reporter=reporter,
+        )
+    except BallDetectionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+class LocateImpactParams(DetectBallParams):
+    """Parameters for `locate_impact`.
+
+    Everything `detect_ball` takes, plus the club. The club is opt-out rather than
+    opt-in because it is one of the four estimates being reconciled and leaving it
+    out silently would make the comparison the method exists for incomplete; it
+    costs a second decode of the clip, which is why it can be turned off at all.
+    """
+
+    club: ClubConfig = Field(
+        default_factory=ClubConfig,
+        description="Search geometry for the shaft, when the club estimate is included.",
+    )
+    with_club: bool = Field(
+        default=True,
+        description=(
+            "Whether to track the club as well, for its independent club-head "
+            "estimate. Costs a second pass over the frames. Turning it off does not "
+            "change the reported instant unless the club is the only source that "
+            "answered -- but it does remove a disagreement that would have been "
+            "measured."
+        ),
+    )
+
+
+def _locate_impact(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Reconcile every available impact estimate for one clip into one instant.
+
+    Runs the analyses rather than taking their reports, because the alternative --
+    accepting three stored reports and fusing them -- cannot check that they came
+    from the same clip, the same smoothing window and the same slow-motion factor.
+    Three estimates of one instant computed under three different clocks is
+    precisely the failure `contracts/impact.py` exists to prevent, and it would be
+    invisible in the output.
+    """
+    parsed = LocateImpactParams.model_validate(params)
+
+    from analyzer.ball import ContrastBlobDetector, detect_ball
+    from analyzer.ball.detector import BallDetectionError
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.contracts.impact import FusedImpact, ImpactSource
+    from analyzer.impact import fuse_impact
+
+    source, filtered, detected = _ball_inputs(parsed, reporter)
+
+    ball = None
+    try:
+        ball = detect_ball(
+            source,
+            filtered,
+            ContrastBlobDetector(parsed.ball),
+            phases=detected,
+            config=parsed.ball,
+            reporter=reporter,
+        )
+    except BallDetectionError:
+        # A clip with no measurable ball still has three other estimates, and the
+        # fusion's whole point is to report the best available one rather than to
+        # require the best possible one.
+        ball = None
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    club = None
+    if parsed.with_club:
+        try:
+            club = track_club(
+                source,
+                filtered,
+                HoughShaftDetector(parsed.club),
+                phases=detected,
+                config=parsed.club,
+                reporter=reporter,
+            )
+        except (ClubDetectionError, ProbeError):
+            club = None
+
+    fused = fuse_impact(
+        detected,
+        ball=ball,
+        club=club,
+        smoothing_window_s=filtered.report.config.smoothing.window_s,
+        frame_interval_s=_median_interval_s(filtered),
+    )
+    if fused is None:
+        raise _unsupported_input(
+            ValueError(
+                "No impact could be located in this clip by any of the four methods. "
+                "Phase detection found no swing, and no ball was seen to leave -- which "
+                "together mean there is no event here to time."
+            ),
+            "Check `analyzer phases` on this clip; it reports why no swing was found.",
+        )
+    assert isinstance(fused, FusedImpact)  # noqa: S101 - narrows for the caller
+    if fused.source is ImpactSource.BALL_DEPARTURE and ball is not None:
+        # Carried through so a reader of the fusion alone can see how much of the
+        # clip stood behind the observation it is reading.
+        fused.warnings.extend(ball.warnings)
+    return fused
+
+
+def _median_interval_s(filtered: Any) -> float | None:
+    """The clip's own frame interval, in real seconds.
+
+    Taken as a median rather than from a declared frame rate, because
+    variable-rate footage is the case Phase 1 exists to handle and `frame / fps`
+    is not when a frame was taken.
+    """
+    import numpy as np
+
+    times = np.asarray(filtered.t, dtype=float)
+    if times.size < 2:
+        return None
+    intervals = np.diff(times)
+    finite = intervals[np.isfinite(intervals) & (intervals > 0.0)]
+    return float(np.median(finite)) if finite.size else None
+
+
 # --- calibration (Phase 8) ------------------------------------------------
 
 
@@ -1185,6 +1675,221 @@ def _calibrate_stereo(params: dict[str, Any], reporter: ProgressReporter) -> Bas
     return stereo
 
 
+# --- reconstruction (Phase 9) ---------------------------------------------
+
+
+class ReconstructParams(BaseModel, extra="forbid"):
+    """Parameters for `reconstruct`.
+
+    Project-based rather than path-based, and that is not a convenience. A
+    reconstruction needs three things that all belong to a *pair* rather than to
+    a clip -- which camera filmed which clip, the rig relating them, and the map
+    relating their clocks -- and a project is the only thing in this engine that
+    records any of them. Two loose paths cannot supply them, so there is no
+    signature here that takes two loose paths.
+    """
+
+    project_id: int
+    reference_clip_id: int | None = Field(
+        default=None,
+        description=(
+            "Which clip sets the clock, the frame numbering and the coordinate "
+            "frame. None picks the face-on clip where there is one. It changes "
+            "which camera the metres are centred on and nothing else, so the "
+            "useful choice is whichever clip the swing events were found in."
+        ),
+    )
+    target_clip_id: int | None = Field(
+        default=None, description="The second view. None picks the other clip."
+    )
+    model: str | None = None
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description=(
+            "Smoothing policy, applied to **both** clips, for the reason "
+            "`sync_clips` shares one: the fitted position and velocity are what "
+            "the target clip is resampled with, and smoothing the two "
+            "differently would bias every reconstructed point by an amount "
+            "nothing measures."
+        ),
+    )
+    phases: PhaseConfig = Field(default_factory=PhaseConfig)
+    sync: SyncConfig = Field(default_factory=SyncConfig)
+    reconstruction: ReconstructionConfig = Field(default_factory=ReconstructionConfig)
+    align: bool = Field(
+        default=False,
+        description=(
+            "Re-align the pair now instead of using the project's stored "
+            "alignment. False by default because a stored alignment is a "
+            "**recorded decision** -- a person may have placed its anchors by "
+            "hand -- and silently recomputing it would discard that. A project "
+            "with no stored alignment for this pair aligns anyway and says so in "
+            "the warnings."
+        ),
+    )
+
+
+def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Triangulate a project's pair of clips into 3D positions.
+
+    Filtering and phase detection are recomputed rather than taken as input, for
+    the reason `compute_metrics` gives: they cost milliseconds, and accepting
+    pre-computed ones would let two clips be reconstructed whose trajectories
+    were fitted under different settings -- a difference that would surface as
+    reconstruction error with no way to attribute it.
+    """
+    parsed = ReconstructParams.model_validate(params)
+
+    from analyzer.contracts.sync import SyncModel
+    from analyzer.projects import ProjectError, ProjectStore
+    from analyzer.reconstruction import (
+        ReconstructionError,
+        reconstruct_pair,
+        require_stereo_rig,
+    )
+
+    try:
+        with ProjectStore() as store:
+            project = store.get_project(parsed.project_id)
+    except ProjectError as exc:
+        raise _project_error(exc) from exc
+
+    reference, target = _choose_pair(project, parsed.reference_clip_id, parsed.target_clip_id)
+
+    # Before the poses are read and before the clips are aligned. Both of those
+    # cost seconds and neither can rescue a project whose cameras were never
+    # calibrated -- and running them first makes the reported failure the last
+    # thing that went wrong rather than the first thing that was wrong.
+    try:
+        require_stereo_rig(project.rig, reference.role, target.role)
+    except ReconstructionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    warnings: list[str] = []
+
+    stored = next(
+        (
+            entry
+            for entry in project.syncs
+            if entry.reference_clip_id == reference.id and entry.target_clip_id == target.id
+        ),
+        None,
+    )
+    if stored is not None and not parsed.align:
+        alignment: SyncModel = stored.model
+    else:
+        if stored is None:
+            warnings.append(
+                "This pair has no stored alignment, so one was fitted for this "
+                "reconstruction and not saved. `analyzer project sync` stores one, which "
+                "is worth doing: an alignment is a decision about which instants "
+                "correspond, and every reconstructed point inherits its error."
+            )
+        result = _sync_clips(
+            {
+                "reference": {
+                    "path": reference.path,
+                    "model": parsed.model,
+                    "slow_motion_factor": reference.slow_motion_factor,
+                },
+                "target": {
+                    "path": target.path,
+                    "model": parsed.model,
+                    "slow_motion_factor": target.slow_motion_factor,
+                },
+                "filter": parsed.filter.model_dump(mode="json"),
+                "phases": parsed.phases.model_dump(mode="json"),
+                "sync": parsed.sync.model_dump(mode="json"),
+            },
+            reporter,
+        )
+        assert isinstance(result, SyncModel)  # noqa: S101 - narrows the dispatch return type
+        alignment = result
+
+    if not alignment.aligned or alignment.time_map is None:
+        raise _unsupported_input(
+            ValueError(
+                "The two clips' clocks could not be related, so nothing knows which target "
+                f"frame shows the same instant as a given reference frame. {alignment.refusal or ''}".strip()
+            ),
+            "Align the pair with `analyzer project sync`, placing anchors by hand if the "
+            "automatic fit is refused. Triangulating two views of different instants "
+            "produces a confident answer about a pose the player never held.",
+        )
+
+    filtered = {
+        name: _filtered_for_clip(project, clip, parsed, reporter)
+        for name, clip in (("reference", reference), ("target", target))
+    }
+
+    try:
+        reconstruction = reconstruct_pair(
+            filtered["reference"],
+            filtered["target"],
+            project.rig,
+            alignment.time_map,
+            reference_role=reference.role,
+            target_role=target.role,
+            reference_name=reference.name,
+            target_name=target.name,
+            config=parsed.reconstruction,
+        )
+    except ReconstructionError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    report = reconstruction.report
+    report.warnings = [*warnings, *report.warnings]
+    return report
+
+
+def _filtered_for_clip(
+    project: Project, clip: ProjectClip, parsed: ReconstructParams, reporter: ProgressReporter
+) -> Any:
+    """Load, undistort and filter one clip of a pair, ready to be triangulated.
+
+    The undistortion is not optional here, which is the difference from
+    `compute_metrics`: an uncalibrated clip there is a supported case whose
+    measurements are honestly labelled, and an uncalibrated clip here cannot be
+    triangulated at all. The intrinsics come from the clip's **declared role**,
+    because that is the only record of which of the project's cameras produced
+    this footage, and they are applied below the filter for the third time in
+    this engine's history and the same reason -- a lens displaces a landmark by
+    tens of pixels near the frame edge, and correcting after fitting would leave
+    the fit describing the distorted trajectory.
+    """
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=clip.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    camera = project.rig.usable_camera(clip.role) if project.rig is not None else None
+    intrinsics = camera.intrinsics if camera is not None else None
+    if intrinsics is not None and not intrinsics.applies_to(
+        sequence.geometry.width, sequence.geometry.height
+    ):
+        intrinsics = None
+
+    return filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=clip.slow_motion_factor,
+        intrinsics=intrinsics,
+        reporter=reporter,
+    )
+
+
 def _get_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
     """A project's camera rig: what is known about its cameras' geometry."""
     parsed = ProjectParams.model_validate(params)
@@ -1237,6 +1942,10 @@ METHODS: dict[str, Method] = {
     "calibrate_stereo": _calibrate_stereo,
     "get_calibration": _get_calibration,
     "clear_calibration": _clear_calibration,
+    "reconstruct": _reconstruct,
+    "track_club": _track_club,
+    "detect_ball": _detect_ball,
+    "locate_impact": _locate_impact,
 }
 
 

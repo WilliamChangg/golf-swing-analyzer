@@ -10,10 +10,23 @@ way y points or what a distance of 0.3 means.
     IMAGE          x/W, y/H          y down   [0,1]x[0,1]   anisotropic  stored
     FRAME_WIDTHS   x/W, (H-y_px)/W   y up     [0,1]x[0,a]   isotropic    derived
     HIP_LOCAL      approximate metres, hip-centred, body-oriented          stored
-    CAMERA         metres, camera-centred                       Phase 8, absent
-    WORLD          metres, scene-fixed                          Phase 9, absent
+    CAMERA         metres, reference-camera-centred            triangulated
+    WORLD          metres, scene-fixed                               absent
 
 `a` is the aspect ratio, height over width.
+
+CAMERA is not reachable from any of the first three and never will be: a single
+projection destroyed the depth, and no conversion recovers it. It is produced by
+`analyzer.reconstruction`, from **two** calibrated clips of the same instant, and
+`convert` refuses it for that reason rather than because it is unimplemented.
+
+WORLD is absent, and the reason is not arithmetic. Rotating CAMERA into a
+scene-fixed frame needs two directions: which way is up, and which way the target
+line runs. A stereo pair measures neither -- the cameras do not know their own
+attitude, and a body does not declare a target line. Both fall out of a capture
+that puts the calibration board flat on the ground in the hitting area, which the
+capture protocol does not currently ask for; until it does, naming the frame and
+refusing it beats rotating into axes that were assumed.
 
 ## Why FRAME_WIDTHS exists
 
@@ -80,16 +93,21 @@ class CoordinateError(ValueError):
 
 
 def require_reachable(space: LandmarkSpace) -> None:
-    """Raise if `space` is a frame this build cannot produce.
+    """Raise if `space` is a frame one clip's landmarks cannot be read in.
 
-    Named separately so the error says which phase supplies the frame, rather
-    than reporting an unsupported value and leaving a reader to work out whether
-    it is a typo or a capability that does not exist yet.
+    Named separately so the error says what supplies the frame, rather than
+    reporting an unsupported value and leaving a reader to work out whether it is
+    a typo or a capability that does not exist.
+
+    CAMERA is refused here even though this build produces it, and that is the
+    point: it is not a reading of a stored sequence, it is a measurement made
+    from two of them. A conversion that returned it would have had to invent the
+    depth the projection destroyed.
     """
     reason = UNREACHABLE_SPACES.get(space)
     if reason is not None:
         raise CoordinateError(
-            f"Landmarks in {space.value} coordinates cannot be produced: {reason}."
+            f"Landmarks in {space.value} coordinates cannot be produced here: {reason}."
         )
 
 
@@ -143,6 +161,35 @@ def frame_widths_to_pixels(
     return np.stack((x, y), axis=-1)
 
 
+def pixels_to_frame_widths(
+    points: NDArray[np.float64], geometry: FrameGeometry
+) -> NDArray[np.float64]:
+    """Displayed pixel coordinates to frame widths. The inverse of the above.
+
+    Takes `(..., 2)` and returns `(..., 2)`.
+
+    This direction appears later than the others because nothing needed it until
+    Phase 10. Every layer up to there measured landmarks a model had already
+    normalised, so pixels were something the system converted *to*, for drawing.
+    Club tracking is the first thing in this engine that takes a measurement off
+    the pixel grid itself -- a line found by a Hough transform is in pixels and
+    in nothing else -- so it is the first thing that has to come back the other
+    way.
+
+    Pixels are themselves isotropic, which is worth stating because it is the
+    reason this is a scale and a flip rather than the two-part correction
+    `image_to_frame_widths` performs. The anisotropy IMAGE space suffers from is
+    an artefact of dividing the two axes by different numbers; the grid a decoder
+    hands over does not have it, so an angle measured in pixels is already the
+    angle in the picture and survives this conversion up to the sign of y.
+    """
+    scale = float(geometry.width)
+    converted = np.asarray(points, dtype=np.float64)
+    x = converted[..., 0] / scale
+    y = (float(geometry.height) - converted[..., 1]) / scale
+    return np.stack((x, y), axis=-1)
+
+
 def image_to_pixels(points: NDArray[np.float64], geometry: FrameGeometry) -> NDArray[np.float64]:
     """Normalised IMAGE coordinates to displayed pixels, origin top-left."""
     converted = np.asarray(points, dtype=np.float64)
@@ -162,8 +209,9 @@ def convert(
     Only the conversions that are actually meaningful exist. HIP_LOCAL is not
     reachable from IMAGE in either direction: it is hip-centred and
     body-oriented, and recovering it from a picture would mean recovering the
-    depth that was lost when the picture was taken. That is what Phase 9 is for,
-    and until then the refusal is the correct answer rather than a gap.
+    depth that was lost when the picture was taken. Nor is CAMERA, for the same
+    reason and permanently -- two pictures recover that depth, and one does not,
+    so the answer is a triangulation rather than a conversion.
     """
     if source is target:
         return np.asarray(points, dtype=np.float64).copy()
@@ -179,6 +227,7 @@ def convert(
     raise CoordinateError(
         f"No conversion from {source.value} to {target.value}. "
         "HIP_LOCAL is hip-centred and body-oriented, so reaching it from a picture "
-        "would mean recovering the depth the picture lost; that needs the "
-        "triangulation Phase 9 provides."
+        "would mean recovering the depth the picture lost -- which no conversion "
+        "does, and which triangulating two calibrated views of one instant does "
+        "(`analyzer.reconstruction`)."
     )

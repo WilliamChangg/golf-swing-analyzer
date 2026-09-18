@@ -1,0 +1,620 @@
+{
+  "$defs": {
+    "BoneConsistency": {
+      "description": "One skeletal segment's reconstructed length across the clip.\n\n**The check the reprojection residual cannot perform.** A landmark displaced\nalong its epipolar line reprojects perfectly and sits at the wrong depth; the\nbones ending at it are then the wrong length, and they are a different wrong\nlength in every frame, because the displacement varies. So the *variation* is\nthe error signal, and it needs no ground truth -- a humerus does not change\nlength during a swing.\n\n`median_length_m` is reported too, and it is this engine's **first metric\nstatement about a body**. It is not an anatomical bone length: MediaPipe's\nlandmarks are the model's estimate of a joint's image position, not a joint\ncentre, and the distance between two of them is not a distance between two\nbones. What it is good for is a sanity check a person can make against a\ntape measure, and that is how it should be read.",
+      "properties": {
+        "name": {
+          "description": "The segment, as 'left_shoulder-left_elbow'.",
+          "type": "string"
+        },
+        "frames": {
+          "description": "Frames in which both ends were reconstructed.",
+          "type": "integer"
+        },
+        "median_length_m": {
+          "type": "number"
+        },
+        "variation": {
+          "description": "Robust coefficient of variation: the interquartile range over the median. Robust rather than a standard deviation because a handful of badly reconstructed frames should not be allowed to describe the clip, and because a clip with any of them still has a usable middle.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "spread_m": {
+          "description": "Interquartile range of the length, in metres. The same fact, unscaled.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "stable": {
+          "description": "Whether `variation` sits inside `ReconstructionConfig.max_bone_variation`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "frames",
+        "median_length_m",
+        "variation",
+        "spread_m",
+        "stable"
+      ],
+      "title": "BoneConsistency",
+      "type": "object"
+    },
+    "CalibrationStatus": {
+      "description": "What this build may claim about the geometry of a recording.\n\nThe honesty gate of Phases 8 and 9, as a type. It is ordered, and\n`at_least` is how a consumer asks the question it actually has -- \"may I\ntriangulate\" -- rather than enumerating the values that permit it and\nforgetting one when a fourth is added.\n\nNONE\n    No calibration. Every measurement is a statement about the image plane,\n    which is what Phases 5 and 6 produce and label as such. The lens's\n    distortion is present in every landmark and unmeasured.\nINTRINSICS\n    One camera's focal lengths, optical centre and distortion are measured.\n    Landmarks can be undistorted, so projected measurements improve, and a\n    pixel becomes a known direction. **Still no depth, so still no\n    metric-scale 3D claim.**\nSTEREO\n    Both cameras are calibrated and their relative pose is measured, so two\n    views of one instant give an intersection rather than two directions.\n    This is what Phase 9 triangulates with.",
+      "enum": [
+        "none",
+        "intrinsics",
+        "stereo"
+      ],
+      "title": "CalibrationStatus",
+      "type": "string"
+    },
+    "CameraRole": {
+      "description": "Where a camera was put, as the user declared it.\n\nDeliberately the *declared* role, not the measured one. Phase 6's\n`CameraView` is measured from the shoulder line at address and is the\nauthority on what the footage contains; this is the authority on what the\nuser intended, and the interesting case is the two disagreeing.\n\nOTHER exists so a third camera, or a phone propped at an angle nobody would\ncall either name, can still be part of a project instead of forcing a\ndishonest label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "other"
+      ],
+      "title": "CameraRole",
+      "type": "string"
+    },
+    "LandmarkReconstruction": {
+      "description": "One landmark's reconstruction across the clip, and where it failed.\n\nPer landmark rather than clip-wide, because the failures are per landmark:\ndown-the-line footage hides one wrist behind the other for half a swing, and\na clip-wide coverage figure would report that as a uniform 80% rather than as\none landmark at 40% and the rest at 95%. The first reading suggests a\nmarginal capture; the second names the landmark to distrust.",
+      "properties": {
+        "landmark": {
+          "description": "The `Landmark` enum value.",
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "frames": {
+          "description": "Reference frames attempted.",
+          "type": "integer"
+        },
+        "reconstructed": {
+          "type": "integer"
+        },
+        "coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "median_convergence_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median angle between the two rays. The conditioning of the intersection."
+        },
+        "median_reprojection_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "median_uncertainty_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median propagated positional uncertainty, in metres, in the worst direction -- which is essentially always the depth direction. See `ReconstructionQuality.methodology`."
+        },
+        "refused": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "Frames refused, counted by reason.",
+          "propertyNames": {
+            "$ref": "#/$defs/RefusalReason"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "landmark",
+        "name",
+        "frames",
+        "reconstructed",
+        "coverage"
+      ],
+      "title": "LandmarkReconstruction",
+      "type": "object"
+    },
+    "LandmarkSpace": {
+      "description": "Which reference frame a set of landmarks is expressed in.\n\nThe full vocabulary, including the frames this build cannot yet produce, so\nthat a later phase adds the capability rather than the concept and nothing\nin between can claim a frame it does not have. `analyzer/coordinates.py`\nholds the conversions and `docs/coordinate-systems.md` the conventions.\n\nIMAGE\n    Normalised to the displayed frame: x divided by the width and y by the\n    height, both in [0, 1], y increasing downward. **Anisotropic** -- see\n    `FrameGeometry`. As stored by the pose estimator, and the frame a\n    landmark is drawn in.\nFRAME_WIDTHS\n    Both axes divided by the frame *width*, y increasing upward, origin at\n    the bottom-left of the displayed frame. Isotropic, so a distance means\n    the same whichever way it points, and an angle is the angle in the\n    picture. **The frame every measurement is taken in.** Derived from\n    IMAGE and `FrameGeometry`; never stored.\nHIP_LOCAL\n    Approximate metres, centred on the hip midpoint and oriented to the\n    body. MediaPipe calls these \"world landmarks\"; they are not calibrated\n    world coordinates and carry no camera geometry.\nCAMERA\n    Metres in three dimensions, centred on the reference camera. Produced by\n    triangulating two calibrated views of the same instant, which is Phase 9\n    -- so it is **not readable from a stored pose sequence**, which is one\n    clip and therefore one projection. `analyzer.reconstruction` is where it\n    comes from.\nWORLD\n    Metres in three dimensions, in a frame fixed to the scene. **Not\n    produced by this build**, and not for want of arithmetic: a scene-fixed\n    frame needs a gravity direction and a target line, and a stereo pair\n    supplies neither. See `docs/coordinate-systems.md` for what would.",
+      "enum": [
+        "image",
+        "frame_widths",
+        "hip_local",
+        "camera",
+        "world"
+      ],
+      "title": "LandmarkSpace",
+      "type": "string"
+    },
+    "PairingSummary": {
+      "description": "How the two cameras' instants were brought together, and what it cost.\n\nThe Phase 8 thread, continued into a scene where its capture instruction is\nunavailable. See the module docstring: a board can be held still and a swing\ncannot, so the target clip is resampled onto the reference clock rather than\npaired frame-to-frame, and what remains is the time map's own uncertainty.\n\nThat is reported here in **pixels**, by multiplying it by the landmark's\nmeasured image speed, for the same reason `PairingReport` does: it is then\nthe same unit as the reprojection error it contaminates, and the two can be\ncompared instead of one being mistaken for the other.",
+      "properties": {
+        "method": {
+          "description": "How the target clip's positions were obtained at reference instants: 'resampled' (Hermite interpolation of the filter's own fitted position and velocity) or 'nearest_frame'.",
+          "type": "string"
+        },
+        "resampled_frames": {
+          "description": "Reference frames a target position was produced at.",
+          "type": "integer"
+        },
+        "outside_overlap": {
+          "description": "Reference frames whose mapped instant fell outside the target clip.",
+          "type": "integer"
+        },
+        "median_interval_ms": {
+          "description": "The target clip's own frame interval. What nearest-frame pairing would round to.",
+          "type": "number"
+        },
+        "median_landmark_speed_px_s": {
+          "description": "Median image speed of the tracked landmarks in the target view, over the reconstructed frames. The factor that turns a timing error into a displacement -- and the one a still board sets to zero and a swing cannot.",
+          "type": "number"
+        },
+        "max_landmark_speed_px_s": {
+          "description": "The fastest any tracked landmark moved in the target image. Usually a hand.",
+          "type": "number"
+        },
+        "sync_uncertainty_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The time map's own uncertainty over the reconstructed span, in milliseconds, as Phase 7 reports it. None when the map carried none."
+        },
+        "median_pairing_error_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Sync uncertainty times landmark image speed, at the median. The displacement attributable to not knowing exactly when each frame was taken. Comparable with `median_reprojection_px` because it is the same unit and it adds to it."
+        },
+        "max_pairing_error_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The same quantity at the fastest landmark. This is the number that makes nearest-frame pairing unusable on a swing: it is tens of pixels at consumer frame rates, against sub-pixel calibration residuals."
+        },
+        "nearest_frame_error_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What pairing to the nearest target frame *would* have cost at the **fastest** landmark: a quarter of a frame interval -- the mean magnitude of a rounding uniform over half of one -- times that speed. Quoted at the fastest rather than the median because the median is dominated by the parts of a body that barely move, and every metric worth computing is anchored to the parts that do. Reported rather than assumed, because it is the measurement that decided this layer resamples."
+        }
+      },
+      "required": [
+        "method",
+        "resampled_frames",
+        "outside_overlap",
+        "median_interval_ms",
+        "median_landmark_speed_px_s",
+        "max_landmark_speed_px_s"
+      ],
+      "title": "PairingSummary",
+      "type": "object"
+    },
+    "ReconstructionConfig": {
+      "additionalProperties": false,
+      "description": "Policy for reconstruction.\n\nAs everywhere else in this engine, **stated policy informed by measurement**\nrather than measured optima. `scripts/benchmark_reconstruct.py` establishes\nthe shape of each relationship -- what error a given convergence angle\nproduces, how a residual responds to an epipolar displacement and how it\nfails to -- and where on that curve to refuse is a judgement about what a\nwrong answer costs. Where a number came from a sweep, the field says so.",
+      "properties": {
+        "min_convergence_deg": {
+          "default": 15.0,
+          "description": "Angle between the two rays below which a point is refused rather than reported. **The gate**, and the only bound here that describes the capture rather than the fit.\n\nMeasured (`--sweep convergence`): depth error scales as 1/sin, so 15 degrees costs 3.9x the error of a right-angled pair and 5 degrees costs 11.5x. Fifteen is where a centimetre-scale reconstruction becomes a several-centimetre one, which is roughly where a joint angle stops being worth reporting. Two cameras placed as the capture protocol asks -- one face-on, one down-the-line -- converge at nearly 90 degrees and are nowhere near this.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_reprojection_px": {
+          "default": 6.0,
+          "description": "How far a reconstructed point may land from where a camera saw it before that point is refused. Loose on purpose, and loose for a different reason from the calibration bound it resembles: a calibration residual is a static board fitted by a rigid model, and this is a pose estimator's guess at a joint on a moving body seen from two sides. Several pixels of honest disagreement is ordinary.\n\nWhat it catches is gross failure -- a mis-paired instant, one camera tracking the wrong wrist. It is **not** a quality measure, and the module docstring is about why not.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_uncertainty_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": 0.15,
+          "description": "Propagated positional uncertainty above which a point is refused. Fifteen centimetres is most of the width of a pelvis, which is roughly the point past which a reconstructed joint stops distinguishing the poses it exists to distinguish. None disables the bound and reports the uncertainty without acting on it."
+        },
+        "min_visibility": {
+          "default": 0.3,
+          "description": "Reported visibility, in **either** view, below which the landmark is not triangulated at that instant. Either rather than both: a point reconstructed from one confident view and one guess is a point located by the guess, since it is the disagreement between the two that fixes the depth.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "max_bone_variation": {
+          "default": 0.1,
+          "description": "Robust coefficient of variation above which a reconstructed segment is reported as unstable. Ten per cent of a forearm is about three centimetres, which is the scale at which the reconstruction stops supporting the joint angles it exists to produce.\n\n**Not tighter, because not every segment here is a bone.** `POSE_CONNECTIONS` includes shoulder-to-hip on each side, and a torso genuinely changes that distance as it twists -- the synthetic body, whose limb lengths are exact by construction, varies those two by 3% across a swing purely from the shoulders and pelvis turning different amounts. A bound tight enough for a humerus would report that anatomy as an error in every clip.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "max_asymmetry": {
+          "default": 0.15,
+          "description": "How far a left segment's median length may sit from its right twin's, as a fraction of their mean, before the pair is reported as disagreeing. Wider than `max_bone_variation` because real people are slightly asymmetric and because one side is systematically the more occluded in any single capture.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "pixel_sigma_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-view landmark uncertainty used to propagate a positional uncertainty. None measures it from the clip, as the filter's own residual RMS -- which is what the detections actually did, rather than a number chosen to make the output look good. Supplying one is for a sensitivity check."
+        },
+        "resample": {
+          "default": true,
+          "description": "Whether to resample the target clip onto the reference clock rather than pairing each reference frame with the target frame nearest it in time.\n\n**Measured, and it is not a close call.** Phase 8 pairs nearest frames and gets away with it because a calibration board can be held still, which drives the `time_error x image_speed` product to zero. A swing cannot be held still: at 30 fps a quarter-frame pairing error against hands moving several thousand pixels per second is tens of pixels of displacement, two orders of magnitude past the sub-pixel residuals the calibration itself was gated on. `scripts/benchmark_reconstruct.py --sweep pairing` has both. False is there so that comparison can be run, not as an option worth choosing.",
+          "type": "boolean"
+        },
+        "refine": {
+          "default": true,
+          "description": "Whether to refine the linear triangulation by minimising reprojection error in both views. The linear solution minimises an algebraic quantity with no geometric meaning and is biased when the two views are at very different distances; the refinement is a few Gauss-Newton steps from it and is what makes the residual a reprojection error rather than a proxy for one. Off is for measuring what it bought.",
+          "type": "boolean"
+        },
+        "max_refine_iterations": {
+          "default": 10,
+          "description": "Gauss-Newton steps. From a linear seed this converges in two or three; the bound exists so a pathological point cannot spend the clip's budget rather than because ten are expected to be used.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "title": "ReconstructionConfig",
+      "type": "object"
+    },
+    "ReconstructionQuality": {
+      "description": "What the reconstruction is worth, in the three senses that differ.\n\nDeliberately shaped like `CalibrationQuality`, because the lesson is the\nsame one a layer up. The residual is the fit, the convergence angle is the\ncapture, and the bones are the independent check -- and a tool that reported\nonly the first would be reporting the number that a badly-conditioned capture\nmakes *better*, since two nearly-parallel rays can be made to agree by moving\na point a long way in depth.",
+      "properties": {
+        "points_attempted": {
+          "description": "Landmark-frames both cameras were asked about.",
+          "type": "integer"
+        },
+        "points_reconstructed": {
+          "type": "integer"
+        },
+        "coverage": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "median_reprojection_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median distance, over both views, between a reconstructed point's projection and where that camera saw the landmark. **How well the two views agree in the direction they can disagree in** -- the component of correspondence error across the epipolar line. Blind to the component along it, which is the one that moves the point in depth."
+        },
+        "max_reprojection_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "median_convergence_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median angle between the two rays at their meeting point. **The gate.** Depth error scales as 1/sin of it, so this is what decides whether the capture could determine a position, independently of how well the fit agrees with itself."
+        },
+        "min_convergence_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "median_uncertainty_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median propagated positional uncertainty in the worst direction, in metres. Propagated from a per-view pixel sigma through the triangulation's own Jacobian, so it carries the convergence angle automatically: the same pixel noise at 10 degrees of convergence gives six times the uncertainty it gives at 90."
+        },
+        "p95_uncertainty_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bones": {
+          "items": {
+            "$ref": "#/$defs/BoneConsistency"
+          },
+          "type": "array"
+        },
+        "symmetry": {
+          "items": {
+            "$ref": "#/$defs/SymmetryCheck"
+          },
+          "type": "array"
+        },
+        "worst_bone_variation": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The least stable segment's coefficient of variation. The headline of the check the residual cannot make."
+        },
+        "pixel_sigma_px": {
+          "description": "The per-view landmark uncertainty the propagation used, in pixels. **Measured from this clip**, as the filter's own residual RMS -- how far the raw detections sat from the fitted trajectory -- rather than assumed. It is an upper bound on the fitted position's own error, because smoothing averages several samples, and is used as one.",
+          "type": "number"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "points_attempted",
+        "points_reconstructed",
+        "coverage",
+        "pixel_sigma_px",
+        "methodology"
+      ],
+      "title": "ReconstructionQuality",
+      "type": "object"
+    },
+    "RefusalReason": {
+      "description": "Why one landmark at one frame produced no point.\n\nCounted per landmark rather than summarised into a single \"failed\" tally,\nbecause the four have completely different fixes: re-film with the cameras\nfurther apart, re-film with the subject unoccluded, re-synchronise, or\nre-calibrate. A single number would tell a reader that something went wrong\nand nothing about which.\n\nNOT_SEEN\n    One or both cameras had no usable position for this landmark at this\n    instant -- never detected, gated out for low confidence, inside a refused\n    gap, or outside the window the filter could support.\nOUTSIDE_OVERLAP\n    The reference instant maps outside the target clip's own timestamps, so\n    resampling would be extrapolation. The clips overlap for less than the\n    whole of the reference.\nILL_CONDITIONED\n    The two rays meet at too shallow an angle for their intersection to mean\n    anything. See the module docstring: this is the gate.\nREPROJECTION\n    The fitted point lands too far from where one of the cameras saw it. The\n    two views are not looking at the same thing -- a mis-paired instant, a\n    landmark one camera has confused, or extrinsics that have moved.\nUNCERTAIN\n    The point was determined, and not well enough to be worth reporting: the\n    propagated positional uncertainty is past the bound. Distinct from\n    ILL_CONDITIONED because the causes differ -- that one is the camera\n    placement, this one can also be a subject who was simply a long way off,\n    since uncertainty grows with the square of distance while the convergence\n    angle only shrinks.",
+      "enum": [
+        "not_seen",
+        "outside_overlap",
+        "ill_conditioned",
+        "reprojection",
+        "uncertain"
+      ],
+      "title": "RefusalReason",
+      "type": "string"
+    },
+    "SymmetryCheck": {
+      "description": "How far a left segment's reconstructed length sits from its right twin.\n\nA second check that needs no ground truth, for a second reason: a person's\nleft and right upper arms are the same length to within a per cent or two,\nand the two are reconstructed from completely different landmarks with\ncompletely different occlusion histories. A large disagreement is evidence\nabout the reconstruction rather than about the body.\n\n**It is corroboration, not a stronger instrument, and the design here\nexpected otherwise.** The argument for it was that a landmark with a\n*consistent* depth bias -- one camera placing a hip a few centimetres deep\nthroughout, which occlusion does routinely -- would give a stable wrong\nlength in every frame and sail through the variation check. Measured, it does\nnot: a swing rotates the body, so a displacement that is constant in the\ncamera's frame is not constant relative to the bone, and the length moves.\nDisplacing one elbow 5 cm along the optical axis on the synthetic body makes\nthe forearm's variation 11% -- past the bound -- while the left-right\ndisagreement is 2.6%, well inside it. Variation gets there first.\n\nSo what this adds is **localisation**, which is worth its two lines: it\ncompares two chains reconstructed from different landmarks, so a large\ndisagreement says one *side* is systematically worse, which a per-segment\nvariation does not say. The test asserting this is\n`test_a_depth_bias_reaches_variation_before_symmetry`, and it is written to\nfail if anyone restores the stronger claim.",
+      "properties": {
+        "segment": {
+          "description": "The pair, as 'shoulder-elbow'.",
+          "type": "string"
+        },
+        "left_m": {
+          "type": "number"
+        },
+        "right_m": {
+          "type": "number"
+        },
+        "disagreement": {
+          "description": "|left - right| divided by their mean.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "agrees": {
+          "description": "Whether the disagreement sits inside `ReconstructionConfig.max_asymmetry`.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "segment",
+        "left_m",
+        "right_m",
+        "disagreement",
+        "agrees"
+      ],
+      "title": "SymmetryCheck",
+      "type": "object"
+    }
+  },
+  "description": "Everything the engine concluded about reconstructing one pair of clips.\n\nThe landmarks themselves are **not** here, for the reason\n`PoseExtractionResult` leaves them out: a swing at 240 fps is tens of\nthousands of frames of 33 points, which belongs in an array in the engine or\na columnar file on disk rather than in a JSON-RPC response. What crosses the\nboundary is what a reader needs in order to decide whether to believe it.\n\n`reconstructed` is false whenever no point could be produced, and then the\nquality fields are None rather than zero -- zero coverage and \"no\nreconstruction attempted\" are different facts, and a consumer reading a zero\nas a measurement would be reading a refusal as a result.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "reconstructed": {
+      "type": "boolean"
+    },
+    "space": {
+      "$ref": "#/$defs/LandmarkSpace",
+      "default": "camera",
+      "description": "The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would."
+    },
+    "reference_role": {
+      "$ref": "#/$defs/CameraRole"
+    },
+    "target_role": {
+      "$ref": "#/$defs/CameraRole"
+    },
+    "reference_name": {
+      "description": "Basename of the reference clip, for display.",
+      "type": "string"
+    },
+    "target_name": {
+      "type": "string"
+    },
+    "frames": {
+      "description": "Reference-clip frames the reconstruction spans.",
+      "type": "integer"
+    },
+    "reconstructed_frames": {
+      "description": "Frames carrying at least one reconstructed landmark.",
+      "type": "integer"
+    },
+    "slow_motion_factor": {
+      "default": 1.0,
+      "description": "The reference clip's factor. Timestamps here are real seconds, as everywhere else above Phase 3.",
+      "type": "number"
+    },
+    "calibration": {
+      "$ref": "#/$defs/CalibrationStatus",
+      "description": "What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it."
+    },
+    "baseline_m": {
+      "description": "Distance between the two optical centres, from the rig.",
+      "type": "number"
+    },
+    "convergence_deg": {
+      "description": "Angle between the two optical axes, from the rig. Distinct from the per-point ray convergence in `ReconstructionQuality`: this is where the cameras pointed, that is how well two particular rays met.",
+      "type": "number"
+    },
+    "quality": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReconstructionQuality"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "pairing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PairingSummary"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "landmarks": {
+      "items": {
+        "$ref": "#/$defs/LandmarkReconstruction"
+      },
+      "type": "array"
+    },
+    "reconstructed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "config": {
+      "$ref": "#/$defs/ReconstructionConfig"
+    },
+    "refusal": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Why nothing was produced, in words. Set exactly when `reconstructed` is false."
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "reconstructed",
+    "reference_role",
+    "target_role",
+    "reference_name",
+    "target_name",
+    "frames",
+    "reconstructed_frames",
+    "calibration",
+    "baseline_m",
+    "convergence_deg",
+    "config"
+  ],
+  "title": "ReconstructionReport",
+  "type": "object"
+}

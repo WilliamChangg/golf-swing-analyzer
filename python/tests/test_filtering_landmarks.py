@@ -292,11 +292,22 @@ class TestUnits:
     def test_every_produced_space_has_a_unit_for_every_order(self, space: LandmarkSpace) -> None:
         assert len({unit_for(space, order) for order in (0, 1, 2)}) == 3
 
-    @pytest.mark.parametrize("space", sorted(UNREACHABLE_SPACES, key=lambda s: s.value))
-    def test_a_frame_this_build_cannot_produce_has_no_unit(self, space: LandmarkSpace) -> None:
-        """Naming the frame is not the same as being able to measure in it."""
+    def test_a_frame_this_build_cannot_produce_has_no_unit(self) -> None:
+        """Naming the frame is not the same as being able to measure in it.
+
+        WORLD only. CAMERA is in `UNREACHABLE_SPACES` because it cannot be *read
+        from one clip* -- it is triangulated from two -- and it does have a unit,
+        which is the one genuinely metric unit in the table. The two questions
+        came apart in Phase 9 and this test now asks the second one.
+        """
         with pytest.raises(ValueError, match="cannot"):
-            unit_for(space, 0)
+            unit_for(LandmarkSpace.WORLD, 0)
+
+    def test_camera_space_has_a_unit_although_no_conversion_reaches_it(self) -> None:
+        from analyzer.contracts.filtering import SignalUnit
+
+        assert unit_for(LandmarkSpace.CAMERA, 0) is SignalUnit.M
+        assert LandmarkSpace.CAMERA in UNREACHABLE_SPACES
 
 
 class TestConfigValidation:

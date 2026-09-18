@@ -243,9 +243,14 @@ describe("CalibrationPanel", () => {
   });
 
   it("reports progress while the board is being looked for", async () => {
-    let emit: ((update: unknown) => void) | null = null;
+    // Collected into an array rather than a `let ... | null`. TypeScript's
+    // control-flow analysis cannot see an assignment that happens inside a
+    // callback, so it narrows such a variable to `null` at the call site and
+    // reports the non-null branch as `never`. An array element carries no such
+    // narrowing, and the length assertion below still checks the same thing.
+    const handlers: Array<(update: unknown) => void> = [];
     onProgressMock.mockImplementation((handler: (update: unknown) => void) => {
-      emit = handler;
+      handlers.push(handler);
       return Promise.resolve(() => undefined);
     });
     calibrateCameraMock.mockReturnValue(new Promise(() => undefined));
@@ -256,9 +261,9 @@ describe("CalibrationPanel", () => {
     );
 
     await waitFor(() => {
-      expect(emit).not.toBeNull();
+      expect(handlers).toHaveLength(1);
     });
-    emit?.({
+    handlers[0]?.({
       schema_version: 1,
       request_id: 1,
       task: "detect_board",

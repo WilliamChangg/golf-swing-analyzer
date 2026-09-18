@@ -6,12 +6,18 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-7 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-11 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
-> explicit coordinate frames with measured camera-view tagging, and two-camera
-> time alignment are built and verified. No camera calibration, club tracking, 3D
-> reconstruction or coaching exists yet. Sections below marked _Not yet
+> explicit coordinate frames with measured camera-view tagging, two-camera time
+> alignment, camera calibration, multi-view 3D reconstruction, club shaft
+> tracking and ball detection are built and verified. No coaching engine exists
+> yet. **Nothing has been reconstructed, calibrated or club-tracked from real
+> footage** — no board capture and no simultaneous two-camera recording exists in
+> this repository, and the club figures come from a rendered shaft whose angle is
+> an input, so every figure in §9 and §10a is synthetic and is a floor. The ball
+> is the exception: impact has been **observed** on one real clip, and §10b says
+> what that one clip does and does not settle. Sections below marked _Not yet
 > implemented_ say so rather than describing features that do not exist. See
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -95,11 +101,12 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 9-13 outstanding._ A clip can be imported,
+_Partially implemented — Phase 13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
-derivatives, segmented into swing phases, measured, and aligned against a second
-camera — all of it from the app's **Video** screen except project management, and
-all of it from a terminal:
+derivatives, segmented into swing phases, measured, aligned against a second
+camera, and — with both cameras calibrated — reconstructed into 3D positions in
+metres. All of it from the app's **Video** screen except project management and
+reconstruction, and all of it from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
@@ -128,6 +135,28 @@ uv run --project python analyzer project add 1 faceon.mov --role face_on
 uv run --project python analyzer project add 1 dtl.mov --role down_the_line --slow-motion 8
 uv run --project python analyzer project sync 1                # stored on the project
 uv run --project python analyzer project list
+
+# Two calibrated, aligned views: metres, in three dimensions.
+uv run --project python analyzer reconstruct 1
+uv run --project python analyzer reconstruct 1 --json
+uv run --project python analyzer metrics faceon.mov --project 1   # now includes the 3D metrics
+
+# The club. Coverage per swing phase first, because the clip-wide rate misleads.
+uv run --project python analyzer club faceon.mov
+uv run --project python analyzer club faceon.mov --slow-motion 8
+uv run --project python analyzer club faceon.mov --json
+
+# The ball, and the one instant this system can observe rather than infer.
+uv run --project python analyzer ball   faceon.mov                # where it was, and when it left
+uv run --project python analyzer impact faceon.mov                # every estimate, reconciled
+uv run --project python analyzer impact faceon.mov --no-club      # skip the second decode
+
+# Labels, and the learned detector that cannot yet be trained on them.
+uv run --project python analyzer label faceon.mov --player rory --session range-01 --labeller wc
+uv run --project python analyzer labels                           # the set, and whether it splits
+uv run --project python analyzer dataset                          # features, classes, imbalance
+uv run --project python analyzer train                            # split, fit, score, register
+uv run --project python analyzer models                           # what each may claim
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -155,6 +184,15 @@ given recording are listed as refusals with the reason, rather than omitted.
 `scripts/overlay_metrics.py` draws each value on the frame it was measured from,
 which is the only way to tell a correct angle from a plausible one.
 
+Reconstruction turns two calibrated, aligned views into 3D positions in metres,
+and reports three numbers rather than one: how well the two views agree
+(reprojection error), what the capture could possibly determine (the ray
+convergence angle), and an independent check the first cannot make (whether the
+reconstructed bones keep their length). It refuses by name when the rig is not
+stereo, when a calibration does not describe the footage, or when the clocks have
+not been related — never at a default offset of zero, which is both a plausible
+answer and the wrong one.
+
 Synchronisation relates two cameras' clocks, which everything above two views
 depends on: triangulating a point is only meaningful for two views of the same
 instant. It reports an offset with an uncertainty, a clock rate only when the
@@ -165,6 +203,37 @@ swing-shaped signals, and two different swings align perfectly happily. What the
 cannot do is agree about phase durations, so that disagreement survives as
 residual, and a residual many times the floor is the system saying so.
 
+Club tracking finds the shaft in each frame and reports it as a **ray from the
+hands**: a direction the image determines to about half a degree, and a club-head
+position only where the edge evidence ran to the end of the club. It prints
+coverage **per swing phase** before anything else, because the clip-wide rate is
+dominated by address and the follow-through — where the club is nearly still —
+and can be high while the downswing contains nothing. Frames that emit nothing
+are counted by reason: no hands to anchor on, no edges, no candidate, an
+ambiguous frame, an impossible rotation, or a confidence below the bound.
+`scripts/overlay_club.py` draws the tracked shaft on the frames it was found in
+**and the refused frames stamped with the reason**, which is the only way to tell
+a tracked club from a tracked door frame.
+
+Ball detection is the only thing here that **observes** impact rather than
+inferring it, and it does so by watching the ball stop existing. Tracking a ball
+in flight is unanswerable on consumer footage — 70 m/s is a metre-long smear at
+1/60 s — so this measures the ball where it is easy, at rest, and reads impact
+off the edge of that interval: the last frame carrying a ball and the first
+carrying none. **The uncertainty is one frame interval and it is a bracket**,
+because nothing in that path smooths or fits anything. It reports a refusal for a
+practice swing, for a ball that leaves outside the window a strike can happen in,
+and for a clip that ends before the absence can be verified — all of which are
+correct answers rather than failures.
+
+`analyzer impact` reconciles every estimate a clip supports into **one** instant
+with one provenance and one error bar. They are ranked, not averaged: three of
+the four are biased in a known direction and one is not, and averaging moves the
+answer away from the truth while producing a number nobody can reason about.
+Every estimate that answered is kept beside the reported one with its delta,
+because those deltas are how the bias of the kinematic estimate gets measured.
+Nothing there reaches back down and changes what `analyzer phases` reports.
+
 A **project** records which clips belong to one session and stores their
 alignment. It is the only state in this system that cannot be recomputed from the
 video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
@@ -172,9 +241,11 @@ video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
 content so moving a file does not break the record of what it is.
 
 The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
-`detect_phases`, `compute_metrics`, `sync_clips`, `sync_project`,
+`detect_phases`, `compute_metrics`, `track_club`, `detect_ball`, `locate_impact`,
+`sync_clips`, `sync_project`,
 `create_project`, `list_projects`, `get_project`, `delete_project`, `add_clip`,
-`remove_clip` and `relocate_clip`.
+`remove_clip`, `relocate_clip`, `calibrate_camera`, `calibrate_stereo`,
+`get_calibration`, `clear_calibration` and `reconstruct`.
 
 ## 6. Supported video formats
 
@@ -224,8 +295,8 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phases 9-11 outstanding._ Five stages are built; what
-sits on top of them is in §10 and §11.
+_Complete through Phase 12._ Six stages are built; what sits on top of them is
+in §10, §11 and §12.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -238,7 +309,8 @@ The spaces are kept apart deliberately: `IMAGE` is normalised to the frame and
 is the only space a landmark can be drawn in, while `HIP_LOCAL` is MediaPipe's
 "world" output — hip-centred, only roughly metric, and carrying no camera
 geometry. It is **not** calibrated world coordinates, and no metric claim rests
-on it. Real world coordinates arrive in Phase 9 from stereo triangulation.
+on it. Genuinely metric coordinates come from triangulating two calibrated views
+of one instant — §9 — and they are camera-centred rather than scene-fixed.
 
 **Filtering.** Landmark trajectories are smoothed and differentiated by local
 polynomial regression solved at each sample on the clip's real timestamps.
@@ -259,27 +331,132 @@ singles the instant out, how well the landmark was seen around it, and whether
 the frame rate can resolve an event of that duration at all), reported
 separately because a single number hides which of them was weak.
 
-Impact is a **kinematic estimate, not an observation** — nothing here sees the
-ball or the club — and it is corroborated against an independent signal, the
-lowest point the hands reach after the top. On the reference clip the two agree
-to within one frame. Phases 10 and 11 replace the corroboration with real
-evidence.
+Impact is a **kinematic estimate, not an observation** — nothing at that layer
+sees the ball or the club — and it is corroborated against an independent signal,
+the lowest point the hands reach after the top. Club tracking and ball detection,
+below, supply real evidence, and on the one reference clip where the ball can be
+seen leaving they settle which of the two hand signals to believe: the arc low
+lands within **one frame** of the observation and the speed peak **twenty**.
 
-Club and ball tracking are not built. Planned stages and their ordering are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+**Club tracking.** A `ClubDetector` interface with a Canny/Hough implementation
+behind it, anchored on the hands the pose layer already found. A shaft is
+reported as a **ray from the grip**: an origin supplied by the pose layer, a
+direction the image determines to about half a degree, and a club-head position
+only where the edge evidence ran to the end of the club — which on real footage
+is a minority of frames.
+
+Three numbers are reported rather than one, because the obvious one is misleading
+in a predictable direction. Edge support scores how much of the line the image
+drew; a **margin** over the best rival says whether anything else in frame fits
+as well; and **per-phase coverage** says whether the frames that matter carry a
+shaft at all. A stationary door frame through the hands scores the same support
+as the club and more length, so evidence alone ranks the background first — and
+does so most decisively through the downswing, where the club is the blurriest
+thing in the picture and the background is the sharpest. See
+[ADR-0014](docs/decisions/ADR-0014-club-evidence-and-coverage.md).
+
+The detector is **stateless** and the tracker runs **offline**, which is the
+opposite of the pose seam and is deliberate: a track is seeded where the evidence
+is best — address, or the top — and grown outward into the downswing, rather than
+starting at frame zero and committing. The predicted direction scores candidates
+and never supplies one, so a frame with nothing acceptable emits nothing and
+leaves a visible hole.
+
+**Ball detection.** A `BallDetector` interface with a morphological top-hat
+implementation behind it, anchored not on the hands but on the **ankles** — a
+teed ball rests on the ground, and the pose layer knows where the ground is.
+Anchoring on the hands instead says only "within a club length", which on a
+vertical phone clip is a region containing the sky, and a patch of cloud between
+two branches is rounder, better resolved and stiller than a golf ball a few
+pixels across.
+
+What it measures is not the ball but the **frame the ball stops being in the
+picture**. A ball in flight is unanswerable at consumer frame rates and a teed
+ball is the easiest object in the clip, so the measurement is taken where the
+evidence is and impact is read off the edge of it. That gives the property no
+other impact estimate here has: an uncertainty of exactly one frame interval,
+which is a **bracket** rather than a scale — the ball was present at one end of
+it and absent at the other.
+
+Two confidences are reported rather than one, computed from **disjoint** evidence,
+because the identification is circular: the ball is picked out of the stationary
+candidates partly by the fact that it leaves. One scores a frame's observation
+(contrast, a co-located rival, drift); the other scores the instant (how much of
+the lead-in carried a ball, how abruptly it went, whether it stayed gone).
+Neither reads the other's inputs, and a test asserts it. What survives that
+partition is reported rather than solved: if two stationary objects both depart,
+nothing in one view says which was struck, and the identification margin falls to
+zero. See
+[ADR-0015](docs/decisions/ADR-0015-ball-departure-and-impact-precedence.md).
+
+**Reconciling the estimates.** Four now exist across three phases. They are
+ranked rather than averaged — an observation beats a measurement of a coinciding
+quantity, which beats a proxy, and a proxy with no known bias beats one with a
+known bias — and every estimate that answered is kept beside the reported one
+with its delta. Those deltas are the point: they are how the bias of a kinematic
+estimate becomes a number instead of a caveat.
 
 ## 9. 3D reconstruction methodology
 
-_Triangulation not yet implemented — Phase 9._ Both of its prerequisites are.
+Two calibrated rays meet, and the result is metres. On a synthetic swing whose 3D
+positions are inputs, filmed by two simulated cameras at 90°, the reconstruction
+lands within **5.5 mm at the median and 10.4 mm at the 95th percentile** at the
+landmark scatter Phase 3 measured on real footage — a floor rather than an
+estimate, since there is no pose estimator in the fixture.
+
+**The number that scores a triangulation is blind to half of the error.** A point
+detected in camera 1 defines a ray, and every 3D point on that ray projects into
+camera 2 along a single line. Displace camera 2's detection _across_ that line
+and no 3D point explains it, so it lands in the residual. Displace it _along_ the
+line and a point further up or down the ray explains it perfectly — the fit is
+exact and the depth is wrong. Measured, the residual is not merely insensitive
+to that but **exactly zero**:
+
+| along-epipolar displacement | 3D error | reprojection | bone variation |
+| --------------------------- | -------- | ------------ | -------------- |
+| 0 px                        | 0.0 mm   | **0.00 px**  | 2.6%           |
+| 2 px                        | 2.7 mm   | **0.00 px**  | 9.6%           |
+| 8 px                        | 10.8 mm  | **0.00 px**  | 37.8%          |
+
+For the camera pair this system recommends — one face-on, one down the line — the
+epipolar lines run nearly horizontally in both images, and nothing makes a pose
+estimator's horizontal error smaller than its vertical one.
+
+So three numbers are reported, each labelled with its own question. **The gate is
+the ray convergence angle**, because depth error scales as `1/sin` of it and it
+is a property of where the tripods went: closing the cameras from 90° to 8° moves
+the error 4.7x and leaves the residual flat at 0.84 px. **The independent check
+is bone length**, because a point sliding along its ray changes its distance to
+its neighbours and a bone does not change length during a swing — no ground truth
+and no anatomical table required. Full reasoning in
+[ADR-0013](docs/decisions/ADR-0013-epipolar-blindness.md).
+
+**Phase 8's capture instruction does not survive the subject moving.** Stereo
+calibration tolerates unsynchronised cameras because the pairing error is
+`sync_error × image_speed` and a board can be held still. Nothing in a swing is,
+so pairing nearest frames costs 2.4–12.3 mm at the hands; the target clip is
+resampled onto the reference clock instead, by cubic Hermite interpolation of the
+position and velocity the Phase 3 filter already fitted.
+
+**What comes out is camera-centred metres, not a scene frame.** A scene-fixed
+frame needs a gravity direction and a target line, and a stereo pair supplies
+neither. Every length, angle and speed between two reconstructed points is
+unaffected, so the six metrics this unlocks — shoulder turn, pelvis turn and
+X-factor about the body's own measured spine axis, both true elbow angles, and
+peak hand speed in metres per second — need no scene frame. A 3D _spine tilt_
+would, and is therefore absent.
 
 `CalibrationStatus` is `none`, `intrinsics` or `stereo`, and the metric layer
 gates on it centrally. **Three values rather than two, because a calibrated
-camera is not a 3D camera.** A calibrated pixel names a *direction*; how far
+camera is not a 3D camera.** A calibrated pixel names a _direction_; how far
 along that direction anything sat is exactly what the projection destroyed. Two
 such rays intersect and one does not, so `intrinsics` permits removing the lens
 from a landmark and permits no metric-scale claim whatever. `apply.bearings`
 returns unit vectors for that reason, and nothing in the calibration package
 returns a 3D point.
+
+Both prerequisites are gated, and a reconstruction refuses by name when either is
+missing.
 
 **Prerequisite one, Phase 7: the two cameras' clocks.** Triangulating a point
 from two views is only meaningful for two views of the same instant. An offset
@@ -293,16 +470,16 @@ separable after the fact.
 camera, extrinsics between them, all measured and all gated. The gate is the
 interesting part, because the obvious one does not work:
 
-| number                | what it answers                       | gates? |
-| --------------------- | ------------------------------------- | ------ |
-| RMS reprojection error | how well the model fits these views   | gross failure only |
-| reported σ(fx)        | what the fit says about its own spread | a backstop |
-| coverage              | what the views could possibly determine | **yes** |
+| number                 | what it answers                         | gates?             |
+| ---------------------- | --------------------------------------- | ------------------ |
+| RMS reprojection error | how well the model fits these views     | gross failure only |
+| reported σ(fx)         | what the fit says about its own spread  | a backstop         |
+| coverage               | what the views could possibly determine | **yes**            |
 
 A board held square to the camera at one distance cannot separate focal length
 from distance, so it determines almost nothing — and fits beautifully. Measured,
 the residual stays at 0.21–0.27 px while the focal length error moves from 0.05%
-to 23%, and the parameter uncertainty the fit reports is *smallest* where the
+to 23%, and the parameter uncertainty the fit reports is _smallest_ where the
 answer is worst. Full reasoning in
 [ADR-0012](docs/decisions/ADR-0012-calibration-coverage.md).
 
@@ -319,13 +496,13 @@ Every number here is a measurement taken in some reference frame, and most ways
 to get one wrong produce a plausible number rather than an error. Full
 conventions in [docs/coordinate-systems.md](docs/coordinate-systems.md).
 
-| Frame          | Units           | y    | Isotropic | Metric | Status              |
-| -------------- | --------------- | ---- | --------- | ------ | ------------------- |
-| `IMAGE`        | x/W, y/H        | down | **no**    | no     | stored              |
-| `FRAME_WIDTHS` | x/W, (H−y_px)/W | up   | yes       | no     | derived on read     |
-| `HIP_LOCAL`    | approx. metres  | up   | yes       | approx | stored              |
-| `CAMERA`       | metres          | —    | yes       | yes    | **Phase 8, absent** |
-| `WORLD`        | metres          | —    | yes       | yes    | **Phase 9, absent** |
+| Frame          | Units           | y    | Isotropic | Metric  | Status           |
+| -------------- | --------------- | ---- | --------- | ------- | ---------------- |
+| `IMAGE`        | x/W, y/H        | down | **no**    | no      | stored           |
+| `FRAME_WIDTHS` | x/W, (H−y_px)/W | up   | yes       | no      | derived on read  |
+| `HIP_LOCAL`    | approx. metres  | up   | yes       | approx  | stored           |
+| `CAMERA`       | metres          | down | yes       | **yes** | **triangulated** |
+| `WORLD`        | metres          | —    | yes       | yes     | **absent**       |
 
 `IMAGE` is what a pose estimator emits and a bad frame to measure in, for two
 reasons that both fail silently: it is **anisotropic** (x divided by the frame
@@ -440,8 +617,45 @@ next to a computation cannot drift from the one in the documentation.
 
 ## 12. Model architecture
 
-_No model is trained — Phase 12._ No accuracy figure will be published without a
-real labelled evaluation set with session- and player-grouped splits.
+**No model is trained on real swings, and none can be.** Phase 12 built the whole
+apparatus — labelling tool, versioned features, player-grouped splits, a TCN
+baseline, metrics, a model registry and a comparison against the rule-based
+detector — and then ran it on the footage this project has:
+
+```
+$ analyzer labels
+No labels yet. Phase 12's machinery is built and has nothing to run on.
+```
+
+The four reference clips are one golfer. A train/validation/test split needs
+players to hold out, so the splitter refuses, and labelling all four clips would
+not change that. **The input this is short of is people, not footage.**
+
+What exists, in `python/analyzer/ml/`:
+
+| Piece                 | What it is                                                              |
+| --------------------- | ----------------------------------------------------------------------- |
+| `labeltool.py`        | A pure state machine, a renderer, and a thin OpenCV window around them  |
+| `contracts/labels.py` | Who marked it, how sure they were, and whose swing it is — all required |
+| `features.py`         | 10 channels at 60 Hz, torso-normalised, versioned by a hash of the spec |
+| `splits.py`           | Grouped by **player**; leakage measured on the output, not asserted     |
+| `tcn.py`              | 19,525 parameters, six dilated layers, a 2.12 s receptive field         |
+| `evaluate.py`         | Per-event error in ms, and the gates that refuse to publish it          |
+| `registry.py`         | Weights plus the card that says what they mean; feature digest enforced |
+
+**The honesty gate lives in the type.** `EvaluationReport.claims_permitted` is
+computed rather than asserted by a caller, and it is false whenever the set is
+synthetic, has too few held-out players or clips, or the measured error is smaller
+than the labels' own uncertainty. That last one is the failure that looks like
+success: a detector cannot be shown to be more accurate than the numbers it is
+being scored against.
+
+Two figures set the ceiling on what a learned detector can be worth here. The
+60 Hz feature grid costs **8.3 ms** on the placement of any event, before a
+convolution has run; Phase 11 brackets impact to **4.2 ms** at 240 fps by watching
+the ball stop being there. On the one quantity both can report, the observation
+wins before the comparison starts. See
+[ADR-0016](docs/decisions/ADR-0016-labels-groups-and-the-noise-floor.md).
 
 Currently vendored: MediaPipe Pose Landmarker (lite/full/heavy, float16), pinned
 by sha256 in `models/manifest.json`. See
@@ -461,14 +675,14 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                       |
-| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 758   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                   |
-| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                |
-| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                          |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                               |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,091 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                           |
+| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                       |
+| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                  |
 
-All 831 pass as of Phase 7.
+All 1,236 pass as of Phase 12.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -533,6 +747,43 @@ as its diameter must read 90, by Thales' theorem. Turn schedules are held
 constant across the instants they are measured at, because a local polynomial
 fit reproduces a constant exactly — so the recovered shoulder turn is the
 constructed one, not whatever the smoothing of a curve happened to leave.
+
+The club tests split along the seam rather than along the feature. The detector
+is tested against **rendered frames** whose shaft angle is an input, so an
+angular error is a subtraction; the tracker is tested against **constructed
+candidates**, so a test can state exactly what the image offered — a club and a
+door frame of equal support, a rotation no club could make, a gap in the middle
+of a swing — and assert what is done with it. Driving those cases through a
+renderer would mean tuning pixels until the detector produced the situation under
+test, which tests the fixture.
+
+The ones that matter most assert a **negative**, as in Phases 8 and 9: that a
+stationary background line through the hands scores the same edge support as the
+club and more length, so ranking by evidence puts a door frame first; that a
+smeared shaft stops being a line rather than becoming a weaker one, so no
+threshold recovers it; and that two equally good readings of the same pixels are
+refused rather than resolved by a coin toss the confidence would then describe as
+a measurement. Those fail if anyone later decides the Hough score is the
+confidence.
+
+The ball tests split the same way and add a third layer, because this phase can
+be wrong in a way no per-frame assertion reaches. The detector runs against
+rendered pixels; the tracker against constructed candidate positions; and an
+end-to-end suite renders a swing, detects every frame and compares the located
+instant with the frame the ball was removed at. That comparison is an **equality
+of integers** — the fixture draws the ball in every frame before a departure that
+is an input and in none after — so there is no tolerance to argue about, and it
+is the only place a mistake in the units or the frame conversion would surface.
+
+Almost every assertion here is about a refusal or a gate, because the failures
+are all confident: that a ball which comes back was occluded rather than struck;
+that a departure before the top is not an impact; that a one-frame speck in the
+follow-through cannot move the answer by fifty; that a clip ending too soon scores
+the check it could not make as **not made** rather than as passed. One of them
+pins the phase's central structural claim directly — halving the contrast of
+every frame in a clip must not move the departure's confidence at all, because
+the two confidences are computed from disjoint evidence and a version that wired
+them together would be an argument with itself.
 
 CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
@@ -693,7 +944,7 @@ board views each:
 
 The reprojection error is flat across a range over which the focal length error
 moves by a factor of four hundred, and the uncertainty the fit reports about
-itself is thirty times *smaller* where the answer is worst. That is why coverage
+itself is thirty times _smaller_ where the answer is worst. That is why coverage
 is the gate: it is the only one of the three that describes the capture rather
 than the fit. [ADR-0012](docs/decisions/ADR-0012-calibration-coverage.md).
 
@@ -746,6 +997,232 @@ requirement, and the images are equally sharp in every row.
 Cost: 3.7 ms per frame to detect the board at 1920x1080, and 13.5 ms to fit
 intrinsics from 14 views.
 
+### Club tracking
+
+`scripts/benchmark_club.py`. **Against a shaft whose angle is an input, not
+against real footage.** The club is drawn by `tests/synthetic_club.py` at a known
+direction and smeared by a declared exposure, so an angular error is a
+subtraction. There is no defocus, no compression, a flat background, and a club
+1.1 torso lengths long where a real one is about 2.5 — a longer lever smears
+proportionally more. **Every rate below is a floor.**
+
+Detection against the length of the smear, one frame at a time:
+
+| smear at the club head | shaft found | support | angle error |
+| ---------------------- | ----------- | ------- | ----------- |
+| 0.0 px                 | **100%**    | 1.00    | 0.44°       |
+| 4.8 px                 | **100%**    | 1.00    | 0.88°       |
+| 9.6 px                 | **100%**    | 1.00    | 0.90°       |
+| 14.4 px                | **0%**      | —       | —           |
+| 28.8 px                | **0%**      | —       | —           |
+
+A cliff, not a decline. Where the club is found the angle is right to about half
+a degree; where it is not, no threshold recovers it.
+
+Coverage per swing phase at 120 fps, against the exposure as a fraction of the
+frame interval — **the table this phase exists to produce**:
+
+| shutter | max smear | overall | address | backswing | **downswing** | follow | err p95 |
+| ------- | --------- | ------- | ------- | --------- | ------------- | ------ | ------- |
+| 0.03    | 0.8 px    | 100%    | 100%    | 99%       | **100%**      | 100%   | 0.63°   |
+| 0.125   | 3.5 px    | 99%     | 100%    | 99%       | **100%**      | 98%    | 0.69°   |
+| 0.25    | 6.9 px    | 93%     | 100%    | 98%       | **83%**       | 73%    | 0.79°   |
+| 0.5     | 13.9 px   | 86%     | 100%    | 93%       | **65%**       | 62%    | 1.15°   |
+| 1.0     | 27.7 px   | 64%     | 100%    | 58%       | **25%**       | 23%    | 1.18°   |
+
+The address column is 100% in every row, so it carries no information about the
+capture at all — and it is a large share of the overall figure. That is why
+coverage is reported per phase and the aggregate is documented as the number not
+to read alone.
+
+**The shutter is the lever; the frame rate is not.** Holding the exposure fixed
+at 1/500 s rather than at a fraction of the interval:
+
+| fps | 1/4 shutter: smear / overall / downswing | 1/500 s: smear / overall / downswing |
+| --- | ---------------------------------------- | ------------------------------------ |
+| 30  | 27.6 px / 62% / —                        | 6.6 px / 96% / —                     |
+| 60  | 13.8 px / 87% / 62%                      | 6.6 px / 97% / **92%**               |
+| 120 | 6.9 px / 92% / 81%                       | 6.7 px / 96% / **90%**               |
+| 240 | 3.5 px / 100% / 99%                      | 6.7 px / 96% / **88%**               |
+
+Once the shutter is fixed, four times the frames buy nothing for club detection.
+The 30 fps rows have no downswing column because no swing is detected at all
+there — Phase 3's window floor, reappearing rather than anything about the club.
+
+Background clutter, against what a per-frame detector would do — `evidence only`
+takes the best-supported candidate, which is what a Hough transform ranks by:
+
+| vertical background lines | tracker: kept / wrong | evidence only: kept / wrong |
+| ------------------------- | --------------------- | --------------------------- |
+| 0                         | 289 / **0**           | 296 / **0**                 |
+| 1                         | 285 / **0**           | 294 / **4**                 |
+| 2                         | 285 / **0**           | 294 / **7**                 |
+| 3                         | 277 / **0**           | 297 / **15**                |
+| 4                         | 279 / **0**           | 298 / **17**                |
+
+And the case it does not handle, which is the honest end of the table:
+
+| occluder    | tracked | downswing | wrong | **conf. when wrong** | head seen |
+| ----------- | ------- | --------- | ----- | -------------------- | --------- |
+| nothing     | 93%     | 79%       | 0     | —                    | 97%       |
+| upper third | 54%     | 44%       | 18    | **0.98**             | 8%        |
+| upper half  | 47%     | 31%       | 4     | **0.81**             | 97%       |
+| a wide band | 64%     | 38%       | 0     | —                    | 100%      |
+
+A rectangular occluder's boundary is sharp, stationary and — once the club is
+hidden behind it — unopposed, so the tracker steps onto it and continuity keeps
+it there. Those frames score the same confidence as the correct ones. See
+[ADR-0014](docs/decisions/ADR-0014-club-evidence-and-coverage.md).
+
+Cost: 6.2 ms per frame to detect, over a search region of 3.2 torso lengths which
+on this fixture is the whole 1000x1000 frame, and 4.0 ms to track a 312-frame clip
+once the candidates exist. Against ~17 ms a frame to extract the poses that have
+to come first. Nothing is cached, for the same measured reason as Phase 3.
+
+### Ball detection and impact
+
+`scripts/benchmark_ball.py`, against a ball drawn in every frame before a
+departure frame that is an **input** and in none after — so the error in the
+located instant is a subtraction of integers. No defocus, no compression, flat
+turf where a range is a thousand bright blades, and a ball drawn as a uniform
+disc where a real one is a lit sphere. **A floor, not an estimate** — with one
+exception, below, which is a real measurement on real footage.
+
+**What the frame rate buys, and what it does not.** The instant is located
+exactly at every rate; what changes is only the width of the bracket around it:
+
+| fps | located | error | bracket     | Phase 4's window | ratio |
+| --- | ------- | ----- | ----------- | ---------------- | ----- |
+| 30  | exact   | 0     | **33.3 ms** | 100 ms           | 3x    |
+| 60  | exact   | 0     | **16.7 ms** | 100 ms           | 6x    |
+| 120 | exact   | 0     | **8.3 ms**  | 100 ms           | 12x   |
+| 240 | exact   | 0     | **4.2 ms**  | 100 ms           | 24x   |
+
+The right-hand columns are not the same kind of claim. The ball's bracket is an
+interval impact is **inside**; Phase 4's is the width of the smoothing window its
+frame rate forced, which is a scale the peak could have moved on.
+
+**The shutter decides nothing here**, which is the sharpest contrast with the
+club: located exactly at every exposure from 0.03 of the frame interval to a full
+360° shutter, because a ball at rest is not moving and no exposure smears it.
+What replaces it as the capture variable is contrast against the surface, and
+that is a cliff in the same way the club's blur is:
+
+| ball vs turf | located   | coverage |
+| ------------ | --------- | -------- |
+| 155 levels   | **exact** | 100%     |
+| 105          | **exact** | 100%     |
+| 75           | refused   | 22%      |
+| 35           | refused   | 0%       |
+
+**What it refuses, and why each refusal is the right answer:**
+
+| case                          | outcome                  | what says so       |
+| ----------------------------- | ------------------------ | ------------------ |
+| practice swing, ball stays    | no instant               | nothing departed   |
+| ball rolls off before the top | no instant               | outside the window |
+| clip ends 2 frames after      | instant, confidence 0.06 | permanence 0.06    |
+| a rival that departs too      | instant, margin **0.00** | warned             |
+
+And the case it gets wrong, which is the honest end of the table. At impact the
+club head is at the ball, so a covered ball and a departed one are the same
+picture; it only matters when the covering starts _before_ contact:
+
+| ball dimmed over | located   | abruptness | warned |
+| ---------------- | --------- | ---------- | ------ |
+| 0 frames         | **exact** | 1.00       | no     |
+| 2                | −1 frame  | 0.91       | no     |
+| 6                | −3 frames | 0.80       | yes    |
+| 10               | −5 frames | 0.70       | yes    |
+
+The instant runs early by about half the covering. Reported rather than fixed.
+
+**The first observed impact in this project, and the only figure here that is
+not synthetic.** `data/face-on/rory_face_on.mp4` at a factor of 7 — the ball is
+bracketed between frames 360 and 361, with no warnings:
+
+| source           | frame | delta vs the observation | uncertainty    |
+| ---------------- | ----- | ------------------------ | -------------- |
+| `ball_departure` | 361   | **reported**             | 5 ms (bracket) |
+| `hand_low`       | 362   | +5 ms / **+1 frame**     | 100 ms (scale) |
+| `hand_speed`     | 381   | +95 ms / **+20 frames**  | 100 ms (scale) |
+
+That settles a question the roadmap had left open since Phase 6. The lowest point
+of the hand arc lands within **one frame** of the observation; peak hand speed —
+Phase 4's primary estimate — lands twenty frames away, and **late**, which is the
+opposite of the direction the physics predicts. The fusion's precedence follows
+the measurement, and Phase 4's own output is left unchanged: a number that moved
+depending on which other analyses had run could not be compared across clips.
+
+**One clip is not a correction.** A bias measured once is an anecdote with a
+number attached, and there is still no labelled set to settle it. Phase 12 built
+the tool that produces one and the gates that refuse a claim without one; what it
+found is that this project has a single golfer in it.
+
+Cost: 16 ms per frame to detect over 1.5 torso lengths of ground, and 34 ms to
+track a 312-frame clip once the candidates exist. A **rectangular** structuring
+element is what makes that affordable — OpenCV decomposes that one into separable
+passes and no other shape, and an elliptical element of the same size costs 66 ms
+a frame on its own.
+
+### The learned detector
+
+`scripts/benchmark_ml.py`, on a **generated** corpus of players, sessions and
+swings whose events are inputs to the generator. Nothing here is a statement
+about golf, and the script prints that caveat under every table it produces.
+
+**What the feature grid costs before a model runs.** A label's frame is mapped
+onto the 60 Hz grid and read back; the error in that round trip is a floor under
+anything working on the grid:
+
+| clip fps | grid  | floor  | round trip | worst      |
+| -------- | ----- | ------ | ---------- | ---------- |
+| 30       | 60 Hz | 8.3 ms | 0.0 ms     | 0.0 ms     |
+| 60       | 60 Hz | 8.3 ms | 0.0 ms     | 0.0 ms     |
+| 120      | 60 Hz | 8.3 ms | 4.6 ms     | **8.3 ms** |
+| 240      | 60 Hz | 8.3 ms | 4.0 ms     | **8.3 ms** |
+
+Compare the table above it: at 240 fps a ball departure brackets impact to
+**4.2 ms**, and the resampling here spends **8.3 ms** before a convolution has
+run. On the one quantity both can report, the observation wins before the
+comparison starts.
+
+**The held-out number has not settled**, which is the measurement that matters
+most on a corpus this size (`--sweep players --seeds 3`):
+
+| players | clips | macro F1 | top MAE | impact MAE |
+| ------- | ----- | -------- | ------- | ---------- |
+| 3       | 18    | 0.869    | 35.0 ms | 130.0 ms   |
+| 4       | 24    | 0.942    | 16.1 ms | 7.2 ms     |
+| 6       | 36    | 0.939    | 21.7 ms | 8.3 ms     |
+| 9       | 54    | 0.957    | 15.6 ms | 5.3 ms     |
+| 12      | 72    | 0.974    | 11.4 ms | 3.9 ms     |
+
+Still improving at twelve players. A score that moves with the size of its own
+corpus is measuring the sample, not the method.
+
+**What a leaky split is worth could not be measured.** Same corpus, same seeds,
+same architecture; the only difference is whether whole players are held out
+(`--sweep leakage --seeds 5`; ± is half the range across seeds):
+
+| quantity     | by player     | by clip (leaky) | difference | beats the scatter? |
+| ------------ | ------------- | --------------- | ---------- | ------------------ |
+| macro F1     | 0.972 ±0.007  | 0.973 ±0.013    | +0.001     | no                 |
+| takeaway MAE | 25.5 ±15.0 ms | 25.6 ±9.0 ms    | −0.1 ms    | no                 |
+| top MAE      | 14.3 ±7.1 ms  | 12.2 ±6.9 ms    | +2.1 ms    | no                 |
+| impact MAE   | 4.5 ±3.3 ms   | 6.6 ±6.2 ms     | −2.1 ms    | no                 |
+| finish MAE   | 14.0 ±8.8 ms  | 12.8 ±11.5 ms   | +1.2 ms    | no                 |
+
+The corpus cannot answer the question: its golfers differ by six generator
+parameters, so a model that has seen seven of them has seen the space. The split
+is grouped by player on the argument — a swing and its near-duplicate cannot sit
+on opposite sides of a question — and not on this table.
+
+**Cost**, 72 clips on the reference machine: 37 ms per clip to filter and
+featurise, 82 ms per clip to train 40 epochs, 0.7 ms per clip to run. Training
+the entire corpus costs less than extracting poses from one clip, which is the
+correct shape for this phase — the expensive thing was never the model.
+
 A general benchmark harness arrives in Phase 17.
 
 ## 15. Limitations
@@ -770,7 +1247,7 @@ A general benchmark harness arrives in Phase 17.
 - **No calibration has ever been checked against a real camera.** Every
   published calibration figure comes from a synthetic camera whose parameters
   were inputs to the renderer that produced the board images. That establishes
-  the *shape* of the relationship the gate rests on — that the reprojection
+  the _shape_ of the relationship the gate rests on — that the reprojection
   error is blind to a degeneracy and coverage is not — and it does not establish
   what any real phone will achieve. The renderer has no motion blur, no rolling
   shutter, no defocus and no sheet bowed off flat, so every error published is a
@@ -786,9 +1263,9 @@ A general benchmark harness arrives in Phase 17.
 - **Calibrating one camera does not make it see depth, and the word
   "calibrated" invites believing it does.** A calibrated pixel is a direction.
   `CalibrationStatus` keeps `intrinsics` and `stereo` apart for that reason and
-  the metric layer gates on it — but the gate blocks nothing today, because no
-  metric in this build claims three dimensions. It is machinery waiting for
-  Phase 9 rather than machinery currently refusing anything.
+  the metric layer gates on it. The gate now blocks six metrics: on a project
+  with one camera calibrated, every quantity whose basis is `spatial` is refused
+  by name, because two rays are what make a point and one does not.
 - **Neither camera may move between the board capture and the swing**, and
   nothing detects that one was nudged. The extrinsics describe where the cameras
   stood; a bumped tripod makes every triangulated point wrong with no symptom.
@@ -822,8 +1299,9 @@ A general benchmark harness arrives in Phase 17.
   sequential pass. Random access uses the OpenCV source, which is the default.
 - **Pose landmark accuracy is not measured at all.** Detection _rate_ is
   reported because it is counted; nothing here says whether the landmarks that
-  were found are in the right place. That needs a labelled set, which is
-  Phase 12.
+  were found are in the right place. That needs a labelled set. Phase 12 built
+  the apparatus for one — a labelling tool, a schema, player-grouped splits — and
+  no such set exists.
 - **Filtering needs about 60 fps or better at its default settings.** A 0.10 s
   window with a degree-4 fit needs five samples, and 30 fps supplies three. Such
   a clip gets no values at all, plus a message naming the minimum window its
@@ -832,11 +1310,12 @@ A general benchmark harness arrives in Phase 17.
   used during development are 24–30 fps, so this is the ordinary case rather than
   an edge one, and it is the first quantitative backing for the ≥120 fps the
   capture protocol asks for.
-- **Impact is inferred from the hands, and runs marginally early.** Hand speed
-  peaks slightly before the club reaches the ball, so the reported frame is a
-  kinematic estimate with a known bias in a known direction. It is corroborated
-  against the lowest point of the hand arc, and Phases 10-11 will replace that
-  with club and ball evidence.
+- **`analyzer phases` reports impact from the hands, and that has not changed.**
+  It is a kinematic estimate and its contract says so. `analyzer impact` is where
+  club and ball evidence now reconcile the four available estimates into one
+  instant with a named provenance; nothing there reaches back down and rewrites
+  Phase 4, because a number that moved depending on which other analyses had run
+  could not be compared across clips.
 - **Rotation is unreliable on a full turn, and now says so.** Once a player
   turns far enough for the far shoulder to pass behind the torso, MediaPipe
   infers its position from a body prior — and reports a visibility of 1.00 while
@@ -854,13 +1333,40 @@ A general benchmark harness arrives in Phase 17.
   supplied. The factor is not a relabelling of the clock: the smoothing window
   is in real seconds too, so it decides how many frames that window holds and
   therefore where events land.
-- **Impact is estimated worse than its own corroboration, on the one clip
-  where that can be checked.** The ball leaves the tee between two known frames
-  in the tour-pro face-on clip. Peak hand speed — Phase 4's primary estimate —
-  lands 17 to 40 frames away; the lowest point of the hand arc, carried only as
-  corroboration, lands within 4 and is stable across the assumed slow-motion
-  factor. One clip is not enough to change the estimator, and Phase 11 should
-  evaluate it first.
+- **The bias of the kinematic impact estimate is measured on exactly one clip.**
+  It is the only clip in this repository where the ball can be seen leaving, and
+  there peak hand speed lands **20 frames (95 ms) late** while the lowest point
+  of the hand arc lands within one. That is enough to have set the fusion's
+  precedence and it is not enough to be a correction — a bias measured once is an
+  anecdote with a number attached, and no labelled set exists to turn it into
+  more than one.
+- **The ball is identified by persistence, not by looking like a ball.** At the
+  size a golf ball actually occupies on consumer footage — 4.4 px in radius on
+  the reference clip — shape does not separate it from grass texture and
+  compression blocks, which score anywhere from 0.11 to 0.71 on the same
+  circularity measure the ball scores 0.59 on. What identifies it is that one
+  position holds a candidate for hundreds of consecutive frames and then stops.
+  That works, and it means a **stationary object that is not a ball and does
+  vanish** — a tee marker picked up, a second ball also struck — is a rival one
+  view cannot resolve. `EstablishedBall.margin` falls to zero when it happens and
+  the report warns, which is a disclosure rather than a fix.
+- **The ball is observed stopping being visible, not being struck.** For a struck
+  ball those are the same instant. They come apart when something covers the ball
+  before contact — the club head crossing the line of sight on a down-the-line
+  view — and then the reported instant runs early by about half the covering.
+  Measured on the fixture: a ball dimmed over ten frames reads five frames early,
+  with the abruptness factor at 0.70 and two warnings. Recorded rather than
+  fixed.
+- **A clip that ends shortly after contact cannot verify the absence.** Nothing
+  at the instant itself distinguishes a ball that left from one something moved
+  in front of; only the absence lasting does. Two frames of follow-through scores
+  that check at 0.06 rather than passing it.
+- **Ball detection has been run on one real clip.** It found the impact there
+  exactly, and six defects in this phase were found by that clip rather than by
+  the fixture — including a search region that contained the sky and a drift
+  reference that mistook camera motion for the ball leaving. Every one of them
+  produced a confident wrong answer rather than an error, which is the honest
+  characterisation of what a second clip might still find.
 - **Nothing here is metric.** Lengths are in torso lengths and the frame they
   are measured in is the frame's own width. The same swing filmed from twice the
   distance gives the same torso-length numbers and different frame-width ones,
@@ -899,15 +1405,15 @@ A general benchmark harness arrives in Phase 17.
   synthetic fixture pins the arithmetic against angles known by construction,
   and every value on the face-on reference clip was checked against the frame it
   came from with `scripts/overlay_metrics.py`. Neither is ground truth: nobody
-  has measured this player's actual shoulder turn. That needs the labelled set
-  Phase 12 builds.
+  has measured this player's actual shoulder turn. That needs a labelled set,
+  which Phase 12 built the apparatus for and which does not yet exist.
 - **Phase detection is validated on two swings.** The face-on reference clip is
   the only recording here containing a swing the pipeline can see; the
   face-on and iron down-the-line reference clips both detect cleanly; the driver
   down-the-line clip is 24 fps and loses the wrists to motion blur through the
   part where the swing happens, so it is refused. Every event was checked by
   hand against the signal, which is not the same as being checked against ground
-  truth — that needs the labelled set Phase 12 builds.
+  truth — that needs a labelled set, which does not yet exist.
 - **Detection thresholds are structural bounds, not golf norms.** They exist to
   reject motion that cannot be a swing (a two-second descent, hands that never
   travel further than a fraction of the subject's torso), and are deliberately
@@ -915,33 +1421,141 @@ A general benchmark harness arrives in Phase 17.
   need a labelled set.
 - **Filter accuracy is measured against models of swing motion, not a swing.**
   The trajectories in the benchmark have exact derivatives, which real footage
-  cannot until Phase 12 provides labelled landmarks. They were chosen to resemble
+  cannot supply without labelled landmarks. They were chosen to resemble
   swing dynamics; no claim is made that they match one, and the defaults should
   be re-derived against ground truth when it exists.
 - **MediaPipe runs on CPU.** The Tasks Python API has no macOS GPU delegate, and
   the health check reports the delegate it measured rather than the one it would
   prefer.
+- **Every published club figure comes from a rendered shaft whose angle was an
+  input.** The two tour-pro clips have been tracked and checked by eye — which is
+  how the yardage-sign failure below was found — but nobody has labelled a shaft
+  angle in a real frame, so there is nothing to score a real run against. The renderer
+  has no defocus, no rolling shutter, no compression, a flat background where a
+  driving range is not, and a club 1.1 torso lengths long where a real one is
+  about 2.5 — a longer lever smears proportionally more. The rates are a floor.
+- **Motion blur is a hard limit with no processing fix.** A shaft smeared past
+  about ten pixels is not a weaker line, it is not a line: an exposure draws a
+  rotating club as a fan with no edge in it. Where the club is found the angle is
+  right to about half a degree, and where it is not, no threshold recovers it.
+  There is deliberately no sensitivity setting, because there is nothing to
+  trade. The remedy is a faster shutter, and it is the capture's to supply.
+- **The exposure cannot be measured, so the blur cannot be.** Nothing in a video
+  file records the shutter. What is reported is the club head's measured image
+  speed times the frame interval, which is the smear at a 360-degree shutter and
+  therefore an upper bound; a shutter n times faster divides it by n, and which
+  it was is not recoverable.
+- **A clip's overall club detection rate overstates the downswing, always.** The
+  club is nearly still at address and through the follow-through, which are most
+  of a clip, and fastest through the downswing, which is where every metric worth
+  computing lives. Measured, 64% overall can be 25% of the downswing. Coverage is
+  therefore reported per phase and the aggregate is documented as the number not
+  to read alone.
+- **A background line through the hands is a better line than the club.** A door
+  frame, fence post or window mullion scores the same edge support and more
+  length, so evidence alone ranks it first — and it is the only candidate left
+  once the club blurs. What separates them is that it does not rotate, so the
+  tracker's temporal check catches it where a per-frame detector cannot: on the
+  synthetic swing with four background lines, picking the strongest line gets 17
+  frames wrong and the tracker gets none, keeping 20 fewer frames to do it.
+- **An occluder's own edge defeats all three checks, and the confidence does not
+  see it.** A rectangular block over the top of the frame has a long straight
+  boundary, and where that boundary runs near the hands it is sharp, stationary
+  and — once the real club is hidden behind it — unopposed. The tracker steps onto
+  it and continuity keeps it there, because a stationary line agrees perfectly
+  with a prediction extrapolated from two frames already on it. Measured, 18 of
+  172 tracked frames are wrong and they carry a confidence of **0.98** against
+  the 0.99 a correct frame carries. No threshold here separates them. **The real
+  footage found it on the first run**: on `rory_face_on.mp4`, nine of 139 tracked
+  frames follow the vertical edge of the yardage sign behind the player rather
+  than the club, at a median confidence of 0.98. A rule that the shaft must
+  rotate during the backswing would catch it and is a golf norm, which needs a
+  labelled set; so would a detector that has seen a half-occluded club. Phase 12
+  built what is needed to produce one and did not produce one.
+- **The club head is usually not observed, and the shaft direction usually is.**
+  A detected segment stops where the edge evidence stops, which is short of the
+  club head whenever the head is smeared — and also whenever the club points at
+  the camera and is genuinely short in the picture. One view cannot separate
+  those, so a club-head position is emitted only where the evidence reached the
+  end of the club and `reaches_head` says which frames those are. **There is no
+  club-head speed metric**, and that is why: it would need a length the image
+  frequently does not contain.
+- **No lens correction is applied to club tracking**, even where the project has
+  a calibration. The detector searches the raw frame, so undistorting the hand
+  anchor alone would point the search at a place in the image where the hands are
+  not. Correcting it properly means undistorting the frame, and it matters for a
+  second reason a landmark does not have: a straight club in the world is a
+  _curved_ line in a distorted image, so the straight-line model a Hough
+  transform rests on is itself violated near the frame edge.
+- **The club-based impact estimate does not move Phase 4's answer.** It is the
+  lowest observed club-head position after the top, it is independent of hand
+  speed, and it is refused outright unless the downswing was more than half
+  tracked — which on consumer footage it usually is not. Fusing the two is
+  Phase 11's job, once the ball supplies a third piece of evidence that can
+  arbitrate.
+- **There is no labelled set, so there is no accuracy figure for anything.** Not
+  for the pose landmarks, not for the rule-based phase detector, not for the
+  learned one. The engine refuses to produce one rather than producing a weak
+  one: `EvaluationReport.claims_permitted` is false on every set this project can
+  currently build, with the reason attached.
+- **The learned detector has only ever seen generated swings.** Its held-out
+  scores are measured against events that are inputs to the generator that drew
+  the motion, which makes them a test of the plumbing and nothing else. Worse,
+  the comparison against the rule-based detector is rigged in the model's favour
+  on that corpus: the model is trained on the labels, so it learns the convention
+  they were made with, while the rules brought their own — and the two genuinely
+  differ at the takeaway by several frames.
+- **What a leaky split costs could not be measured.** Training under a
+  player-grouped split and a clip-random one on the synthetic corpus produces no
+  difference larger than the seed-to-seed scatter, because its golfers differ by
+  six generator parameters and holding one out asks nothing. The split is grouped
+  by player on the argument, not on that measurement.
+- **The labelling window has never been driven by a person here.** Its state
+  machine, overlay and key mapping are tested; the OpenCV loop around them is
+  forty lines with no decisions in it and no test, because it needs a display.
+- **A dataset of mixed frame rates is smoothed inconsistently.** The feature grid
+  equalises the sample rate and cannot equalise the filter: a 30 fps clip needs a
+  167 ms window where a 120 fps clip uses 100 ms, and a wider window flattens the
+  velocity peak. `DatasetSummary` reports it rather than averaging over it.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
 ## 16. Future work
 
-Phases 8-20: camera calibration, 3D reconstruction, club tracking, ball
-detection, temporal ML, the coaching engine, desktop visualisation, 3D
-rendering, swing comparison, performance work, model management, test hardening
-and documentation. Sequencing, deliverables, and exit criteria per phase are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 13-20: the coaching engine, desktop visualisation, 3D rendering, swing
+comparison, performance work, model management, test hardening and
+documentation. Sequencing, deliverables, and exit
+criteria per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-Phase 7 began the two-camera work that eventually makes the projections in §11
-unnecessary, and settled the first of the two things a second view needs: the
-relation between the cameras' clocks, with the error in it carried rather than
-assumed away. Phase 8 settles the second — where the cameras were — and only
-with both can Phase 9 claim a measurement about a body rather than about a
+Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
+and settled the first of the two things a second view needs: the relation between
+the cameras' clocks, with the error carried rather than assumed away. Phase 8
+settled the second — where the cameras were. Phase 9 spends both, and the six
+metrics in §9 are the first numbers here that describe a body rather than a
 picture of one.
 
-Two open items carry forward. Synchronisation has never been checked against a
-genuinely simultaneous pair, because none exists here; and Phase 4's event
-confidence does not detect a badly located event, which Phase 7 measured and
-deliberately did not fix.
+Five open items carry forward:
+
+- **Nothing here has been reconstructed from real footage.** It needs two
+  calibrated cameras that filmed one swing at once, and no such recording exists
+  in this repository. Every figure in §9 is synthetic and is a floor.
+- **Synchronisation has never been checked against a genuinely simultaneous
+  pair**, for the same reason.
+- **A scene frame is one capture away.** Laying the calibration board on the
+  ground with an edge along the target line would supply the vertical and the
+  target line that a stereo pair does not, and with them a 3D forward spine
+  tilt. `data/README.md` now asks for that footage; nothing reads it yet.
+- **Phase 4 is the limit on 3D metrics under noise, not the triangulation.**
+  Measured: at 5 px of landmark scatter the reconstruction is still accurate to
+  millimetres and the phase detector declines to call the clip a swing, so there
+  is no instant to anchor a rotation to. Phase 12 did not revisit it: a learned
+  detector trained on generated swings says nothing about how either behaves
+  under real landmark noise.
+- **A labelled set needs more golfers, not more footage.** Phase 12 built the
+  labelling tool, the schema, the player-grouped splitter and the gates that
+  refuse a claim without one, and then found that this repository contains a
+  single player. Three people would produce a split; eight would allow a number
+  to be quoted. `data/README.md` says what to record and asks for consent in
+  writing before anyone else's swing enters a training set.
 
 ## Licence
 

@@ -69,6 +69,14 @@ class MetricUnit(StrEnum):
     RATIO = "ratio"
     TORSO_LENGTHS = "torso_lengths"
     TORSO_LENGTHS_PER_S = "torso_lengths_per_s"
+    METRES_PER_S = "metres_per_s"
+    """Genuinely metres, and the only unit here that is a physical length.
+
+    It exists only for metrics whose `basis` is `SPATIAL`, which means they were
+    triangulated from two calibrated views; the scale descends from a printed
+    board square measured with a ruler. `TORSO_LENGTHS_PER_S` sitting beside it
+    is the same quantity from one camera, and the two must never be compared:
+    one is a ratio that survives an unknown camera and the other is a speed."""
 
 
 class MetricGroup(StrEnum):
@@ -106,12 +114,28 @@ class MetricBasis(StrEnum):
         was square to the camera at its reference frame, and it is blind to
         direction -- a turn and its mirror image shorten identically -- so the
         value is a magnitude.
+
+    SPATIAL
+        A length, angle or speed between points **reconstructed in three
+        dimensions** from two calibrated views of the same instant. The only
+        basis here that is a statement about the body rather than about a
+        picture of it, and the reason every other one is named the way it is.
+
+        It is also the only basis whose meaning does not depend on the camera
+        view: a distance between two 3D points is the same distance from
+        anywhere, so a `SPATIAL` metric carries one anatomical reading instead
+        of one per view. What it does depend on is the *reconstruction*, whose
+        own error is reported per point and propagated into the metric's
+        `uncertainty` -- a 3D number is not automatically a better number, it is
+        a differently-conditioned one, and the conditioning is the ray
+        convergence angle rather than the camera position.
     """
 
     TEMPORAL = "temporal"
     IMAGE_PLANE = "image_plane"
     PROJECTED_ANGLE = "projected_angle"
     FORESHORTENED_ANGLE = "foreshortened_angle"
+    SPATIAL = "spatial"
 
 
 class MetricName(StrEnum):
@@ -145,6 +169,22 @@ class MetricName(StrEnum):
     PEAK_HAND_SPEED = "peak_hand_speed"
     LEAD_ARM_ANGLE = "lead_arm_angle"
     TRAIL_ARM_ANGLE = "trail_arm_angle"
+
+    # --- reconstructed in three dimensions (needs a stereo calibration) ---
+    #
+    # Named apart from their projected namesakes rather than replacing them,
+    # because they are different claims about different things: `SHOULDER_TURN`
+    # is a rotation inferred from how much a line shortened in one picture, and
+    # `SHOULDER_TURN_3D` is the angle between two measured directions in space.
+    # They will disagree, the disagreement is informative, and a single name
+    # whose meaning depended on whether a rig happened to be calibrated would
+    # make two numbers that cannot be compared look like one that can.
+    SHOULDER_TURN_3D = "shoulder_turn_3d"
+    PELVIS_TURN_3D = "pelvis_turn_3d"
+    X_FACTOR_3D = "x_factor_3d"
+    LEAD_ARM_ANGLE_3D = "lead_arm_angle_3d"
+    TRAIL_ARM_ANGLE_3D = "trail_arm_angle_3d"
+    PEAK_HAND_SPEED_3D = "peak_hand_speed_3d"
 
     # --- timing ---
     BACKSWING_DURATION = "backswing_duration"

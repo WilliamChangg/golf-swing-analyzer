@@ -8,6 +8,7 @@ CI, and for benchmark scripts, none of which should need Rust in the loop.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -27,6 +28,7 @@ from rich.table import Table
 
 from analyzer import __version__
 from analyzer.calibration.apply import distortion_displacement
+from analyzer.contracts.ball import BallTrackingReport
 from analyzer.contracts.calibration import (
     BoardFamily,
     BoardSpec,
@@ -35,8 +37,10 @@ from analyzer.contracts.calibration import (
     CameraRig,
     StereoCalibration,
 )
+from analyzer.contracts.club import ClubTrackingReport
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
+from analyzer.contracts.impact import FusedImpact
 from analyzer.contracts.metrics import (
     CameraView,
     Metric,
@@ -45,10 +49,11 @@ from analyzer.contracts.metrics import (
     MetricSet,
     MetricUnit,
 )
-from analyzer.contracts.phases import SwingPhases
+from analyzer.contracts.phases import SwingPhase, SwingPhases
 from analyzer.contracts.pose import PoseExtractionResult
 from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.projects import Project, ProjectList
+from analyzer.contracts.reconstruction import ReconstructionReport
 from analyzer.contracts.rpc import EngineError
 from analyzer.contracts.sync import SyncModel
 from analyzer.contracts.video import TimestampSource, VideoMetadata
@@ -583,6 +588,7 @@ _BASIS_TAG: dict[MetricBasis, str] = {
     MetricBasis.IMAGE_PLANE: "image",
     MetricBasis.PROJECTED_ANGLE: "proj angle",
     MetricBasis.FORESHORTENED_ANGLE: "foreshort",
+    MetricBasis.SPATIAL: "3D",
 }
 
 _GROUP_TITLES: dict[MetricGroup, str] = {
@@ -610,6 +616,8 @@ def _format_value(metric: Metric) -> str:
         return f"{metric.value:.2f} : 1"
     if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
         return f"{metric.value:.2f} torso/s"
+    if metric.unit is MetricUnit.METRES_PER_S:
+        return f"{metric.value:.2f} m/s"
     return f"{metric.value:+.3f} torso"
 
 
@@ -711,9 +719,11 @@ def _render_metrics(result: MetricSet) -> None:
         "[dim]basis: clock = from the timestamps, unaffected by camera position; "
         "image = measured in the image plane, blind to motion towards the camera; "
         "proj angle = an angle in the picture, not a 3D joint angle; "
-        "foreshort = rotation inferred from foreshortening, a magnitude only.\n"
-        "Lengths are in torso lengths, which is framing-independent but not metric. "
-        "Confidence is observation x anchor x method.[/dim]"
+        "foreshort = rotation inferred from foreshortening, a magnitude only; "
+        "3D = triangulated from two calibrated views, in metres, and the only rows "
+        "here that measure the body rather than a picture of it.\n"
+        "Lengths are in torso lengths, which is framing-independent but not metric, "
+        "except on 3D rows. Confidence is observation x anchor x method.[/dim]"
     )
 
     for warning in result.warnings:
@@ -1744,6 +1754,1182 @@ def calibrate_clear(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
     console.print(f"Project {project} is now uncalibrated.")
+
+
+def _render_reconstruction(result: ReconstructionReport) -> None:
+    """The three numbers, each labelled with the question it answers.
+
+    Laid out like the calibration review for the same reason: a reader who is
+    shown only the reprojection error will take it for the accuracy, and it is
+    not -- it is blind along the epipolar line, which is the direction the error
+    actually moves a point. So the convergence angle and the bone check sit
+    beside it, and each row says what it is evidence of.
+    """
+    summary = Table(title="3D reconstruction", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    verdict = "[green]YES[/green]" if result.reconstructed else "[yellow]NO[/yellow]"
+    summary.add_row("reconstructed", verdict)
+    summary.add_row(
+        "cameras",
+        f"{result.reference_role.value} ({result.reference_name}) -> "
+        f"{result.target_role.value} ({result.target_name})",
+    )
+    summary.add_row("frame", f"metres, centred on the {result.reference_role.value} camera")
+    summary.add_row(
+        "rig", f"{result.baseline_m:.2f} m apart, {result.convergence_deg:.0f} deg apart"
+    )
+    summary.add_row("frames", f"{result.reconstructed_frames} of {result.frames} carry a point")
+
+    quality = result.quality
+    if quality is not None:
+        summary.add_row("coverage", f"{quality.coverage:.0%} of landmark-frames")
+        summary.add_row(
+            "ray convergence",
+            f"{_deg(quality.median_convergence_deg)} median, {_deg(quality.min_convergence_deg)} "
+            "worst  [dim](the gate: depth error goes as 1/sin)[/dim]",
+        )
+        summary.add_row(
+            "reprojection error",
+            f"{_px(quality.median_reprojection_px)} median, {_px(quality.max_reprojection_px)} "
+            "worst  [dim](blind along the epipolar line)[/dim]",
+        )
+        summary.add_row(
+            "positional uncertainty",
+            f"{_mm(quality.median_uncertainty_m)} median, {_mm(quality.p95_uncertainty_m)} p95 "
+            f"[dim](worst direction, from {quality.pixel_sigma_px:.2f} px landmark scatter)[/dim]",
+        )
+        if quality.worst_bone_variation is not None:
+            style = (
+                "green"
+                if quality.worst_bone_variation <= result.config.max_bone_variation
+                else "yellow"
+            )
+            summary.add_row(
+                "worst bone variation",
+                f"[{style}]{quality.worst_bone_variation:.1%}[/{style}]  "
+                "[dim](the check the residual cannot make)[/dim]",
+            )
+
+    pairing = result.pairing
+    if pairing is not None:
+        summary.add_row(
+            "pairing",
+            f"{pairing.method}, {pairing.resampled_frames} frames"
+            + (
+                f", {pairing.outside_overlap} outside the overlap"
+                if pairing.outside_overlap
+                else ""
+            ),
+        )
+        if pairing.max_pairing_error_px is not None:
+            summary.add_row(
+                "sync cost, in pixels",
+                f"{pairing.max_pairing_error_px:.2f} px at the fastest landmark "
+                f"[dim](nearest-frame pairing would cost "
+                f"{_px(pairing.nearest_frame_error_px)})[/dim]",
+            )
+    console.print(summary)
+
+    if quality is not None and quality.bones:
+        bones = Table(title="Reconstructed segments", title_justify="left", expand=True)
+        bones.add_column("Segment", no_wrap=True)
+        bones.add_column("Median", justify="right")
+        bones.add_column("Variation", justify="right")
+        bones.add_column("", no_wrap=True)
+        for entry in sorted(quality.bones, key=lambda row: -row.variation)[:8]:
+            mark = "" if entry.stable else "[yellow]unstable[/yellow]"
+            bones.add_row(
+                entry.name,
+                f"{entry.median_length_m * 100:.1f} cm",
+                f"{entry.variation:.1%}",
+                mark,
+            )
+        console.print(bones)
+
+    if quality is not None and quality.symmetry:
+        worst = max(quality.symmetry, key=lambda row: row.disagreement)
+        console.print(
+            f"[dim]Left/right agreement: worst is {worst.segment} at "
+            f"{worst.disagreement:.1%} ({worst.left_m * 100:.1f} vs "
+            f"{worst.right_m * 100:.1f} cm).[/dim]"
+        )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
+    if result.refusal:
+        console.print(Panel(result.refusal, title="Refused", border_style="red"))
+
+
+def _deg(value: float | None) -> str:
+    return "-" if value is None else f"{value:.0f} deg"
+
+
+def _px(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f} px"
+
+
+def _mm(value: float | None) -> str:
+    return "-" if value is None else f"{value * 1000:.1f} mm"
+
+
+@app.command()
+def reconstruct(
+    project: Annotated[int, typer.Argument(help="Which project's pair to triangulate.")],
+    reference_clip: Annotated[
+        int | None,
+        typer.Option("--reference-clip", help="Which clip sets the clock and the frame."),
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="The second view.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use for both clips.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, for both clips.")
+    ] = None,
+    align: Annotated[
+        bool,
+        typer.Option("--align", help="Re-align the pair now instead of using the stored sync."),
+    ] = False,
+    nearest_frame: Annotated[
+        bool,
+        typer.Option(
+            "--nearest-frame",
+            help="Pair nearest frames instead of resampling. For comparison; measurably worse.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Triangulate two calibrated, aligned views into 3D positions in metres."""
+    params: dict[str, object] = {"project_id": project, "model": model, "align": align}
+    if reference_clip is not None:
+        params["reference_clip_id"] = reference_clip
+    if target_clip is not None:
+        params["target_clip_id"] = target_clip
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if nearest_frame:
+        params["reconstruction"] = {"resample": False}
+
+    try:
+        result = call("reconstruct", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ReconstructionReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_reconstruction(result)
+
+    # Non-zero when nothing came out, so a script driving this learns that the
+    # pair produced no positions rather than reading an empty report as success.
+    if not result.reconstructed:
+        raise typer.Exit(code=1)
+
+
+def _render_club(result: ClubTrackingReport) -> None:
+    """Coverage per phase first, because the aggregate rate is the misleading one.
+
+    Laid out like the calibration and reconstruction reviews and for the same
+    reason a third time: a reader shown one headline number will take it for the
+    quality, and here that number is wrong in a predictable direction. Detection
+    is easy where the club is slow, so the clip-wide rate is an average over the
+    frames nobody wants to measure. The per-phase table is what the verdict rests
+    on and it goes first.
+    """
+    summary = Table(title="Club tracking", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("tracked", "[green]YES[/green]" if result.tracked else "[yellow]NO[/yellow]")
+    summary.add_row("detector", f"{result.detector.name}  [dim]{result.detector.method}[/dim]")
+    summary.add_row("frames", f"{result.tracked_frames} of {result.frame_count} carry a shaft")
+    summary.add_row(
+        "coverage",
+        f"{result.coverage:.0%}  [dim](clip-wide -- see the per-phase table, not this)[/dim]",
+    )
+    if result.unanchored_frames:
+        summary.add_row(
+            "runs",
+            f"{result.unanchored_frames}  [dim](separately seeded; a track in pieces is "
+            "weaker than one piece)[/dim]",
+        )
+    if result.slow_motion_factor != 1.0:
+        summary.add_row("slow motion", f"{result.slow_motion_factor:g}x  [dim]as supplied[/dim]")
+    console.print(summary)
+
+    if result.phase_coverage:
+        phases = Table(title="Coverage by phase", title_justify="left", expand=True)
+        phases.add_column("Phase", no_wrap=True)
+        phases.add_column("Tracked", justify="right")
+        phases.add_column("Coverage", justify="right")
+        phases.add_column("Confidence", justify="right")
+        phases.add_column("Club-head speed", justify="right")
+        for entry in result.phase_coverage:
+            style = (
+                "green" if entry.coverage >= 0.8 else "yellow" if entry.coverage >= 0.5 else "red"
+            )
+            # The downswing is emphasised because it is the row the verdict rests
+            # on, and it is the one a reader skims past on the way to the total.
+            name = entry.phase.value
+            if entry.phase is SwingPhase.DOWNSWING:
+                name = f"[bold]{name}[/bold]"
+            phases.add_row(
+                name,
+                f"{entry.tracked}/{entry.frames}",
+                f"[{style}]{entry.coverage:.0%}[/{style}]",
+                "-" if entry.median_confidence is None else f"{entry.median_confidence:.2f}",
+                "-"
+                if entry.median_tip_speed_px_s is None
+                else f"{entry.median_tip_speed_px_s:,.0f} px/s",
+            )
+        console.print(phases)
+    else:
+        console.print(
+            "[yellow]No swing was detected, so coverage is clip-wide only.[/yellow] "
+            "[dim]That number is dominated by the frames where the club is nearly still.[/dim]"
+        )
+
+    quality = result.quality
+    if quality is not None:
+        detail = Table(title="Quality", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "support",
+            f"{_opt(quality.median_support)} median  [dim](edge evidence -- the fit)[/dim]",
+        )
+        detail.add_row(
+            "margin",
+            f"{_opt(quality.median_margin)} median  [dim](over the best rival -- the check "
+            "support cannot make)[/dim]",
+        )
+        detail.add_row(
+            "continuity",
+            f"{_opt(quality.median_continuity)} median  [dim](agreement with the predicted "
+            "direction)[/dim]",
+        )
+        detail.add_row(
+            "confidence", f"{_opt(quality.median_confidence)} median  [dim](the product)[/dim]"
+        )
+        detail.add_row(
+            "shaft turn rate",
+            f"{_rate(quality.median_angular_rate_deg_s)} median, "
+            f"{_rate(quality.max_angular_rate_deg_s)} peak",
+        )
+        if quality.max_blur_px is not None:
+            style = (
+                "red"
+                if quality.max_blur_px > 20
+                else "yellow"
+                if quality.max_blur_px > 10
+                else "green"
+            )
+            detail.add_row(
+                "club-head smear",
+                f"[{style}]up to {quality.max_blur_px:.0f} px[/{style}]  [dim](at a 360-degree "
+                "shutter; a shutter n times faster divides it by n, and nothing in the file "
+                "records which)[/dim]",
+            )
+        detail.add_row(
+            "club head seen",
+            f"{quality.head_fraction:.0%} of tracked frames  [dim](elsewhere a shaft direction "
+            "with no length)[/dim]",
+        )
+        console.print(detail)
+
+    if result.impact is not None:
+        impact = result.impact
+        delta = "" if impact.delta_s is None else f", {impact.delta_s * 1000:+.0f} ms from it"
+        console.print(
+            f"[bold]Impact from the club head:[/bold] frame {impact.frame_index} "
+            f"({impact.timestamp_s:.3f} s){delta}. "
+            f"[dim]Phase 4's hand-speed estimate is frame {impact.kinematic_frame}; the two are "
+            "independent and neither replaces the other.[/dim]"
+        )
+
+    if result.refusals:
+        counts = ", ".join(
+            f"{reason.value} {count}" for reason, count in sorted(result.refusals.items())
+        )
+        console.print(f"[dim]Frames carrying nothing, by reason: {counts}[/dim]")
+
+    if result.refusal:
+        console.print(f"[yellow]{result.refusal}[/yellow]")
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+def _opt(value: float | None) -> str:
+    return "-" if value is None else f"{value:.2f}"
+
+
+def _rate(value: float | None) -> str:
+    return "-" if value is None else f"{value:,.0f} deg/s"
+
+
+@app.command()
+def club(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the hand anchors.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    min_confidence: Annotated[
+        float | None,
+        typer.Option("--min-confidence", help="Below this a frame emits nothing."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Track the club shaft through a clip, refusing where the evidence will not carry it."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if min_confidence is not None:
+        params["club"] = {"min_confidence": min_confidence}
+
+    try:
+        result = _run_with_progress("track_club", params, "Tracking the club")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ClubTrackingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_club(result)
+
+    # Non-zero when nothing was tracked, so a script driving this learns that the
+    # clip produced no shaft rather than reading an empty report as success.
+    if not result.tracked:
+        raise typer.Exit(code=1)
+
+
+def _render_ball(result: BallTrackingReport) -> None:
+    """The departure first, because it is the only thing here anyone wants.
+
+    Laid out unlike every other review in this file, and deliberately. The club,
+    the calibration and the reconstruction reviews all lead with a table of how
+    well the thing was measured, because in each of those the measurement *is* the
+    output. Here the output is one instant, the per-frame track exists only to
+    support it, and a reader shown the coverage first would be reading the working
+    rather than the answer.
+    """
+    if result.departure is not None:
+        departure = result.departure
+        confidence = departure.confidence
+        style = "green" if confidence.overall >= 0.6 else "yellow"
+        console.print(
+            Panel(
+                f"Impact is between frame [bold]{departure.last_seen_frame}[/bold] "
+                f"({departure.last_seen_s:.3f} s), the last frame carrying a ball, and frame "
+                f"[bold]{departure.first_absent_frame}[/bold] ({departure.first_absent_s:.3f} s), "
+                f"the first carrying none.\n"
+                f"That bracket is [bold]{departure.interval_s * 1000:.1f} ms[/bold] wide -- one "
+                "frame interval, and impact is inside it.\n"
+                f"Confidence [{style}]{confidence.overall:.2f}[/{style}]  [dim]= established "
+                f"{confidence.establishment:.2f} x abrupt {confidence.abruptness:.2f} x "
+                f"permanent {confidence.permanence:.2f}[/dim]",
+                title="Ball departure -- an observation, not an estimate",
+                title_align="left",
+                border_style=style,
+            )
+        )
+        if departure.kinematic_frame is not None and departure.delta_s is not None:
+            direction = "early" if departure.delta_s > 0 else "late"
+            console.print(
+                f"[dim]Phase 4's hand-speed peak is frame {departure.kinematic_frame}, which runs "
+                f"{abs(departure.delta_s) * 1000:.0f} ms {direction} against this. "
+                "`analyzer impact` reconciles every estimate.[/dim]"
+            )
+    elif result.established is not None:
+        console.print(
+            "[yellow]A ball was found and it never left.[/yellow] [dim]No impact is reported "
+            "from it -- a practice swing, a clip that ends before contact, and a miss all look "
+            "exactly like this.[/dim]"
+        )
+
+    summary = Table(title="Ball detection", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("found", "[green]YES[/green]" if result.detected else "[yellow]NO[/yellow]")
+    summary.add_row("detector", f"{result.detector.name}  [dim]{result.detector.method}[/dim]")
+    summary.add_row("frames", f"{result.observed_frames} of {result.frame_count} carry a ball")
+    summary.add_row(
+        "coverage before departure",
+        f"{result.pre_departure_coverage:.0%}  [dim](after it the ball is correctly absent, "
+        "so a clip-wide rate would count the follow-through against it)[/dim]",
+    )
+    if result.slow_motion_factor != 1.0:
+        summary.add_row("slow motion", f"{result.slow_motion_factor:g}x  [dim]as supplied[/dim]")
+    console.print(summary)
+
+    established = result.established
+    if established is not None:
+        detail = Table(title="Identification", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "agreed on by",
+            f"{established.frames} of {established.searched_frames} frames searched",
+        )
+        margin_style = (
+            "green"
+            if established.margin >= 0.5
+            else "yellow"
+            if established.margin >= 0.2
+            else "red"
+        )
+        rival = (
+            ""
+            if established.runner_up_distance_torso is None
+            else f"  [dim](next-best stationary candidate "
+            f"{established.runner_up_distance_torso:.2f} torso lengths away)[/dim]"
+        )
+        detail.add_row(
+            "margin",
+            f"[{margin_style}]{established.margin:.2f}[/{margin_style}]{rival}",
+        )
+        detail.add_row(
+            "size",
+            f"{established.radius_torso:.3f} torso lengths radius  [dim](a golf ball is "
+            "0.047)[/dim]",
+        )
+        detail.add_row(
+            "scatter",
+            f"{established.spread_torso:.4f} torso lengths  [dim](a teed ball scatters by the "
+            "detector's noise and nothing else)[/dim]",
+        )
+        console.print(detail)
+
+    quality = result.quality
+    if quality is not None:
+        detail = Table(title="Quality", title_justify="left", expand=True)
+        detail.add_column("Measure", no_wrap=True)
+        detail.add_column("Value", overflow="fold")
+        detail.add_row(
+            "contrast",
+            f"{_opt(quality.median_contrast)} median  [dim](against the ring around it -- "
+            "the fit)[/dim]",
+        )
+        detail.add_row(
+            "margin",
+            f"{_opt(quality.median_margin)} median  [dim](over a co-located rival)[/dim]",
+        )
+        detail.add_row(
+            "stillness",
+            f"{_opt(quality.median_stillness)} median  [dim](against the established "
+            "position)[/dim]",
+        )
+        detail.add_row(
+            "confidence", f"{_opt(quality.median_confidence)} median  [dim](the product)[/dim]"
+        )
+        if quality.radius_px is not None:
+            style = (
+                "red" if quality.radius_px < 3 else "yellow" if quality.radius_px < 5 else "green"
+            )
+            detail.add_row(
+                "ball size on the sensor",
+                f"[{style}]{quality.radius_px:.1f} px[/{style}] radius  [dim](under about 3 px "
+                "a disc has no shape left to be round)[/dim]",
+            )
+        if quality.drift_torso is not None:
+            detail.add_row(
+                "camera drift",
+                f"{quality.drift_torso:.3f} torso lengths  [dim](the ball did not move, so "
+                "this is the camera: handheld, stabilised, or panned)[/dim]",
+            )
+        console.print(detail)
+
+    if result.refusals:
+        counts = ", ".join(
+            f"{reason.value} {count}" for reason, count in sorted(result.refusals.items())
+        )
+        console.print(f"[dim]Frames carrying no ball, by reason: {counts}[/dim]")
+
+    if result.refusal:
+        console.print(f"[yellow]{result.refusal}[/yellow]")
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def ball(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction places the search region.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    min_confidence: Annotated[
+        float | None,
+        typer.Option("--min-confidence", help="Below this a frame emits nothing."),
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Find the ball, and the frame at which it stopped being there."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if min_confidence is not None:
+        params["ball"] = {"min_confidence": min_confidence}
+
+    try:
+        result = _run_with_progress("detect_ball", params, "Looking for the ball")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, BallTrackingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_ball(result)
+
+    # Non-zero when no ball was found at all, so a script driving this learns that
+    # the clip produced nothing rather than reading an empty report as success. A
+    # ball that was found and did not depart is a success: it is the right answer
+    # for a practice swing.
+    if not result.detected:
+        raise typer.Exit(code=1)
+
+
+def _render_impact(result: FusedImpact) -> None:
+    """One instant, then every method's disagreement with it.
+
+    The disagreements are a table rather than a footnote because they are the
+    measurement this command exists to make: how far the estimates that do not
+    see the ball sit from the one that does.
+    """
+    style = "green" if result.observed else "yellow"
+    kind = "observed" if result.observed else "inferred"
+    bracket = (
+        f"impact is inside a {result.uncertainty_s * 1000:.1f} ms bracket"
+        if result.uncertainty_is_bracket and result.uncertainty_s is not None
+        else f"located within about {result.uncertainty_s * 1000:.0f} ms"
+        if result.uncertainty_s is not None
+        else "with no error bar available"
+    )
+    console.print(
+        Panel(
+            f"Frame [bold]{result.frame_index}[/bold] at [bold]{result.timestamp_s:.3f} s[/bold], "
+            f"from [bold]{result.source.value}[/bold] -- {bracket}.\n"
+            f"[dim]{result.methodology}[/dim]",
+            title=f"Impact ({kind})",
+            title_align="left",
+            border_style=style,
+        )
+    )
+
+    table = Table(title="Every estimate, and its distance from the one above", expand=True)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Frame", justify="right")
+    table.add_column("Time", justify="right")
+    table.add_column("Delta", justify="right")
+    table.add_column("Uncertainty", justify="right")
+    table.add_column("Confidence", justify="right")
+    for candidate in result.candidates:
+        chosen = candidate.source is result.source
+        name = f"[bold]{candidate.source.value}[/bold]" if chosen else candidate.source.value
+        delta = (
+            "[dim]reported[/dim]"
+            if chosen
+            else "-"
+            if candidate.delta_s is None
+            else f"{candidate.delta_s * 1000:+.0f} ms / {candidate.delta_frames:+d} f"
+        )
+        table.add_row(
+            name,
+            str(candidate.frame_index),
+            f"{candidate.timestamp_s:.3f} s",
+            delta,
+            "-" if candidate.uncertainty_s is None else f"{candidate.uncertainty_s * 1000:.0f} ms",
+            "-" if candidate.confidence is None else f"{candidate.confidence:.2f}",
+        )
+    console.print(table)
+
+    if not result.observed:
+        console.print(
+            "[dim]Only the ball_departure row is an observation. The rest are read off the "
+            "player's motion, and their uncertainties are a scale rather than a bracket -- "
+            "nothing guarantees the instant is inside them.[/dim]"
+        )
+    for note in result.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def impact(
+    video: Annotated[Path, typer.Argument(help="The clip. A video, not a pose file.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    with_club: Annotated[
+        bool,
+        typer.Option(
+            "--club/--no-club",
+            help="Also track the club for its independent estimate. Costs a second pass.",
+        ),
+    ] = True,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw result as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Reconcile every impact estimate for a clip into one instant with one provenance."""
+    params: dict[str, object] = {
+        "path": str(video),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+        "with_club": with_club,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+
+    try:
+        result = _run_with_progress("locate_impact", params, "Locating impact")
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, FusedImpact)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_impact(result)
+
+    # Exit zero even when the instant was inferred rather than seen. Every other
+    # command here reserves a non-zero exit for "produced nothing usable", and an
+    # inference clearly labelled as one is usable -- a clip with no visible ball
+    # is the ordinary case, not a failure. A script that needs an *observation*
+    # reads `observed` out of `--json`, which exists for exactly that.
+
+
+# --- Phase 12: labelling, datasets and the learned detector -----------------
+#
+# These do not go through `dispatch.call`. Every command above is a thin shell
+# over an RPC method because the desktop app calls the same method; nothing here
+# is reachable from the app, and will not be -- training is a developer operation
+# over a corpus that does not ship. Routing it through the IPC boundary would add
+# a schema to version, a worker to spawn and a progress protocol to thread,
+# in exchange for a capability no UI has.
+#
+# The imports are function-local for the reason `dispatch` uses them: torch is
+# several seconds of import, and `analyzer doctor` must not pay for it.
+
+
+@app.command()
+def label(
+    video: Annotated[Path, typer.Argument(help="The clip to label.")],
+    player: Annotated[str, typer.Option("--player", help="Who is swinging. Required.")],
+    session: Annotated[str, typer.Option("--session", help="Which capture sitting. Required.")],
+    labeller: Annotated[str, typer.Option("--labeller", help="Who is marking. Required.")],
+    swing: Annotated[
+        str | None, typer.Option("--swing", help="Id within the session. Defaults to the filename.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    labels: Annotated[
+        Path | None,
+        typer.Option("--labels", help="Where to write. Defaults to the data directory."),
+    ] = None,
+) -> None:
+    """Step a clip frame by frame and mark the four swing events.
+
+    Player and session are required and have no defaults. They are the grouping
+    keys a held-out split is built from, and a wrong one is invisible: the model
+    trains on a golfer it will later be tested against, and every number after
+    that is inflated with nothing to show for it.
+    """
+    from analyzer.ingestion import ProbeError, probe_video
+    from analyzer.ingestion.reader import open_video
+    from analyzer.ml.labels import write_label
+    from analyzer.ml.labeltool import LabelSession, run_window
+
+    try:
+        metadata = probe_video(video)
+    except ProbeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # `measured_fps` rather than the container's declared rate: a label's
+    # uncertainty is in frames and only becomes a time through this number, so it
+    # has to be the rate the file actually has. None on a one-frame clip, which
+    # the session refuses.
+    session_state = LabelSession(
+        clip_path=video,
+        frames=metadata.timing.frame_count,
+        fps=metadata.timing.measured_fps or metadata.timing.nominal_fps or 0.0,
+        player_id=player,
+        session_id=session,
+        swing_id=swing or video.stem,
+        labeller=labeller,
+        slow_motion_factor=slow_motion,
+        content_key=metadata.content_key,
+    )
+
+    written: list[Path] = []
+
+    def save(produced: object) -> None:
+        written.append(write_label(produced, labels))  # type: ignore[arg-type]
+
+    source = open_video(video)
+    try:
+        run_window(
+            session_state,
+            _FrameWindow(source),
+            window=f"label {video.name}",
+            on_save=save,
+        )
+    finally:
+        source.close()
+
+    if written:
+        console.print(f"[green]Saved[/green] {written[-1]}")
+        return
+    if session_state.dirty:
+        console.print(
+            "[yellow]Nothing was saved; the marks made in this session are gone.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+    console.print("[dim]Nothing marked.[/dim]")
+
+
+class _FrameWindow:
+    """Frame lookup by index for the labelling window.
+
+    A three-line adapter so `labeltool` never imports the ingestion layer: the
+    tool works on images, and which decoder produced them is the caller's
+    business. BGR because that is what OpenCV draws and displays.
+    """
+
+    def __init__(self, source: object) -> None:
+        self._source = source
+
+    def __getitem__(self, index: int):  # type: ignore[no-untyped-def]
+        import cv2  # type: ignore[import-untyped]
+
+        frame = self._source.frame_at(index)  # type: ignore[attr-defined]
+        return cv2.cvtColor(frame.image, cv2.COLOR_RGB2BGR)
+
+
+def _render_label_set(label_set: object) -> None:
+    """The set, its groups, and whether it can be split at all."""
+    from analyzer.ml.splits import plan_split
+
+    clips = label_set.clips  # type: ignore[attr-defined]
+    table = Table(title="Labelled clips", expand=True)
+    table.add_column("Player", no_wrap=True)
+    table.add_column("Sessions", justify="right")
+    table.add_column("Clips", justify="right")
+    table.add_column("Swings", justify="right")
+    table.add_column("No swing", justify="right")
+    for player in sorted({clip.player_id for clip in clips}):
+        owned = [clip for clip in clips if clip.player_id == player]
+        table.add_row(
+            player,
+            str(len({clip.session_key for clip in owned})),
+            str(len(owned)),
+            str(sum(1 for clip in owned if clip.is_swing)),
+            str(sum(1 for clip in owned if not clip.is_swing)),
+        )
+    console.print(table)
+    console.print(
+        f"[dim]{len(clips)} clips, {len(label_set.players)} players, "  # type: ignore[attr-defined]
+        f"{len(label_set.sessions)} sessions, provenance "  # type: ignore[attr-defined]
+        f"{label_set.provenance.value}, digest {label_set.digest()[:12]}[/dim]"  # type: ignore[attr-defined]
+    )
+
+    plan = plan_split(list(clips), label_digest=label_set.digest())  # type: ignore[attr-defined]
+    if plan.refused:
+        console.print(
+            Panel(
+                plan.refusal or "",
+                title="No split is possible",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        return
+    counts = ", ".join(f"{role.value} {count}" for role, count in plan.clips.items())
+    console.print(f"[green]A split exists[/green]: {counts}")
+    for note in plan.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def labels(
+    directory: Annotated[
+        Path | None,
+        typer.Option("--labels", help="Where the labels are. Defaults to the data directory."),
+    ] = None,
+) -> None:
+    """List the labelled set, and say whether it can support a held-out split."""
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+
+    try:
+        label_set = load_label_set(directory, strict=False)
+    except LabelStoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if not label_set.clips:
+        console.print(
+            Panel(
+                "No labels yet. Phase 12's machinery is built and has nothing to run on.\n"
+                "Produce one with: analyzer label <clip> --player <id> --session <id> "
+                "--labeller <id>",
+                title="Empty label set",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    _render_label_set(label_set)
+
+
+def _render_dataset(summary: object) -> None:
+    table = Table(title="Dataset", expand=True)
+    table.add_column("Quantity", no_wrap=True)
+    table.add_column("Value", justify="right")
+    rows = (
+        ("clips", f"{summary.clips} ({summary.swings} swings, {summary.non_swings} without)"),  # type: ignore[attr-defined]
+        ("players / sessions", f"{summary.players} / {summary.sessions}"),  # type: ignore[attr-defined]
+        ("samples", f"{summary.samples} at {summary.sample_rate_hz:g} Hz"),  # type: ignore[attr-defined]
+        ("class imbalance", f"{summary.imbalance_ratio:.1f}x"),  # type: ignore[attr-defined]
+        ("feature spec", f"v{summary.feature_version} {summary.feature_digest[:12]}"),  # type: ignore[attr-defined]
+        ("label digest", summary.label_digest[:12]),  # type: ignore[attr-defined]
+        ("provenance", summary.provenance.value),  # type: ignore[attr-defined]
+        (
+            "resolution floor",
+            f"{summary.resample_floor_ms:.1f} ms grid"  # type: ignore[attr-defined]
+            + (
+                f" + {summary.median_label_uncertainty_ms:.1f} ms labels"  # type: ignore[attr-defined]
+                if summary.median_label_uncertainty_ms is not None  # type: ignore[attr-defined]
+                else ""
+            ),
+        ),
+    )
+    for name, value in rows:
+        table.add_row(name, value)
+    console.print(table)
+
+    classes = Table(title="Samples per class", expand=True)
+    classes.add_column("Class", no_wrap=True)
+    classes.add_column("Samples", justify="right")
+    classes.add_column("Share", justify="right")
+    for frame_class, count in summary.class_samples.items():  # type: ignore[attr-defined]
+        classes.add_row(
+            frame_class.value,
+            str(count),
+            f"{summary.class_fraction[frame_class]:.1%}",  # type: ignore[attr-defined]
+        )
+    console.print(classes)
+
+    for entry in summary.dropped:  # type: ignore[attr-defined]
+        console.print(f"[yellow]dropped:[/yellow] {entry}")
+    for note in summary.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def dataset(
+    directory: Annotated[
+        Path | None, typer.Option("--labels", help="Where the labels are.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    search: Annotated[
+        list[Path] | None,
+        typer.Option("--search", help="Directories to look for moved footage in."),
+    ] = None,
+) -> None:
+    """Build the training arrays from the labelled set, and report what they are."""
+    from analyzer.ml.dataset import DatasetError, build_dataset
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+    from analyzer.ml.provider import cached_pose_provider
+
+    try:
+        label_set = load_label_set(directory)
+        built = build_dataset(label_set, cached_pose_provider(model, search=tuple(search or ())))
+    except (DatasetError, LabelStoreError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    _render_dataset(built.summary)
+
+
+def _render_split(report: object) -> None:
+    table = Table(title="Split, grouped by player", expand=True)
+    table.add_column("Role", no_wrap=True)
+    table.add_column("Players", justify="right")
+    table.add_column("Clips", justify="right")
+    for role, count in report.clips.items():  # type: ignore[attr-defined]
+        table.add_row(role.value, str(report.players[role]), str(count))  # type: ignore[attr-defined]
+    console.print(table)
+
+    leak = report.leakage  # type: ignore[attr-defined]
+    if leak is not None:
+        style = "green" if leak.passed else "bold red"
+        console.print(
+            f"[{style}]leak check: players {leak.player_overlap}, sessions "
+            f"{leak.session_overlap}, clips {leak.clip_overlap}[/{style}]"
+        )
+    for note in report.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+def _render_evaluation(report: object, title: str) -> None:
+    table = Table(title=title, expand=True)
+    table.add_column("Event", no_wrap=True)
+    table.add_column("Scored", justify="right")
+    table.add_column("Missed", justify="right")
+    table.add_column("MAE", justify="right")
+    table.add_column("Bias", justify="right")
+    table.add_column("In bracket", justify="right")
+    for error in report.events:  # type: ignore[attr-defined]
+        table.add_row(
+            error.event.value,
+            str(error.scored),
+            str(error.missed),
+            "-" if error.mae_ms is None else f"{error.mae_ms:.1f} ms",
+            "-" if error.bias_ms is None else f"{error.bias_ms:+.1f} ms",
+            "-"
+            if error.within_label_uncertainty is None
+            else f"{error.within_label_uncertainty:.0%}",
+        )
+    console.print(table)
+    console.print(
+        f"[dim]macro F1 {report.macro_f1:.3f} over {report.samples} tracked samples; "  # type: ignore[attr-defined]
+        f"this set resolves {report.noise_floor_ms:.1f} ms[/dim]"  # type: ignore[attr-defined]
+    )
+    if not report.claims_permitted:  # type: ignore[attr-defined]
+        console.print(
+            Panel(
+                report.claim_refusal or "",  # type: ignore[attr-defined]
+                title="Not publishable",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+    for note in report.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def train(
+    directory: Annotated[
+        Path | None, typer.Option("--labels", help="Where the labels are.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Everything random is seeded from this.")] = 0,
+    epochs: Annotated[
+        int | None, typer.Option("--epochs", help="Maximum passes over the set.")
+    ] = None,
+    device: Annotated[
+        str, typer.Option("--device", help="torch device. cpu is the default.")
+    ] = "cpu",
+    search: Annotated[
+        list[Path] | None,
+        typer.Option("--search", help="Directories to look for moved footage in."),
+    ] = None,
+) -> None:
+    """Train the learned detector, score it against the rules, and register it.
+
+    Every step refuses rather than improvising: no labels, no dataset; too few
+    players, no split; synthetic or small held-out set, no publishable number.
+    A run that gets all the way through still prints what its score may not be
+    used for.
+    """
+    from analyzer.contracts.ml import ModelCard, TCNConfig
+    from analyzer.ml.compare import compare_detectors
+    from analyzer.ml.dataset import DatasetError, build_dataset
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+    from analyzer.ml.provider import cached_pose_provider
+    from analyzer.ml.registry import model_id, save_model
+    from analyzer.ml.splits import SplitRefused, split_dataset
+    from analyzer.ml.train import train as run_training
+
+    try:
+        label_set = load_label_set(directory)
+        built = build_dataset(label_set, cached_pose_provider(model, search=tuple(search or ())))
+    except (DatasetError, LabelStoreError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    _render_dataset(built.summary)
+
+    try:
+        split = split_dataset(built, seed=seed)
+    except SplitRefused as exc:
+        console.print(
+            Panel(
+                exc.report.refusal or "",
+                title="Refusing to split",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1) from exc
+
+    _render_split(split.report)
+
+    config = TCNConfig() if epochs is None else TCNConfig(epochs=epochs)
+    identifier = model_id(
+        label_digest=built.summary.label_digest,
+        feature_digest=built.summary.feature_digest,
+        seed=seed,
+        config=config,
+    )
+    with console.status("Training"):
+        trained, report = run_training(
+            split.train,
+            split.val,
+            config=config,
+            seed=seed,
+            device=device,
+            label_digest=built.summary.label_digest,
+        )
+    console.print(
+        f"[dim]{report.parameters} parameters, receptive field "
+        f"{report.receptive_field_samples} samples ({report.receptive_field_s:.2f} s), "
+        f"best epoch {report.best_epoch} of {len(report.epochs)}, "
+        f"{report.elapsed_s:.1f} s[/dim]"
+    )
+    for note in report.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+    comparison = compare_detectors(
+        trained,
+        split.test,
+        model_id=identifier,
+        device=device,
+        label_digest=built.summary.label_digest,
+    )
+    _render_evaluation(comparison.rule, "Rule-based detector, held-out clips")
+    _render_evaluation(comparison.model, "Learned detector, held-out clips")
+
+    rows = Table(title="Same clips, same metric", expand=True)
+    rows.add_column("Event", no_wrap=True)
+    rows.add_column("Rules", justify="right")
+    rows.add_column("Model", justify="right")
+    rows.add_column("Difference", justify="right")
+    rows.add_column("Verdict", no_wrap=True)
+    for row in comparison.rows:
+        rows.add_row(
+            row.event.value,
+            "-" if row.rule_mae_ms is None else f"{row.rule_mae_ms:.1f} ms",
+            "-" if row.model_mae_ms is None else f"{row.model_mae_ms:.1f} ms",
+            "-" if row.difference_ms is None else f"{row.difference_ms:+.1f} ms",
+            row.verdict,
+        )
+    console.print(rows)
+    console.print(comparison.verdict)
+
+    card = ModelCard(
+        model_id=identifier,
+        created_at=datetime.now(UTC).isoformat(),
+        architecture="dilated TCN, per-sample classification",
+        config=config,
+        feature_spec=built.spec,
+        feature_digest=built.summary.feature_digest,
+        label_digest=built.summary.label_digest,
+        dataset=built.summary,
+        split=split.report,
+        training=report,
+        evaluation=comparison.model,
+    )
+    directory_written = save_model(trained, card)
+    console.print(f"[green]Registered[/green] {identifier} in {directory_written}")
+
+
+@app.command()
+def models() -> None:
+    """List the trained models, and what each one is allowed to claim."""
+    from analyzer.ml.registry import list_models
+
+    cards = list_models()
+    if not cards:
+        console.print("[dim]No trained models. Run `analyzer train`.[/dim]")
+        raise typer.Exit(code=1)
+
+    table = Table(title="Model registry", expand=True)
+    table.add_column("Model", no_wrap=True)
+    table.add_column("Labels", no_wrap=True)
+    table.add_column("Features", no_wrap=True)
+    table.add_column("Held out", justify="right")
+    table.add_column("Macro F1", justify="right")
+    table.add_column("Publishable", no_wrap=True)
+    for card in cards:
+        evaluation = card.evaluation
+        table.add_row(
+            card.model_id,
+            card.label_digest[:8],
+            card.feature_digest[:8],
+            "-" if evaluation is None else f"{evaluation.clips} clips / {evaluation.players}p",
+            "-" if evaluation is None else f"{evaluation.macro_f1:.3f}",
+            "-" if evaluation is None else ("yes" if evaluation.claims_permitted else "no"),
+        )
+    console.print(table)
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed

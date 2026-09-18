@@ -111,20 +111,34 @@ filtering/      smoothing, gap policy, derivatives
 phases/         swing event detection
 sync/           relating two cameras' clocks to each other
 calibration/    what a pixel means: the lens, and where the cameras stand
+reconstruction/ where two calibrated rays meet: metres, in three dimensions
+club/           the shaft: a ray from the hands, and when to emit nothing
+ball/           the ball at rest, and the frame it stops being there
+impact.py       four estimates of one instant, ranked rather than averaged
 biomechanics/   measured metrics, with units, confidence and methodology
+ml/             labels, features, splits, a learned detector, and what may be claimed
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `coaching` as a sibling package, and Protocol-typed seams
-(`ClubDetector`, `BallDetector`) following `ingestion`'s `FrameSource`, `pose`'s
-`PoseEstimator` and `filtering`'s `FilterStage`. Golf-specific reasoning is
-confined to `phases`, `sync`, `biomechanics` and `coaching`; everything below is
-general computer vision that would serve any moving body. `sync` is the
-marginal member of that set: its mechanism — an affine time map and a masked
-cross-correlation — would align any pair of recordings of anything, and only its
-choice of signal (hand speed, and the four named swing events) is golf-specific.
+`ml` is the one package with no path to the desktop app, and deliberately: it is
+a developer's workbench, not a feature. Training runs over a corpus that does not
+ship, `scripts/gen_types.py` exports nothing from it, and `dispatch` has no method
+that reaches it. Its dependency direction is the ordinary one — it reads
+`filtering` and `phases` and is read by nothing — so removing it would leave the
+engine intact, which is the correct relationship between an evaluation harness
+and the thing it evaluates.
+
+Later phases add `coaching` as a sibling package. Golf-specific reasoning is
+confined to `phases`, `sync`, `club`, `ball`, `ml`, `biomechanics` and
+`coaching`; everything below is
+general computer vision that would serve any moving body. `sync` and `club` are
+the marginal members of that set. `sync`'s mechanism — an affine time map and a
+masked cross-correlation — would align any pair of recordings of anything, and
+only its choice of signal (hand speed, and the four named swing events) is
+golf-specific; `club`'s would follow any rigid rod held in a pair of hands, and
+only the assumption that there is one is about golf.
 
 `projects` sits apart from the rest, because it holds the only state here that
 cannot be recomputed. Everything else is either input the user already has or a
@@ -137,8 +151,16 @@ under `data_dir()`, which backup tools do not skip.
 in the same way `sync` is: nothing below it requires a calibration, and
 everything above it is better with one. It is general computer vision — a
 Charuco board and a lens model know nothing about golf — and it is the only
-package whose output is a statement about the physical world rather than about a
-picture of it.
+package below `reconstruction` whose output is a statement about the physical
+world rather than about a picture of it.
+
+`reconstruction` is the only package with **three** prerequisites, and it refuses
+by name when any is missing: a stereo calibration (`calibration`), an alignment
+between the two clips' clocks (`sync`), and a filtered trajectory in each
+(`filtering`). That makes it the one place in the engine where the optional
+layers stop being optional. It is still general computer vision — nothing in a
+triangulation knows what a golf swing is — and it is the layer every earlier
+phase has been qualifying its output against.
 
 `coordinates` sits below everything and owns the one conversion the whole system
 depends on. IMAGE space, as a pose estimator emits it, is anisotropic and has y
@@ -151,12 +173,21 @@ correctly signed in the velocity and acceleration rather than needing a second
 correction kept in step by hand. See
 [coordinate-systems.md](coordinate-systems.md).
 
-`biomechanics` has one entry point, `compute_metrics(filtered, phases)`. It
-measures the **camera view** before anything else, because a projected number is
-only interpretable once the direction it was taken from is known, and tags every
-metric with it — the same spine tilt is lateral side bend face-on and forward
-posture angle down the line. Metrics a view cannot support are refused centrally
-rather than per family, so a family added later cannot forget the check.
+`biomechanics` has one entry point, `compute_metrics(filtered, phases, config,
+calibration, reconstruction)`. It measures the **camera view** before anything
+else, because a projected number is only interpretable once the direction it was
+taken from is known, and tags every metric with it — the same spine tilt is
+lateral side bend face-on and forward posture angle down the line. Metrics a view
+cannot support are refused centrally rather than per family, so a family added
+later cannot forget the check.
+
+Its fifth argument is the reason the layering above is worth reading twice.
+`compute_metrics` measures **one clip**, and a reconstruction is a fact about
+**two**, so it arrives as an argument rather than being computed here. Absent, the
+spatial metrics are refused by name; on a project without a stereo rig they are
+refused one step earlier by the calibration gate, whose reason names the
+calibration rather than the missing reconstruction — the more actionable of the
+two answers, and so the one that wins.
 
 ## Video ingestion
 
@@ -340,8 +371,18 @@ noise.
 Impact is a kinematic estimate rather than an observation: nothing at this layer
 sees the ball or the club, and hand speed peaks slightly before the club reaches
 the ball. It is corroborated against an independent signal — the lowest point
-the hands reach after the top — and Phases 10 and 11 replace that corroboration
-with real evidence.
+the hands reach after the top.
+
+Phases 10 and 11 replaced that corroboration with real evidence, and **this layer
+did not change**. `analyzer.impact` sits above the three phases that produce an
+estimate and belongs to none of them; it ranks them rather than averaging them,
+reports one instant with a named provenance and an error bar, and keeps the
+others beside it with their deltas. Nothing there writes back down here, because
+an engine in which a number changes depending on which other analyses happened to
+run is an engine whose outputs cannot be compared across clips. On the one
+reference clip where the ball can be seen leaving, that comparison says the arc
+low lands within a frame of the observation and the speed peak twenty frames
+from it.
 
 ## Two-camera synchronisation
 
@@ -419,7 +460,7 @@ stays at 0.21–0.27 px across a range over which the focal length error moves f
 
 **The principled-looking replacement fails backwards.** OpenCV returns a standard
 deviation for every intrinsic, propagated through the fit's Jacobian, and the
-design here assumed that would catch it. It is *smallest* where the answer is
+design here assumed that would catch it. It is _smallest_ where the answer is
 worst — 0.012% on a capture wrong by 6% — because the distortion coefficients
 absorb the degeneracy and leave a tightly determined wrong answer. A covariance
 computed from one set of views cannot see outside them.
@@ -438,7 +479,7 @@ CoverageReport        what the views could possibly determine   the gate
 values rather than two so that nothing can read it as one. `INTRINSICS` means the
 lens can be removed from a landmark — worth 171 px at the frame edge on an
 ordinary phone, inherited by every angle and distance measured above it — and
-means a pixel is a known *direction*. It is not a position: the distance along
+means a pixel is a known _direction_. It is not a position: the distance along
 that direction is exactly what the projection destroyed. `apply.bearings` returns
 unit vectors for that reason, and there is deliberately no function here that
 returns a 3D point. Two of those rays meet, and that is Phase 9.
@@ -467,8 +508,237 @@ either way, which is why the system measures this rather than advising it.
 The one failure a clock cannot catch is aliasing — board stations a second apart
 with an offset wrong by exactly a second pair each frame with its neighbour,
 simultaneous to the millisecond and showing the board in two different places.
-The fit's residual catches that, so stereo *does* gate on reprojection error:
+The fit's residual catches that, so stereo _does_ gate on reprojection error:
 there it is measuring a correspondence rather than a model's fit to its own data.
+
+## Multi-view 3D reconstruction
+
+Two calibrated rays meet, and the result is metres. This is the layer every
+earlier phase has been qualifying its output against — and, like the calibration
+below it, its central finding is a negative.
+
+**The reprojection residual is blind along the epipolar line.** A point detected
+in camera 1 defines a ray, and every 3D point on that ray projects into camera 2
+along a single line. Split camera 2's detection error into two components: the
+part _across_ that line has no 3D explanation and lands in the residual, and the
+part _along_ it is explained perfectly by a point further up or down the ray. The
+first is visible, the second is invisible, and the second is the one that moves
+the answer in depth.
+
+Measured, it is not merely insensitive but exactly blind — displacing every
+landmark along its epipolar line moves the reconstruction by a centimetre at a
+residual of 0.00 px throughout:
+
+| along-epipolar displacement | 3D error | reprojection | bone variation |
+| --------------------------- | -------- | ------------ | -------------- |
+| 0 px                        | 0.0 mm   | **0.00 px**  | 2.6%           |
+| 2 px                        | 2.7 mm   | **0.00 px**  | 9.6%           |
+| 8 px                        | 10.8 mm  | **0.00 px**  | 37.8%          |
+
+For the pair this system recommends — one face-on, one down-the-line — the
+epipolar lines run nearly horizontally in both images, and nothing makes a pose
+estimator's horizontal error smaller than its vertical one. Roughly half the
+error by variance lands where the residual cannot see it.
+
+So three numbers are reported and each is labelled with its own question, the
+same shape `CalibrationQuality` uses one layer down:
+
+```
+reprojection_px    how well the two views agree, across the epipolar line
+convergence_deg    what the capture could possibly determine        the gate
+bone variation     an independent check the residual cannot make
+uncertainty_m      what the first two imply, in metres          the answer
+```
+
+**The gate is the ray convergence angle**, because depth error scales as `1/sin`
+of it and it is a property of where the tripods went rather than of the fit. A
+sweep from 90° to 8° of camera separation moves the error 4.7x and leaves the
+residual flat at 0.84 px. [ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
+
+**Bone length is the independent check**, because a point sliding along its ray
+changes its distance to its neighbours, and a bone does not change length during a
+swing. It needs no ground truth and no anatomical table: the _variation_ across a
+clip is error whatever the absolute value is.
+
+```
+two filtered clips
+  └─ pairing       resample the target onto the reference clock
+      └─ triangulate   DLT, then Gauss-Newton on reprojection error
+          └─ gate      convergence, then residual, then uncertainty
+              └─ skeleton   bones and symmetry, on what survived
+```
+
+**Phase 8's capture instruction has no analogue here.** Stereo calibration
+survives unsynchronised cameras because the pairing error is `sync_error x
+image_speed`, and a board held still drives the second factor to zero. Nothing in
+a swing is still: hands reach thousands of pixels per second, so pairing nearest
+frames costs 2.4–12.3 mm at the hands depending on the frame rate. The target
+clip is therefore **resampled** onto the reference clock by cubic Hermite
+interpolation of the position and velocity Phase 3 already fitted — no new
+kernel, no second smoothing pass — and what survives is the map's own uncertainty,
+converted into pixels the same way Phase 8 converted it.
+
+**What comes out is CAMERA, not WORLD.** Triangulation gives metres centred on
+the reference camera. A scene-fixed frame needs a gravity direction and a target
+line, and a stereo pair supplies neither; both would fall out of a capture that
+laid the board flat on the ground, which the protocol does not currently ask for.
+Every length, angle and speed between two reconstructed points is unaffected,
+because none of them depends on the frame — which is why the spatial metrics are
+rotations about the body's own measured spine axis rather than about a vertical.
+
+## Club tracking
+
+The first layer that measures an **object the player is holding** rather than the
+player. Everything below reads landmarks a model was trained to find, which
+arrive with the model's own opinion of how well it saw them. A golf shaft has no
+model, no landmark index and no reported visibility. It has edges, and the whole
+of this layer is about what edges can and cannot be asked.
+
+```
+video frame + hand anchor
+  └─ roi        a disc of 3.2 torso lengths around the hands
+      └─ canny  thresholds from the region's own median, not fixed
+          └─ hough_p   line fragments, not shafts
+              └─ geometry  which fragments could be a club somebody is holding
+                  └─ track   one per frame, or a named reason there is none
+```
+
+**A shaft is a ray from the hands: an origin, a direction, and often no length.**
+Those three are not equally trustworthy and the contract keeps them apart. The
+origin is supplied by the pose layer, the direction is determined well — half a
+degree, wherever the club is found at all — and how far along the ray the club
+_ends_ is frequently not determined at all. That is Phase 8's split in a
+different medium: `apply.bearings` returns unit vectors and offers no function
+turning one into a point, because a calibrated pixel is a direction and the
+distance along it is what the projection destroyed. Here the distance is what
+motion blur destroyed, and `reaches_head` says whether the question was answered.
+
+Two things shorten a segment and one view cannot separate them: the head was
+smeared, or the club was pointing at the camera and is genuinely short in the
+picture — the same foreshortening Phase 5 measures rotation from. A stereo pair
+would separate them.
+
+**Three numbers, each labelled with the question it answers**, which is the shape
+Phases 8 and 9 both arrived at because the failure is the same shape again:
+
+```
+support        how much edge evidence backs this line        the fit
+margin         whether anything else in frame fits as well   a check
+phase coverage whether the frames that matter have any       the gate
+```
+
+**Support is not the quality, and through the downswing it is anti-correlated
+with correctness.** A Hough transform prefers whatever is longest, straightest
+and sharpest. The club is the fastest thing in the frame and therefore the
+blurriest; the door frame behind the player is stationary and stays sharp. So
+evidence ranks the background _above_ the club exactly where the club matters
+most — measured, a door frame through the hands scores the same support and more
+length than a sharp club, and is the only candidate left once the club smears.
+
+**The aggregate detection rate hides the downswing**, and that is the second
+finding rather than a restatement of the first. Detection is easy where the club
+is slow, and address plus the follow-through are most of a clip:
+
+| shutter         | overall | address | **downswing** |
+| --------------- | ------- | ------- | ------------- |
+| 1/4 of interval | 93%     | 100%    | **83%**       |
+| 180°            | 86%     | 100%    | **65%**       |
+| 360°            | 64%     | 100%    | **25%**       |
+
+The address column carries no information about the capture at all.
+[ADR-0014](decisions/ADR-0014-club-evidence-and-coverage.md).
+
+**The detector is stateless and the tracker is offline**, which is the opposite
+of `PoseEstimator` and is what Phase 4's nested searches buy one layer along. A
+frame-by-frame tracker starts at frame zero and commits; this one runs over a
+clip that already exists, so it seeds where the evidence is **best** — address,
+or the top — and grows outward into the downswing, where a forward-only tracker
+would arrive carrying whatever it had picked up on the way. Keeping the detector
+unaware of the tracker's belief also removes the failure that makes classical
+trackers untrustworthy: a search narrowed by the current belief finds what it
+expects and confirms it.
+
+**The prediction scores candidates and never supplies one.** That is Phase 3's
+gap rule in a different medium: a value produced where there is no observation is
+an invention however smooth it looks, so a frame with nothing acceptable leaves a
+hole. Most of what this layer produces on consumer footage is holes.
+
+**Blur is a capture bound with no processing fix.** A smeared shaft does not
+become a weaker line, it stops being one — found in 100% of frames up to about
+9 px of smear and 0% past 14, with the angle right to half a degree either side
+of nothing. So there is no sensitivity setting that trades detection rate against
+accuracy, because there is nothing to trade. What the system reports instead is
+`max_blur_px`: the club head's measured image speed times the frame interval,
+which is the smear at a 360° shutter and an upper bound on what the clip actually
+carried, since nothing in a video file records the exposure.
+
+`club` sits with `phases`, `sync` and `biomechanics` on the golf-specific side of
+the line drawn above, and it is the second marginal member of that set for the
+reason `sync` is the first: its mechanism would follow any rigid rod held in a
+pair of hands, and only the assumption that there is one is about golf.
+
+## Ball detection
+
+The first thing in this engine that measures by **watching something stop
+existing**. Every layer below reads a presence and the reading is taken off
+something in the picture; a golf ball sits in plain view doing nothing for
+hundreds of frames and then is not there, and the instant this layer exists to
+find is the boundary between those two states.
+
+**The ball in flight is the obvious target and is unanswerable.** It leaves at
+about 70 m/s, which is a metre-long smear at 1/60 s and out of frame before it
+has been drawn sharply once — the wall Phase 10 already met with the club head.
+The ball at rest is the opposite: still, high-contrast, and in one place for
+longer than any event in the clip lasts. So the measurement is taken where the
+evidence is, and impact is read off the edge of that interval.
+
+**The error bar is a bracket, and that is the layer's whole contribution.**
+Nothing here estimates a peak, fits a curve or smooths a signal, so nothing here
+has a resolution that degrades: the ball was present at one frame and absent at
+the next, so impact is _inside_ an interval one frame wide, at any frame rate.
+Every other impact estimate in this project carries a _scale_ instead — the width
+of the smoothing window the clip's frame rate forced — and `FusedImpact.uncertainty_is_bracket`
+exists so a consumer cannot read one as the other.
+
+**The identification is circular and the circle is closed rather than hidden.**
+Nothing else in a golf frame is a small still round object that disappears once
+and never returns, so that fact is what picks the ball out of the stationary
+candidates — and it is also what is being reported. The evidence is therefore
+partitioned between two confidences computed from disjoint inputs:
+`BallConfidence` scores one frame's observation, `DepartureConfidence` scores the
+instant, and neither reads the other's inputs. What survives the partition is the
+one thing a circular identification genuinely cannot check — if two stationary
+objects both depart, the clip cannot say which was the ball — and that is
+reported as `EstablishedBall.margin` rather than solved.
+
+**The region is anchored to the ground.** A teed ball rests on it, and the pose
+layer knows where it is because it knows where the ankles are. "Within a club
+length of the hands" is also true and is much weaker: a disc centred chest-high
+that on a vertical phone clip contains the sky, where a patch of cloud between
+two branches is rounder, better resolved and stiller than a ball a few pixels
+across. That was not a hypothetical — it was the reference clip's first result.
+[ADR-0015](decisions/ADR-0015-ball-departure-and-impact-precedence.md).
+
+## Impact, reconciled
+
+`analyzer.impact` sits above `phases`, `club` and `ball` and belongs to none of
+them, which is why it is a module rather than a member of any. Four estimates of
+one instant now exist across three phases, and reporting an instant from several
+places with several provenances is exactly the failure `contracts/phases.py`
+warned about when it kept tempo out of Phase 4.
+
+They are **ranked, not averaged**. Three are biased in a known direction and one
+is not; averaging an unbiased observation with a biased proxy moves the answer
+away from the truth while producing a provenance nobody can reason about. The
+order is a property of what each source measures rather than of how confident a
+particular clip's version happens to be — an observation beats a measurement of a
+coinciding quantity, which beats a proxy, and a proxy with no known bias beats one
+with a known one.
+
+The disagreements are kept, and they are not diagnostics: `kinematic − ball` is
+how the bias of the hand-speed peak becomes a number rather than a caveat, and an
+average would have destroyed the only quantity this layer adds that Phase 12 will
+need. Nothing here writes back down into the phases it reads.
 
 ## Projects
 
@@ -532,7 +802,7 @@ benchmark measures both backends rather than assuming the hardware one wins.
 
 This generalises further: the system never reports a capability it has not
 measured. Phase 8 extends it to calibration, where the rule needed sharpening:
-a capability must be gated on evidence about the *capture*, not on the estimator's
+a capability must be gated on evidence about the _capture_, not on the estimator's
 opinion of its own fit. Both of the numbers a calibration reports about itself
 pass a capture whose focal length is wrong by tens of percent. Later phases apply
 the same rule to detector confidence gating club and ball output.
@@ -642,14 +912,42 @@ the offset.
 Aligning two 312-frame clips costs 0.5 ms on signals already filtered. Nothing is
 cached, for the same measured reason as Phase 3.
 
+### 3D reconstruction (Phase 9, 2026-09-17)
+
+`scripts/benchmark_reconstruct.py`. **Not a real capture**: a synthetic body
+whose 3D positions are inputs, filmed by two simulated cameras. There is no pose
+estimator in the fixture, so no motion blur, no occluded hip and no mis-tracked
+wrist — the errors are a **floor**.
+
+Accuracy over the eight landmarks that move, against isotropic landmark noise:
+
+| landmark sigma | median     | p95         | reprojection | uncertainty |
+| -------------- | ---------- | ----------- | ------------ | ----------- |
+| 0.5 px         | 1.0 mm     | 1.9 mm      | 0.16 px      | 1.0 mm      |
+| **2.7 px**     | **5.5 mm** | **10.4 mm** | 0.85 px      | 5.4 mm      |
+| 5.0 px         | 10.1 mm    | 19.3 mm     | 1.55 px      | 10.1 mm     |
+
+2.7 px is the 0.0014 frame widths Phase 3 measured on real footage, at 1920 px
+wide.
+
+The two sweeps that decided the design both show the residual refusing to move
+while the answer does — along the epipolar line it is _exactly_ 0.00 px while the
+error reaches 10.8 mm, and across a camera separation sweep from 90° to 8° it is
+flat at 0.84 px while the error grows 4.7x. See the section above and
+[ADR-0013](decisions/ADR-0013-epipolar-blindness.md).
+
+Reconstructing 312 frames (8,778 points) costs 70 ms, against ~95 ms to filter
+both clips and ~1.3 s per clip to extract poses. Nothing is cached, for the same
+measured reason as Phase 3.
+
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                      |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (758)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                             |
-| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                       |
-| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                 |
+| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                                                                            |
+| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (905)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction, club tracking |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                                                                                   |
+| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                                                       |
+| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                                                   |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

@@ -32,6 +32,12 @@ export type MetricName =
   | "peak_hand_speed"
   | "lead_arm_angle"
   | "trail_arm_angle"
+  | "shoulder_turn_3d"
+  | "pelvis_turn_3d"
+  | "x_factor_3d"
+  | "lead_arm_angle_3d"
+  | "trail_arm_angle_3d"
+  | "peak_hand_speed_3d"
   | "backswing_duration"
   | "downswing_duration"
   | "follow_through_duration"
@@ -50,7 +56,7 @@ export type MetricGroup = "posture" | "rotation" | "arms" | "timing";
  * is not a metric unit and does not pretend to be one -- it is a ratio of two
  * measured image distances, which is exactly what survives an unknown camera.
  */
-export type MetricUnit = "degrees" | "seconds" | "ratio" | "torso_lengths" | "torso_lengths_per_s";
+export type MetricUnit = "degrees" | "seconds" | "ratio" | "torso_lengths" | "torso_lengths_per_s" | "metres_per_s";
 /**
  * What kind of claim a metric's value is.
  *
@@ -77,8 +83,23 @@ export type MetricUnit = "degrees" | "seconds" | "ratio" | "torso_lengths" | "to
  *     was square to the camera at its reference frame, and it is blind to
  *     direction -- a turn and its mirror image shorten identically -- so the
  *     value is a magnitude.
+ *
+ * SPATIAL
+ *     A length, angle or speed between points **reconstructed in three
+ *     dimensions** from two calibrated views of the same instant. The only
+ *     basis here that is a statement about the body rather than about a
+ *     picture of it, and the reason every other one is named the way it is.
+ *
+ *     It is also the only basis whose meaning does not depend on the camera
+ *     view: a distance between two 3D points is the same distance from
+ *     anywhere, so a `SPATIAL` metric carries one anatomical reading instead
+ *     of one per view. What it does depend on is the *reconstruction*, whose
+ *     own error is reported per point and propagated into the metric's
+ *     `uncertainty` -- a 3D number is not automatically a better number, it is
+ *     a differently-conditioned one, and the conditioning is the ray
+ *     convergence angle rather than the camera position.
  */
-export type MetricBasis = "temporal" | "image_plane" | "projected_angle" | "foreshortened_angle";
+export type MetricBasis = "temporal" | "image_plane" | "projected_angle" | "foreshortened_angle" | "spatial";
 /**
  * The instants that divide a swing.
  *

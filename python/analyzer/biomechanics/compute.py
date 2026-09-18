@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from analyzer.biomechanics import arms, posture, rotation, timing
+from analyzer.biomechanics import arms, posture, rotation, spatial, timing
 from analyzer.biomechanics.anchors import build_anchors
 from analyzer.biomechanics.body import body_from
 from analyzer.biomechanics.registry import REGISTRY, definition
@@ -42,6 +42,7 @@ from analyzer.contracts.metrics import (
 )
 from analyzer.contracts.phases import SwingPhases
 from analyzer.filtering.landmarks import FilteredSequence
+from analyzer.reconstruction import ReconstructedSequence
 
 
 def _refuse_all(reason: str) -> list[RefusedMetric]:
@@ -117,14 +118,18 @@ def _apply_calibration_gate(
     separately -- a face-on camera contains a shoulder turn whether or not it is
     calibrated, and a stereo rig cannot recover a quantity its footage never saw.
 
-    **On this build it blocks nothing, and that is the point being asserted
-    rather than an oversight.** Every metric in the registry is a measurement of
-    the image plane, which an uncalibrated camera supplies; a calibration makes
-    them cleaner by removing the lens and does not promote any of them to a
-    statement about three dimensions. The gate exists now, enforced and tested,
-    so that Phase 9's metrics are refused by machinery that predates them --
-    rather than by a check written on the same day as the first metric that
-    needs it, when the metric is the reason to weaken it.
+    **It now blocks something.** Through Phase 8 every metric in the registry
+    measured the image plane, which an uncalibrated camera supplies, so the gate
+    was built, enforced and tested against a set it refused nothing from -- on
+    purpose, so that Phase 9's metrics would meet machinery that predated them
+    rather than a check written on the day the first metric needed it, when the
+    metric is the reason to weaken it. Phase 9 added six metrics declaring
+    `STEREO`, and on an uncalibrated project this is where they are refused.
+
+    The refusal names the calibration rather than the symptom, for the same
+    reason the view gate does: "X-factor (3D) needs a stereo calibration" is a
+    thing a person can act on, and "no reconstruction was supplied" is a
+    restatement of the same fact one layer further from its cause.
     """
     blocked = {name for name, entry in REGISTRY.items() if not status.at_least(entry.requires)}
     if not blocked:
@@ -169,9 +174,13 @@ def _calibration_warnings(status: CalibrationStatus) -> list[str]:
             "same instant, which is Phase 9."
         ]
     return [
-        "Both cameras are calibrated and their relative pose is known, so metric-scale "
-        "3D reconstruction is possible for this project. The metrics below are still "
-        "the single-view projected ones; nothing here triangulates yet."
+        "Both cameras are calibrated and their relative pose is known, so the metrics "
+        "whose basis is `spatial` are measurements of the body in metres rather than of "
+        "its picture. Everything else below is still a single-view projected quantity "
+        "measured on this clip alone, and the two are not interchangeable -- where a "
+        "projected and a reconstructed version of the same quantity both appear, they "
+        "will disagree, and the reconstructed one carries the uncertainty that says by "
+        "how much it could."
     ]
 
 
@@ -231,6 +240,7 @@ def compute_metrics(
     phases: SwingPhases,
     config: MetricConfig | None = None,
     calibration: CalibrationStatus = CalibrationStatus.NONE,
+    reconstruction: ReconstructedSequence | None = None,
 ) -> MetricSet:
     """Measure every biomechanics metric this clip supports.
 
@@ -238,6 +248,14 @@ def compute_metrics(
     change how anything is computed -- the lens, if one was measured, came off
     the landmarks far below this, in `pose/series.py` -- and it decides what may
     be reported, which is a different question asked in a different place.
+
+    `reconstruction` is the 3D positions Phase 9 triangulated from this clip and
+    its partner, indexed by **this** clip's frames. It is an argument rather than
+    something computed here for the reason the calibration status is: this
+    function measures one clip, and a reconstruction is a fact about two. Absent,
+    the spatial metrics are refused by name -- and on a project without a stereo
+    rig they are refused by the calibration gate before that, which is the more
+    useful of the two answers and so the one that wins.
     """
     resolved = config or MetricConfig()
 
@@ -278,10 +296,25 @@ def compute_metrics(
     rotation_metrics, rotation_refused, references = rotation.metrics(body, anchors, resolved, view)
     arm_metrics, arm_refused = arms.metrics(body, anchors, lead, view)
     timing_metrics, timing_refused = timing.metrics(body, anchors, phases, view)
+    spatial_metrics, spatial_refused = spatial.metrics(
+        reconstruction, anchors, lead, resolved, view
+    )
 
     produced, all_refused = _apply_view_gate(
-        [*posture_metrics, *rotation_metrics, *arm_metrics, *timing_metrics],
-        [*posture_refused, *rotation_refused, *arm_refused, *timing_refused],
+        [
+            *posture_metrics,
+            *rotation_metrics,
+            *arm_metrics,
+            *timing_metrics,
+            *spatial_metrics,
+        ],
+        [
+            *posture_refused,
+            *rotation_refused,
+            *arm_refused,
+            *timing_refused,
+            *spatial_refused,
+        ],
         view,
     )
     produced, all_refused = _apply_calibration_gate(produced, all_refused, calibration)
