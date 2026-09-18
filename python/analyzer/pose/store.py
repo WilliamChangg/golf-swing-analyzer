@@ -39,6 +39,7 @@ from analyzer.contracts.pose import (
     PoseModelInfo,
     PoseSequence,
 )
+from analyzer.paths import cache_dir
 
 # Metadata keys. Prefixed so they cannot collide with anything a Parquet writer
 # adds of its own accord.
@@ -126,6 +127,23 @@ def to_table(sequence: PoseSequence, *, landmark_count: int) -> pa.Table:
         _KEY_STATS: sequence.stats.model_dump_json().encode(),
     }
     return pa.Table.from_pydict(columns, schema=SCHEMA).replace_schema_metadata(metadata)
+
+
+def cached_sequence_path(content_key: ContentKey, model_name: str) -> Path:
+    """Where an extraction for one clip and one model is cached.
+
+    Keyed by the clip's content rather than its path, so renaming a clip keeps
+    its landmarks and replacing one in place discards them -- the property
+    `ContentKey` exists for. The model name is part of the path because two
+    models produce genuinely different landmarks for the same frames, and a
+    cache that conflated them would serve the lite model's output to a caller
+    that asked for the heavy one.
+
+    Resolution lives here rather than at each call site because more than one
+    layer now needs to find an extraction it did not make: the RPC dispatcher,
+    and the dataset builder that has to turn a labelled clip into features.
+    """
+    return cache_dir() / "poses" / content_key.as_path_segment() / f"{model_name}.parquet"
 
 
 def write_sequence(sequence: PoseSequence, path: Path, *, landmark_count: int) -> Path:

@@ -101,7 +101,7 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phases 10-13 outstanding._ A clip can be imported,
+_Partially implemented — Phase 13 outstanding._ A clip can be imported,
 inspected, run through pose estimation, filtered into trajectories with
 derivatives, segmented into swing phases, measured, aligned against a second
 camera, and — with both cameras calibrated — reconstructed into 3D positions in
@@ -150,6 +150,13 @@ uv run --project python analyzer club faceon.mov --json
 uv run --project python analyzer ball   faceon.mov                # where it was, and when it left
 uv run --project python analyzer impact faceon.mov                # every estimate, reconciled
 uv run --project python analyzer impact faceon.mov --no-club      # skip the second decode
+
+# Labels, and the learned detector that cannot yet be trained on them.
+uv run --project python analyzer label faceon.mov --player rory --session range-01 --labeller wc
+uv run --project python analyzer labels                           # the set, and whether it splits
+uv run --project python analyzer dataset                          # features, classes, imbalance
+uv run --project python analyzer train                            # split, fit, score, register
+uv run --project python analyzer models                           # what each may claim
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -288,8 +295,8 @@ MPS does not make pose inference GPU-accelerated.
 
 ## 8. Computer vision pipeline
 
-_Partially implemented — Phase 11 outstanding._ Six stages are built; what sits
-on top of them is in §10 and §11.
+_Complete through Phase 12._ Six stages are built; what sits on top of them is
+in §10, §11 and §12.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -610,8 +617,45 @@ next to a computation cannot drift from the one in the documentation.
 
 ## 12. Model architecture
 
-_No model is trained — Phase 12._ No accuracy figure will be published without a
-real labelled evaluation set with session- and player-grouped splits.
+**No model is trained on real swings, and none can be.** Phase 12 built the whole
+apparatus — labelling tool, versioned features, player-grouped splits, a TCN
+baseline, metrics, a model registry and a comparison against the rule-based
+detector — and then ran it on the footage this project has:
+
+```
+$ analyzer labels
+No labels yet. Phase 12's machinery is built and has nothing to run on.
+```
+
+The four reference clips are one golfer. A train/validation/test split needs
+players to hold out, so the splitter refuses, and labelling all four clips would
+not change that. **The input this is short of is people, not footage.**
+
+What exists, in `python/analyzer/ml/`:
+
+| Piece                 | What it is                                                              |
+| --------------------- | ----------------------------------------------------------------------- |
+| `labeltool.py`        | A pure state machine, a renderer, and a thin OpenCV window around them  |
+| `contracts/labels.py` | Who marked it, how sure they were, and whose swing it is — all required |
+| `features.py`         | 10 channels at 60 Hz, torso-normalised, versioned by a hash of the spec |
+| `splits.py`           | Grouped by **player**; leakage measured on the output, not asserted     |
+| `tcn.py`              | 19,525 parameters, six dilated layers, a 2.12 s receptive field         |
+| `evaluate.py`         | Per-event error in ms, and the gates that refuse to publish it          |
+| `registry.py`         | Weights plus the card that says what they mean; feature digest enforced |
+
+**The honesty gate lives in the type.** `EvaluationReport.claims_permitted` is
+computed rather than asserted by a caller, and it is false whenever the set is
+synthetic, has too few held-out players or clips, or the measured error is smaller
+than the labels' own uncertainty. That last one is the failure that looks like
+success: a detector cannot be shown to be more accurate than the numbers it is
+being scored against.
+
+Two figures set the ceiling on what a learned detector can be worth here. The
+60 Hz feature grid costs **8.3 ms** on the placement of any event, before a
+convolution has run; Phase 11 brackets impact to **4.2 ms** at 240 fps by watching
+the ball stop being there. On the one quantity both can report, the observation
+wins before the comparison starts. See
+[ADR-0016](docs/decisions/ADR-0016-labels-groups-and-the-noise-floor.md).
 
 Currently vendored: MediaPipe Pose Landmarker (lite/full/heavy, float16), pinned
 by sha256 in `models/manifest.json`. See
@@ -631,14 +675,14 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                            |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| pytest     | 962   | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                        |
-| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                    |
-| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                               |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                               |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,091 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                           |
+| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                       |
+| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                  |
 
-All 1,107 pass as of Phase 11.
+All 1,236 pass as of Phase 12.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -1111,13 +1155,73 @@ the measurement, and Phase 4's own output is left unchanged: a number that moved
 depending on which other analyses had run could not be compared across clips.
 
 **One clip is not a correction.** A bias measured once is an anecdote with a
-number attached, and the labelled set is Phase 12.
+number attached, and there is still no labelled set to settle it. Phase 12 built
+the tool that produces one and the gates that refuse a claim without one; what it
+found is that this project has a single golfer in it.
 
 Cost: 16 ms per frame to detect over 1.5 torso lengths of ground, and 34 ms to
 track a 312-frame clip once the candidates exist. A **rectangular** structuring
 element is what makes that affordable — OpenCV decomposes that one into separable
 passes and no other shape, and an elliptical element of the same size costs 66 ms
 a frame on its own.
+
+### The learned detector
+
+`scripts/benchmark_ml.py`, on a **generated** corpus of players, sessions and
+swings whose events are inputs to the generator. Nothing here is a statement
+about golf, and the script prints that caveat under every table it produces.
+
+**What the feature grid costs before a model runs.** A label's frame is mapped
+onto the 60 Hz grid and read back; the error in that round trip is a floor under
+anything working on the grid:
+
+| clip fps | grid  | floor  | round trip | worst      |
+| -------- | ----- | ------ | ---------- | ---------- |
+| 30       | 60 Hz | 8.3 ms | 0.0 ms     | 0.0 ms     |
+| 60       | 60 Hz | 8.3 ms | 0.0 ms     | 0.0 ms     |
+| 120      | 60 Hz | 8.3 ms | 4.6 ms     | **8.3 ms** |
+| 240      | 60 Hz | 8.3 ms | 4.0 ms     | **8.3 ms** |
+
+Compare the table above it: at 240 fps a ball departure brackets impact to
+**4.2 ms**, and the resampling here spends **8.3 ms** before a convolution has
+run. On the one quantity both can report, the observation wins before the
+comparison starts.
+
+**The held-out number has not settled**, which is the measurement that matters
+most on a corpus this size (`--sweep players --seeds 3`):
+
+| players | clips | macro F1 | top MAE | impact MAE |
+| ------- | ----- | -------- | ------- | ---------- |
+| 3       | 18    | 0.869    | 35.0 ms | 130.0 ms   |
+| 4       | 24    | 0.942    | 16.1 ms | 7.2 ms     |
+| 6       | 36    | 0.939    | 21.7 ms | 8.3 ms     |
+| 9       | 54    | 0.957    | 15.6 ms | 5.3 ms     |
+| 12      | 72    | 0.974    | 11.4 ms | 3.9 ms     |
+
+Still improving at twelve players. A score that moves with the size of its own
+corpus is measuring the sample, not the method.
+
+**What a leaky split is worth could not be measured.** Same corpus, same seeds,
+same architecture; the only difference is whether whole players are held out
+(`--sweep leakage --seeds 5`; ± is half the range across seeds):
+
+| quantity     | by player     | by clip (leaky) | difference | beats the scatter? |
+| ------------ | ------------- | --------------- | ---------- | ------------------ |
+| macro F1     | 0.972 ±0.007  | 0.973 ±0.013    | +0.001     | no                 |
+| takeaway MAE | 25.5 ±15.0 ms | 25.6 ±9.0 ms    | −0.1 ms    | no                 |
+| top MAE      | 14.3 ±7.1 ms  | 12.2 ±6.9 ms    | +2.1 ms    | no                 |
+| impact MAE   | 4.5 ±3.3 ms   | 6.6 ±6.2 ms     | −2.1 ms    | no                 |
+| finish MAE   | 14.0 ±8.8 ms  | 12.8 ±11.5 ms   | +1.2 ms    | no                 |
+
+The corpus cannot answer the question: its golfers differ by six generator
+parameters, so a model that has seen seven of them has seen the space. The split
+is grouped by player on the argument — a swing and its near-duplicate cannot sit
+on opposite sides of a question — and not on this table.
+
+**Cost**, 72 clips on the reference machine: 37 ms per clip to filter and
+featurise, 82 ms per clip to train 40 epochs, 0.7 ms per clip to run. Training
+the entire corpus costs less than extracting poses from one clip, which is the
+correct shape for this phase — the expensive thing was never the model.
 
 A general benchmark harness arrives in Phase 17.
 
@@ -1195,8 +1299,9 @@ A general benchmark harness arrives in Phase 17.
   sequential pass. Random access uses the OpenCV source, which is the default.
 - **Pose landmark accuracy is not measured at all.** Detection _rate_ is
   reported because it is counted; nothing here says whether the landmarks that
-  were found are in the right place. That needs a labelled set, which is
-  Phase 12.
+  were found are in the right place. That needs a labelled set. Phase 12 built
+  the apparatus for one — a labelling tool, a schema, player-grouped splits — and
+  no such set exists.
 - **Filtering needs about 60 fps or better at its default settings.** A 0.10 s
   window with a degree-4 fit needs five samples, and 30 fps supplies three. Such
   a clip gets no values at all, plus a message naming the minimum window its
@@ -1233,7 +1338,8 @@ A general benchmark harness arrives in Phase 17.
   there peak hand speed lands **20 frames (95 ms) late** while the lowest point
   of the hand arc lands within one. That is enough to have set the fusion's
   precedence and it is not enough to be a correction — a bias measured once is an
-  anecdote with a number attached. The labelled set is Phase 12.
+  anecdote with a number attached, and no labelled set exists to turn it into
+  more than one.
 - **The ball is identified by persistence, not by looking like a ball.** At the
   size a golf ball actually occupies on consumer footage — 4.4 px in radius on
   the reference clip — shape does not separate it from grass texture and
@@ -1299,15 +1405,15 @@ A general benchmark harness arrives in Phase 17.
   synthetic fixture pins the arithmetic against angles known by construction,
   and every value on the face-on reference clip was checked against the frame it
   came from with `scripts/overlay_metrics.py`. Neither is ground truth: nobody
-  has measured this player's actual shoulder turn. That needs the labelled set
-  Phase 12 builds.
+  has measured this player's actual shoulder turn. That needs a labelled set,
+  which Phase 12 built the apparatus for and which does not yet exist.
 - **Phase detection is validated on two swings.** The face-on reference clip is
   the only recording here containing a swing the pipeline can see; the
   face-on and iron down-the-line reference clips both detect cleanly; the driver
   down-the-line clip is 24 fps and loses the wrists to motion blur through the
   part where the swing happens, so it is refused. Every event was checked by
   hand against the signal, which is not the same as being checked against ground
-  truth — that needs the labelled set Phase 12 builds.
+  truth — that needs a labelled set, which does not yet exist.
 - **Detection thresholds are structural bounds, not golf norms.** They exist to
   reject motion that cannot be a swing (a two-second descent, hands that never
   travel further than a fraction of the subject's torso), and are deliberately
@@ -1315,7 +1421,7 @@ A general benchmark harness arrives in Phase 17.
   need a labelled set.
 - **Filter accuracy is measured against models of swing motion, not a swing.**
   The trajectories in the benchmark have exact derivatives, which real footage
-  cannot until Phase 12 provides labelled landmarks. They were chosen to resemble
+  cannot supply without labelled landmarks. They were chosen to resemble
   swing dynamics; no claim is made that they match one, and the defaults should
   be re-derived against ground truth when it exists.
 - **MediaPipe runs on CPU.** The Tasks Python API has no macOS GPU delegate, and
@@ -1363,9 +1469,9 @@ A general benchmark harness arrives in Phase 17.
   footage found it on the first run**: on `rory_face_on.mp4`, nine of 139 tracked
   frames follow the vertical edge of the yardage sign behind the player rather
   than the club, at a median confidence of 0.98. A rule that the shaft must
-  rotate during the backswing would catch it and is a golf norm, which needs the
-  labelled set Phase 12 builds; so would a detector that has seen a half-occluded
-  club, which is the same phase.
+  rotate during the backswing would catch it and is a golf norm, which needs a
+  labelled set; so would a detector that has seen a half-occluded club. Phase 12
+  built what is needed to produce one and did not produce one.
 - **The club head is usually not observed, and the shaft direction usually is.**
   A detected segment stops where the edge evidence stops, which is short of the
   club head whenever the head is smeared — and also whenever the club points at
@@ -1387,13 +1493,37 @@ A general benchmark harness arrives in Phase 17.
   tracked — which on consumer footage it usually is not. Fusing the two is
   Phase 11's job, once the ball supplies a third piece of evidence that can
   arbitrate.
+- **There is no labelled set, so there is no accuracy figure for anything.** Not
+  for the pose landmarks, not for the rule-based phase detector, not for the
+  learned one. The engine refuses to produce one rather than producing a weak
+  one: `EvaluationReport.claims_permitted` is false on every set this project can
+  currently build, with the reason attached.
+- **The learned detector has only ever seen generated swings.** Its held-out
+  scores are measured against events that are inputs to the generator that drew
+  the motion, which makes them a test of the plumbing and nothing else. Worse,
+  the comparison against the rule-based detector is rigged in the model's favour
+  on that corpus: the model is trained on the labels, so it learns the convention
+  they were made with, while the rules brought their own — and the two genuinely
+  differ at the takeaway by several frames.
+- **What a leaky split costs could not be measured.** Training under a
+  player-grouped split and a clip-random one on the synthetic corpus produces no
+  difference larger than the seed-to-seed scatter, because its golfers differ by
+  six generator parameters and holding one out asks nothing. The split is grouped
+  by player on the argument, not on that measurement.
+- **The labelling window has never been driven by a person here.** Its state
+  machine, overlay and key mapping are tested; the OpenCV loop around them is
+  forty lines with no decisions in it and no test, because it needs a display.
+- **A dataset of mixed frame rates is smoothed inconsistently.** The feature grid
+  equalises the sample rate and cannot equalise the filter: a 30 fps clip needs a
+  167 ms window where a 120 fps clip uses 100 ms, and a wider window flattens the
+  velocity peak. `DatasetSummary` reports it rather than averaging over it.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
 ## 16. Future work
 
-Phases 11-20: ball detection, temporal ML, the coaching engine, desktop
-visualisation, 3D rendering, swing comparison, performance work, model
-management, test hardening and documentation. Sequencing, deliverables, and exit
+Phases 13-20: the coaching engine, desktop visualisation, 3D rendering, swing
+comparison, performance work, model management, test hardening and
+documentation. Sequencing, deliverables, and exit
 criteria per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
@@ -1403,7 +1533,7 @@ settled the second — where the cameras were. Phase 9 spends both, and the six
 metrics in §9 are the first numbers here that describe a body rather than a
 picture of one.
 
-Four open items carry forward:
+Five open items carry forward:
 
 - **Nothing here has been reconstructed from real footage.** It needs two
   calibrated cameras that filmed one swing at once, and no such recording exists
@@ -1417,7 +1547,15 @@ Four open items carry forward:
 - **Phase 4 is the limit on 3D metrics under noise, not the triangulation.**
   Measured: at 5 px of landmark scatter the reconstruction is still accurate to
   millimetres and the phase detector declines to call the clip a swing, so there
-  is no instant to anchor a rotation to. Phase 12 is where that is revisited.
+  is no instant to anchor a rotation to. Phase 12 did not revisit it: a learned
+  detector trained on generated swings says nothing about how either behaves
+  under real landmark noise.
+- **A labelled set needs more golfers, not more footage.** Phase 12 built the
+  labelling tool, the schema, the player-grouped splitter and the gates that
+  refuse a claim without one, and then found that this repository contains a
+  single player. Three people would produce a split; eight would allow a number
+  to be quoted. `data/README.md` says what to record and asks for consent in
+  writing before anyone else's swing enters a training set.
 
 ## Licence
 

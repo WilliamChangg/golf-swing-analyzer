@@ -30,7 +30,6 @@ from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
-from analyzer.paths import cache_dir
 from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
@@ -177,6 +176,7 @@ def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
     rather than reporting a missing file.
     """
     from analyzer.pose.estimator import resolve_model
+    from analyzer.pose.store import cached_sequence_path
 
     candidate = Path(parsed.path)
     if candidate.suffix == ".parquet":
@@ -184,7 +184,7 @@ def _resolve_pose_file(parsed: FilterPosesParams) -> Path:
 
     metadata = probe_video(candidate)
     entry, _ = resolve_model(parsed.model)
-    poses = cache_dir() / "poses" / metadata.content_key.as_path_segment() / f"{entry.name}.parquet"
+    poses = cached_sequence_path(metadata.content_key, entry.name)
     if not poses.exists():
         raise EngineError(
             f"No extracted poses for {candidate.name} with model '{entry.name}'.",

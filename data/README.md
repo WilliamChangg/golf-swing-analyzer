@@ -296,6 +296,43 @@ cannot — nothing in one file records its own factor.
    similar tempo that evidence is weak. Do not pair a face-on clip of one swing
    with a down-the-line clip of another and expect to be told.
 
+### Filming so a labelled set can exist (Phase 12)
+
+**This is the one capture requirement no amount of filming by one person can
+meet.** Everything else in this file asks for better footage. A labelled set asks
+for more _golfers_, and the difference decides whether any accuracy figure can
+ever be published here.
+
+`analyzer labels` refuses to split a set with fewer than three players, and
+refuses to permit a published number below eight. Those are not statistical
+results; three is the fewest that fills train, validation and test with a
+different person in each, and eight is the fewest that leaves more than one
+person held out after the other two roles have taken theirs. Real work needs far
+more. **Forty clips of one golfer produce no split at all.**
+
+What to record, in order of what it buys:
+
+1. **Different people.** Different builds, different tempos, different swing
+   shapes, ideally different handicaps. A model that has seen six similar golfers
+   has seen one golfer six times.
+2. **More than one session per person**, on different days, at different places,
+   in different light. A session is the unit that leaks: two swings from one
+   sitting are near-duplicates, so they are held together and can never
+   demonstrate that a model generalises.
+3. **Clips with no swing in them.** A practice swing, a waggle, somebody walking
+   into frame, a setup that is abandoned. A detector's most valuable behaviour is
+   refusing to answer, and a set in which every clip contains a swing cannot
+   measure it. Roughly one in six is enough.
+4. **Consent, recorded.** Somebody else's swing is their likeness. Get permission
+   in writing before a clip enters a set that will be trained on, and keep the
+   `player_id` a pseudonym rather than a name — the schema treats it as an
+   identifier and nothing in it needs to be a person's name.
+
+When labelling, `--player` and `--session` are required and have no defaults. A
+wrong value there is invisible and inflates every number measured afterwards, so
+it is worth deciding the naming scheme before the first clip rather than during
+it.
+
 ## Camera calibration (Phase 8)
 
 Metric-scale 3D reconstruction requires calibration, and a calibration is only

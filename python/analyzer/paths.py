@@ -98,3 +98,28 @@ def data_dir() -> Path:
 def projects_database_path() -> Path:
     """The SQLite file holding projects, clips and stored syncs."""
     return data_dir() / "projects.db"
+
+
+def labels_dir() -> Path:
+    """Where hand-labelled swings are kept.
+
+    Under ``data_dir()`` rather than the cache, and the distinction from Phase 2
+    onwards decides this one without further argument: a label is a person's
+    judgement about a frame, and nothing can recompute it from the video. Losing
+    these to a cache clear would destroy hours of the only work in this project
+    that a machine cannot redo.
+    """
+    return data_dir() / "labels"
+
+
+def ml_registry_dir() -> Path:
+    """Where trained models and their cards are kept.
+
+    Also under ``data_dir()``, which is arguable and decided on what recovery
+    would cost. A checkpoint is reproducible in principle -- same labels, same
+    seed, same code -- and in practice only against a label set that may have
+    grown since, so a model deleted with a cache clear cannot be rebuilt into the
+    same model. What is stored alongside it is a record of a measurement, which
+    is not a derived artifact at all.
+    """
+    return data_dir() / "ml"

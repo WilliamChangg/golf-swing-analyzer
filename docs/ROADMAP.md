@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-11 complete (12 / 21).**
+**Progress: Phases 0-12 complete (13 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -20,8 +20,8 @@ advance past a broken phase.
 | 9   | 3D reconstruction     | ✅ **Done** | Reconstruction error measured on synthetic ground truth        |
 | 10  | Club tracking         | ✅ **Done** | Shaft tracked; low confidence emits nothing                    |
 | 11  | Ball detection        | ✅ **Done** | Impact-frame agreement measured                                |
-| 12  | Temporal ML           | ⬜ Next     | Leak-free splits; metrics only from a real labelled set        |
-| 13  | Coaching engine       | ⬜          | Every finding cites computed evidence                          |
+| 12  | Temporal ML           | ✅ **Done** | Leak-free splits; **no metrics — no labelled set exists**      |
+| 13  | Coaching engine       | ⬜ Next     | Every finding cites computed evidence                          |
 | 14  | Desktop UI            | ⬜          | Full workflow end-to-end                                       |
 | 15  | 3D visualisation      | ⬜          | Scrub stays in sync with video                                 |
 | 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                     |
@@ -1703,18 +1703,221 @@ error, and five of which the synthetic fixture passed cleanly.
   more, and `scripts/benchmark_ball.py --sweep agreement` prints that caveat above
   its own table.
 
-## Phase 12 — Temporal ML ⬜
+## Phase 12 — Temporal ML ✅
 
-Splits grouped by **session and player**, never by individual swing — swings from
-one session are near-duplicates and would leak.
+`python/analyzer/ml/{labels,labeltool,features,dataset,splits,tcn,train,evaluate,compare,registry,provider}.py` ·
+`python/analyzer/contracts/{labels,ml}.py` ·
+[ADR-0016](decisions/ADR-0016-labels-groups-and-the-noise-floor.md)
 
-- [ ] 12.1 Labelling tool + label schema (**before** any training)
-- [ ] 12.2 Dataset builder with feature versioning
-- [ ] 12.3 Group-aware train/val/test splits
-- [ ] 12.4 TCN baseline, seeded, checkpointed
-- [ ] 12.5 Metrics, confusion matrix, model registry
-- [ ] 12.6 Compare against the rule-based detector on the same held-out set
-- [ ] 12.7 Commit (metrics only if a real labelled set exists)
+**The phase's result is a refusal, and the machinery that earns the right to make
+it.** Everything the checklist asked for is built, tested and exercised end to
+end. It has never been run on a golf swing that a person labelled, because no
+such clip exists in this project, so **not one accuracy number here is a
+statement about golf** — and the engine says so itself rather than leaving it to
+a reader: `EvaluationReport.claims_permitted` is computed, and on every set this
+phase can currently build it is false.
+
+- [x] **12.1 Labelling tool + label schema** — `labeltool.py` is a pure state
+      machine, a renderer and a thin OpenCV window; only the window lacks a test.
+      The schema requires three things a "frame number per event" format loses:
+      **who** marked it, **how sure they were** (`uncertainty_frames`, required,
+      no default), and **whose swing it is** (`player_id` and `session_id`,
+      required, no default). Built before anything consumed a label
+- [x] **12.2 Dataset builder with feature versioning** — `FeatureSpec` hashes
+      itself, so a checkpoint records the digest of the definition it was trained
+      on and `registry.load_model` refuses a mismatch. Every channel is divided by
+      the subject's **torso**, never by a statistic of the clip
+- [x] **12.3 Group-aware train/val/test splits** — grouped by **player**.
+      `LeakageCheck` is recomputed from the assignment that came out, so it can
+      catch a splitter it was not written alongside — and it does: `random_clip_split`
+      is kept as a measuring instrument and fails the check by construction
+- [x] **12.4 TCN baseline, seeded, checkpointed** — 19,525 parameters, six dilated
+      layers, a 127-sample receptive field which the report states in **seconds**
+      (2.12 s) because samples alone say nothing about whether it can see a swing
+- [x] **12.5 Metrics, confusion matrix, model registry** — per-event localisation
+      in frames _and_ real milliseconds, per-class F1, a 5x5 confusion matrix, and
+      a noise floor below which no claim is permitted
+- [x] **12.6 Compare against the rule-based detector on the same held-out set** —
+      same clips, same metric, same filtered trajectories, and a verdict word that
+      is "indistinguishable" whenever the gap is inside what the labels resolve
+- [x] **12.7 Commit** — with no metrics, because no real labelled set exists
+
+### The refusal, which is the deliverable
+
+```
+$ analyzer labels
+No labels yet. Phase 12's machinery is built and has nothing to run on.
+
+$ uv run --project python python scripts/benchmark_ml.py --sweep refusal
+4 clips, 1 player
+refused: True
+
+A train/validation/test split needs at least 3 players and this set has 1.
+Splitting by clip instead would put the same golfer on both sides, and every
+number measured after that would be about how well the model recognises a
+person it has already been trained on. More clips of the same player do not
+help; more players do.
+```
+
+That last sentence is the phase's finding. The four reference clips in `data/`
+are one golfer. Labelling all four would not produce a split; nor would forty of
+them. The input this phase is short of is **people**, not footage, and no amount
+of engineering substitutes.
+
+### The noise floor, and the ceiling it puts on the whole approach
+
+An error smaller than the labels' own uncertainty is not an achievement; it is a
+measurement below the resolution of the instrument. The floor has two parts and
+they add:
+
+| part          | what it is                                   | value   |
+| ------------- | -------------------------------------------- | ------- |
+| label bracket | median of what labellers said they could see | per set |
+| resampling    | half a sample of the 60 Hz feature grid      | 8.3 ms  |
+
+`scripts/benchmark_ml.py --sweep rate` measures the second half directly, by
+putting a label's frame onto the grid and reading it back:
+
+| clip fps | grid | floor  | round trip | worst  |
+| -------- | ---- | ------ | ---------- | ------ |
+| 30       | 60   | 8.3 ms | 0.0 ms     | 0.0 ms |
+| 60       | 60   | 8.3 ms | 0.0 ms     | 0.0 ms |
+| 120      | 60   | 8.3 ms | 4.6 ms     | 8.3 ms |
+| 240      | 60   | 8.3 ms | 4.0 ms     | 8.3 ms |
+
+**At 240 fps the grid costs more than watching the ball leave.** Phase 11 brackets
+impact to 4.2 ms at that frame rate by observing an absence; the resampling here
+spends 8.3 ms before a model has run a single convolution. A learned detector is
+not a replacement for an observation, and on the one quantity both can report,
+the observation wins before the comparison starts.
+
+### What the synthetic corpus could and could not measure
+
+`tests/synthetic_labels.py` generates players, sessions and swings whose events
+are inputs to the generator. It can show the plumbing is right. It was also meant
+to answer "what is a leaky split worth", and it **cannot**, which is the same
+shape of caveat Phase 11 had to write about measuring impact agreement on a
+fixture where one arc drove every estimate.
+
+`--sweep leakage --seeds 5`, 72 clips, 12 players, identical corpus and seeds on
+both sides:
+
+| quantity     | by player     | by clip (leaky) | difference | larger than the scatter? |
+| ------------ | ------------- | --------------- | ---------- | ------------------------ |
+| macro F1     | 0.972 ±0.007  | 0.973 ±0.013    | +0.001     | no                       |
+| takeaway MAE | 25.5 ±15.0 ms | 25.6 ±9.0 ms    | −0.1 ms    | no                       |
+| top MAE      | 14.3 ±7.1 ms  | 12.2 ±6.9 ms    | +2.1 ms    | no                       |
+| impact MAE   | 4.5 ±3.3 ms   | 6.6 ±6.2 ms     | −2.1 ms    | no                       |
+| finish MAE   | 14.0 ±8.8 ms  | 12.8 ±11.5 ms   | +1.2 ms    | no                       |
+
+Nothing is readable, and the reason is a property of the fixture: its golfers
+differ by six generator parameters, so a model that has seen seven of them has
+seen the space and holding one out asks nothing. Real golfers differ in ways a
+generator does not know how to vary. **The split is grouped by player anyway** —
+the argument for it was never this measurement, it is that a swing and its
+near-duplicate cannot sit on opposite sides of a question.
+
+What the corpus _can_ show is that the held-out number has not settled
+(`--sweep players --seeds 3`):
+
+| players | clips | macro F1 | top MAE | impact MAE |
+| ------- | ----- | -------- | ------- | ---------- |
+| 3       | 18    | 0.869    | 35.0 ms | 130.0 ms   |
+| 4       | 24    | 0.942    | 16.1 ms | 7.2 ms     |
+| 6       | 36    | 0.939    | 21.7 ms | 8.3 ms     |
+| 9       | 54    | 0.957    | 15.6 ms | 5.3 ms     |
+| 12      | 72    | 0.974    | 11.4 ms | 3.9 ms     |
+
+Still improving at twelve. A corpus whose score still moves with its own size has
+not yet measured a method; it is measuring its sample.
+
+### Why the comparison is rigged, and the part of the rigging that is real
+
+On the synthetic held-out set the model looks far better than the rules at two of
+the four events:
+
+| event    | rules    | model   | verdict           |
+| -------- | -------- | ------- | ----------------- |
+| takeaway | 174.2 ms | 10.8 ms | model             |
+| top      | 8.3 ms   | 8.3 ms  | indistinguishable |
+| impact   | 12.5 ms  | 5.8 ms  | indistinguishable |
+| finish   | 168.3 ms | 11.7 ms | model             |
+
+**The model is not more accurate at the takeaway. It has been told which
+definition is being marked.** The generator's takeaway is the instant its easing
+function leaves zero; Phase 4's is where hand speed crosses 5% of its peak, which
+on a sin-squared ramp is several frames later. The model is trained on the labels,
+so it learns the labeller's convention; the rules brought their own.
+
+A human-labelled set narrows this and does not close it — a person marks the
+takeaway where they can _see_ the club move, which is a third convention again.
+Any comparison between a learned detector and a rule is partly a measurement of
+whose definition the labels encode, and that is a permanent property of the
+exercise rather than a flaw in this corpus.
+
+### The other things measured
+
+The receptive field, on the same corpus (`--sweep receptive --seeds 2`):
+
+| layers | field | seconds | params | macro F1 | top MAE |
+| ------ | ----- | ------- | ------ | -------- | ------- |
+| 3      | 15    | 0.25    | 10,021 | 0.959    | 5.4 ms  |
+| 4      | 31    | 0.52    | 13,189 | 0.964    | 8.8 ms  |
+| 5      | 63    | 1.05    | 16,357 | 0.963    | 15.4 ms |
+| 6      | 127   | 2.12    | 19,525 | 0.973    | 9.6 ms  |
+| 7      | 255   | 4.25    | 22,693 | 0.968    | 13.8 ms |
+
+The expectation was that a field shorter than a swing would lose the top, which
+is defined by what happens on both sides of it. The table does not show that, and
+the reason is again the fixture: these hands follow one analytic arc, so a quarter
+of a second of speed profile already says where in the swing it is. The shipped
+default is six layers, chosen on the argument and **not** on this table, which
+cannot distinguish any row from any other.
+
+Cost, 72 clips on the reference machine (`--sweep cost`):
+
+| stage                  | total  | per clip |
+| ---------------------- | ------ | -------- |
+| generate the corpus    | 1.64 s | 22.8 ms  |
+| filter + featurise     | 2.68 s | 37.2 ms  |
+| train, 40 epochs       | 5.93 s | 82.3 ms  |
+| model inference        | 0.01 s | 0.7 ms   |
+| read the rule detector | 0.00 s | 0.0 ms   |
+
+Training the whole corpus costs less than extracting poses from one clip. That is
+the correct shape for this phase: the expensive thing was never the model.
+
+### What the build found on the way
+
+- **A 30 fps clip cannot be filtered with the default window, so a dataset builder
+  meeting Phase 3's seam loses most real footage.** The 0.10 s window holds three
+  samples at 30 fps and the degree-4 fit needs five, so every landmark comes back
+  empty and the clip is dropped for having no torso. `filter_config_for` widens
+  the window to the narrowest one the rate supports. This is not free — a wider
+  window flattens the velocity peak — so the grid equalises the **sample rate and
+  not the smoothing**, and `DatasetSummary` reports when a set contains both.
+- **Phase 4's tiling had to be reproduced exactly, and a test pins it.** Address
+  runs from frame zero; the follow-through ends _on_ the finish; everything after
+  is outside every phase, which is why the classifier has five classes and not
+  four. A tiling that drifted would turn every comparison in 12.6 into a
+  comparison of two conventions.
+- **The features had to reverse one of Phase 4's own decisions, for a reason that
+  does not contradict it.** `phases/signals.py` refuses hip-local coordinates
+  because its rule is about the highest point the hands reach and a moving origin
+  makes "highest" mean something else. A learned detector needs the opposite:
+  where the hands are relative to the body, with the camera removed — otherwise a
+  handheld clip drifting upward through the downswing presents rising hands the
+  model cannot distinguish from real ones, and Phase 11 found exactly that drift
+  on real footage. Each layer states which quantity it wants.
+
+**Open, and not resolved here:**
+
+- No real labelled set. Everything above rests on generated swings.
+- The labelling window itself has never been driven by a person in this
+  repository. Its state machine, its overlay and its key mapping are tested; the
+  OpenCV loop around them is forty lines with no decisions in it and no test.
+- `random_clip_split` measures nothing on the corpus available, so the cost of a
+  leaky split remains an argument rather than a number.
 
 ## Phase 13 — Coaching engine ⬜
 

@@ -8,6 +8,7 @@ CI, and for benchmark scripts, none of which should need Rust in the loop.
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -2456,6 +2457,479 @@ def impact(
     # inference clearly labelled as one is usable -- a clip with no visible ball
     # is the ordinary case, not a failure. A script that needs an *observation*
     # reads `observed` out of `--json`, which exists for exactly that.
+
+
+# --- Phase 12: labelling, datasets and the learned detector -----------------
+#
+# These do not go through `dispatch.call`. Every command above is a thin shell
+# over an RPC method because the desktop app calls the same method; nothing here
+# is reachable from the app, and will not be -- training is a developer operation
+# over a corpus that does not ship. Routing it through the IPC boundary would add
+# a schema to version, a worker to spawn and a progress protocol to thread,
+# in exchange for a capability no UI has.
+#
+# The imports are function-local for the reason `dispatch` uses them: torch is
+# several seconds of import, and `analyzer doctor` must not pay for it.
+
+
+@app.command()
+def label(
+    video: Annotated[Path, typer.Argument(help="The clip to label.")],
+    player: Annotated[str, typer.Option("--player", help="Who is swinging. Required.")],
+    session: Annotated[str, typer.Option("--session", help="Which capture sitting. Required.")],
+    labeller: Annotated[str, typer.Option("--labeller", help="Who is marking. Required.")],
+    swing: Annotated[
+        str | None, typer.Option("--swing", help="Id within the session. Defaults to the filename.")
+    ] = None,
+    slow_motion: Annotated[
+        float, typer.Option("--slow-motion", help="How many times slower than real time.")
+    ] = 1.0,
+    labels: Annotated[
+        Path | None,
+        typer.Option("--labels", help="Where to write. Defaults to the data directory."),
+    ] = None,
+) -> None:
+    """Step a clip frame by frame and mark the four swing events.
+
+    Player and session are required and have no defaults. They are the grouping
+    keys a held-out split is built from, and a wrong one is invisible: the model
+    trains on a golfer it will later be tested against, and every number after
+    that is inflated with nothing to show for it.
+    """
+    from analyzer.ingestion import ProbeError, probe_video
+    from analyzer.ingestion.reader import open_video
+    from analyzer.ml.labels import write_label
+    from analyzer.ml.labeltool import LabelSession, run_window
+
+    try:
+        metadata = probe_video(video)
+    except ProbeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    # `measured_fps` rather than the container's declared rate: a label's
+    # uncertainty is in frames and only becomes a time through this number, so it
+    # has to be the rate the file actually has. None on a one-frame clip, which
+    # the session refuses.
+    session_state = LabelSession(
+        clip_path=video,
+        frames=metadata.timing.frame_count,
+        fps=metadata.timing.measured_fps or metadata.timing.nominal_fps or 0.0,
+        player_id=player,
+        session_id=session,
+        swing_id=swing or video.stem,
+        labeller=labeller,
+        slow_motion_factor=slow_motion,
+        content_key=metadata.content_key,
+    )
+
+    written: list[Path] = []
+
+    def save(produced: object) -> None:
+        written.append(write_label(produced, labels))  # type: ignore[arg-type]
+
+    source = open_video(video)
+    try:
+        run_window(
+            session_state,
+            _FrameWindow(source),
+            window=f"label {video.name}",
+            on_save=save,
+        )
+    finally:
+        source.close()
+
+    if written:
+        console.print(f"[green]Saved[/green] {written[-1]}")
+        return
+    if session_state.dirty:
+        console.print(
+            "[yellow]Nothing was saved; the marks made in this session are gone.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+    console.print("[dim]Nothing marked.[/dim]")
+
+
+class _FrameWindow:
+    """Frame lookup by index for the labelling window.
+
+    A three-line adapter so `labeltool` never imports the ingestion layer: the
+    tool works on images, and which decoder produced them is the caller's
+    business. BGR because that is what OpenCV draws and displays.
+    """
+
+    def __init__(self, source: object) -> None:
+        self._source = source
+
+    def __getitem__(self, index: int):  # type: ignore[no-untyped-def]
+        import cv2  # type: ignore[import-untyped]
+
+        frame = self._source.frame_at(index)  # type: ignore[attr-defined]
+        return cv2.cvtColor(frame.image, cv2.COLOR_RGB2BGR)
+
+
+def _render_label_set(label_set: object) -> None:
+    """The set, its groups, and whether it can be split at all."""
+    from analyzer.ml.splits import plan_split
+
+    clips = label_set.clips  # type: ignore[attr-defined]
+    table = Table(title="Labelled clips", expand=True)
+    table.add_column("Player", no_wrap=True)
+    table.add_column("Sessions", justify="right")
+    table.add_column("Clips", justify="right")
+    table.add_column("Swings", justify="right")
+    table.add_column("No swing", justify="right")
+    for player in sorted({clip.player_id for clip in clips}):
+        owned = [clip for clip in clips if clip.player_id == player]
+        table.add_row(
+            player,
+            str(len({clip.session_key for clip in owned})),
+            str(len(owned)),
+            str(sum(1 for clip in owned if clip.is_swing)),
+            str(sum(1 for clip in owned if not clip.is_swing)),
+        )
+    console.print(table)
+    console.print(
+        f"[dim]{len(clips)} clips, {len(label_set.players)} players, "  # type: ignore[attr-defined]
+        f"{len(label_set.sessions)} sessions, provenance "  # type: ignore[attr-defined]
+        f"{label_set.provenance.value}, digest {label_set.digest()[:12]}[/dim]"  # type: ignore[attr-defined]
+    )
+
+    plan = plan_split(list(clips), label_digest=label_set.digest())  # type: ignore[attr-defined]
+    if plan.refused:
+        console.print(
+            Panel(
+                plan.refusal or "",
+                title="No split is possible",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        return
+    counts = ", ".join(f"{role.value} {count}" for role, count in plan.clips.items())
+    console.print(f"[green]A split exists[/green]: {counts}")
+    for note in plan.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def labels(
+    directory: Annotated[
+        Path | None,
+        typer.Option("--labels", help="Where the labels are. Defaults to the data directory."),
+    ] = None,
+) -> None:
+    """List the labelled set, and say whether it can support a held-out split."""
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+
+    try:
+        label_set = load_label_set(directory, strict=False)
+    except LabelStoreError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    if not label_set.clips:
+        console.print(
+            Panel(
+                "No labels yet. Phase 12's machinery is built and has nothing to run on.\n"
+                "Produce one with: analyzer label <clip> --player <id> --session <id> "
+                "--labeller <id>",
+                title="Empty label set",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1)
+
+    _render_label_set(label_set)
+
+
+def _render_dataset(summary: object) -> None:
+    table = Table(title="Dataset", expand=True)
+    table.add_column("Quantity", no_wrap=True)
+    table.add_column("Value", justify="right")
+    rows = (
+        ("clips", f"{summary.clips} ({summary.swings} swings, {summary.non_swings} without)"),  # type: ignore[attr-defined]
+        ("players / sessions", f"{summary.players} / {summary.sessions}"),  # type: ignore[attr-defined]
+        ("samples", f"{summary.samples} at {summary.sample_rate_hz:g} Hz"),  # type: ignore[attr-defined]
+        ("class imbalance", f"{summary.imbalance_ratio:.1f}x"),  # type: ignore[attr-defined]
+        ("feature spec", f"v{summary.feature_version} {summary.feature_digest[:12]}"),  # type: ignore[attr-defined]
+        ("label digest", summary.label_digest[:12]),  # type: ignore[attr-defined]
+        ("provenance", summary.provenance.value),  # type: ignore[attr-defined]
+        (
+            "resolution floor",
+            f"{summary.resample_floor_ms:.1f} ms grid"  # type: ignore[attr-defined]
+            + (
+                f" + {summary.median_label_uncertainty_ms:.1f} ms labels"  # type: ignore[attr-defined]
+                if summary.median_label_uncertainty_ms is not None  # type: ignore[attr-defined]
+                else ""
+            ),
+        ),
+    )
+    for name, value in rows:
+        table.add_row(name, value)
+    console.print(table)
+
+    classes = Table(title="Samples per class", expand=True)
+    classes.add_column("Class", no_wrap=True)
+    classes.add_column("Samples", justify="right")
+    classes.add_column("Share", justify="right")
+    for frame_class, count in summary.class_samples.items():  # type: ignore[attr-defined]
+        classes.add_row(
+            frame_class.value,
+            str(count),
+            f"{summary.class_fraction[frame_class]:.1%}",  # type: ignore[attr-defined]
+        )
+    console.print(classes)
+
+    for entry in summary.dropped:  # type: ignore[attr-defined]
+        console.print(f"[yellow]dropped:[/yellow] {entry}")
+    for note in summary.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def dataset(
+    directory: Annotated[
+        Path | None, typer.Option("--labels", help="Where the labels are.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    search: Annotated[
+        list[Path] | None,
+        typer.Option("--search", help="Directories to look for moved footage in."),
+    ] = None,
+) -> None:
+    """Build the training arrays from the labelled set, and report what they are."""
+    from analyzer.ml.dataset import DatasetError, build_dataset
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+    from analyzer.ml.provider import cached_pose_provider
+
+    try:
+        label_set = load_label_set(directory)
+        built = build_dataset(label_set, cached_pose_provider(model, search=tuple(search or ())))
+    except (DatasetError, LabelStoreError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    _render_dataset(built.summary)
+
+
+def _render_split(report: object) -> None:
+    table = Table(title="Split, grouped by player", expand=True)
+    table.add_column("Role", no_wrap=True)
+    table.add_column("Players", justify="right")
+    table.add_column("Clips", justify="right")
+    for role, count in report.clips.items():  # type: ignore[attr-defined]
+        table.add_row(role.value, str(report.players[role]), str(count))  # type: ignore[attr-defined]
+    console.print(table)
+
+    leak = report.leakage  # type: ignore[attr-defined]
+    if leak is not None:
+        style = "green" if leak.passed else "bold red"
+        console.print(
+            f"[{style}]leak check: players {leak.player_overlap}, sessions "
+            f"{leak.session_overlap}, clips {leak.clip_overlap}[/{style}]"
+        )
+    for note in report.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+def _render_evaluation(report: object, title: str) -> None:
+    table = Table(title=title, expand=True)
+    table.add_column("Event", no_wrap=True)
+    table.add_column("Scored", justify="right")
+    table.add_column("Missed", justify="right")
+    table.add_column("MAE", justify="right")
+    table.add_column("Bias", justify="right")
+    table.add_column("In bracket", justify="right")
+    for error in report.events:  # type: ignore[attr-defined]
+        table.add_row(
+            error.event.value,
+            str(error.scored),
+            str(error.missed),
+            "-" if error.mae_ms is None else f"{error.mae_ms:.1f} ms",
+            "-" if error.bias_ms is None else f"{error.bias_ms:+.1f} ms",
+            "-"
+            if error.within_label_uncertainty is None
+            else f"{error.within_label_uncertainty:.0%}",
+        )
+    console.print(table)
+    console.print(
+        f"[dim]macro F1 {report.macro_f1:.3f} over {report.samples} tracked samples; "  # type: ignore[attr-defined]
+        f"this set resolves {report.noise_floor_ms:.1f} ms[/dim]"  # type: ignore[attr-defined]
+    )
+    if not report.claims_permitted:  # type: ignore[attr-defined]
+        console.print(
+            Panel(
+                report.claim_refusal or "",  # type: ignore[attr-defined]
+                title="Not publishable",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+    for note in report.warnings:  # type: ignore[attr-defined]
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+
+@app.command()
+def train(
+    directory: Annotated[
+        Path | None, typer.Option("--labels", help="Where the labels are.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction supplies the landmarks.")
+    ] = None,
+    seed: Annotated[int, typer.Option("--seed", help="Everything random is seeded from this.")] = 0,
+    epochs: Annotated[
+        int | None, typer.Option("--epochs", help="Maximum passes over the set.")
+    ] = None,
+    device: Annotated[
+        str, typer.Option("--device", help="torch device. cpu is the default.")
+    ] = "cpu",
+    search: Annotated[
+        list[Path] | None,
+        typer.Option("--search", help="Directories to look for moved footage in."),
+    ] = None,
+) -> None:
+    """Train the learned detector, score it against the rules, and register it.
+
+    Every step refuses rather than improvising: no labels, no dataset; too few
+    players, no split; synthetic or small held-out set, no publishable number.
+    A run that gets all the way through still prints what its score may not be
+    used for.
+    """
+    from analyzer.contracts.ml import ModelCard, TCNConfig
+    from analyzer.ml.compare import compare_detectors
+    from analyzer.ml.dataset import DatasetError, build_dataset
+    from analyzer.ml.labels import LabelStoreError, load_label_set
+    from analyzer.ml.provider import cached_pose_provider
+    from analyzer.ml.registry import model_id, save_model
+    from analyzer.ml.splits import SplitRefused, split_dataset
+    from analyzer.ml.train import train as run_training
+
+    try:
+        label_set = load_label_set(directory)
+        built = build_dataset(label_set, cached_pose_provider(model, search=tuple(search or ())))
+    except (DatasetError, LabelStoreError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    _render_dataset(built.summary)
+
+    try:
+        split = split_dataset(built, seed=seed)
+    except SplitRefused as exc:
+        console.print(
+            Panel(
+                exc.report.refusal or "",
+                title="Refusing to split",
+                title_align="left",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=1) from exc
+
+    _render_split(split.report)
+
+    config = TCNConfig() if epochs is None else TCNConfig(epochs=epochs)
+    identifier = model_id(
+        label_digest=built.summary.label_digest,
+        feature_digest=built.summary.feature_digest,
+        seed=seed,
+        config=config,
+    )
+    with console.status("Training"):
+        trained, report = run_training(
+            split.train,
+            split.val,
+            config=config,
+            seed=seed,
+            device=device,
+            label_digest=built.summary.label_digest,
+        )
+    console.print(
+        f"[dim]{report.parameters} parameters, receptive field "
+        f"{report.receptive_field_samples} samples ({report.receptive_field_s:.2f} s), "
+        f"best epoch {report.best_epoch} of {len(report.epochs)}, "
+        f"{report.elapsed_s:.1f} s[/dim]"
+    )
+    for note in report.warnings:
+        console.print(f"[yellow]note:[/yellow] {note}")
+
+    comparison = compare_detectors(
+        trained,
+        split.test,
+        model_id=identifier,
+        device=device,
+        label_digest=built.summary.label_digest,
+    )
+    _render_evaluation(comparison.rule, "Rule-based detector, held-out clips")
+    _render_evaluation(comparison.model, "Learned detector, held-out clips")
+
+    rows = Table(title="Same clips, same metric", expand=True)
+    rows.add_column("Event", no_wrap=True)
+    rows.add_column("Rules", justify="right")
+    rows.add_column("Model", justify="right")
+    rows.add_column("Difference", justify="right")
+    rows.add_column("Verdict", no_wrap=True)
+    for row in comparison.rows:
+        rows.add_row(
+            row.event.value,
+            "-" if row.rule_mae_ms is None else f"{row.rule_mae_ms:.1f} ms",
+            "-" if row.model_mae_ms is None else f"{row.model_mae_ms:.1f} ms",
+            "-" if row.difference_ms is None else f"{row.difference_ms:+.1f} ms",
+            row.verdict,
+        )
+    console.print(rows)
+    console.print(comparison.verdict)
+
+    card = ModelCard(
+        model_id=identifier,
+        created_at=datetime.now(UTC).isoformat(),
+        architecture="dilated TCN, per-sample classification",
+        config=config,
+        feature_spec=built.spec,
+        feature_digest=built.summary.feature_digest,
+        label_digest=built.summary.label_digest,
+        dataset=built.summary,
+        split=split.report,
+        training=report,
+        evaluation=comparison.model,
+    )
+    directory_written = save_model(trained, card)
+    console.print(f"[green]Registered[/green] {identifier} in {directory_written}")
+
+
+@app.command()
+def models() -> None:
+    """List the trained models, and what each one is allowed to claim."""
+    from analyzer.ml.registry import list_models
+
+    cards = list_models()
+    if not cards:
+        console.print("[dim]No trained models. Run `analyzer train`.[/dim]")
+        raise typer.Exit(code=1)
+
+    table = Table(title="Model registry", expand=True)
+    table.add_column("Model", no_wrap=True)
+    table.add_column("Labels", no_wrap=True)
+    table.add_column("Features", no_wrap=True)
+    table.add_column("Held out", justify="right")
+    table.add_column("Macro F1", justify="right")
+    table.add_column("Publishable", no_wrap=True)
+    for card in cards:
+        evaluation = card.evaluation
+        table.add_row(
+            card.model_id,
+            card.label_digest[:8],
+            card.feature_digest[:8],
+            "-" if evaluation is None else f"{evaluation.clips} clips / {evaluation.players}p",
+            "-" if evaluation is None else f"{evaluation.macro_f1:.3f}",
+            "-" if evaluation is None else ("yes" if evaluation.claims_permitted else "no"),
+        )
+    console.print(table)
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed

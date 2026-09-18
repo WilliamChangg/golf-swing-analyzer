@@ -113,16 +113,26 @@ sync/           relating two cameras' clocks to each other
 calibration/    what a pixel means: the lens, and where the cameras stand
 reconstruction/ where two calibrated rays meet: metres, in three dimensions
 club/           the shaft: a ray from the hands, and when to emit nothing
+ball/           the ball at rest, and the frame it stops being there
+impact.py       four estimates of one instant, ranked rather than averaged
 biomechanics/   measured metrics, with units, confidence and methodology
+ml/             labels, features, splits, a learned detector, and what may be claimed
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
 worker, cli     entry points
 ```
 
-Later phases add `coaching` as a sibling package, and a `BallDetector` seam
-following `ingestion`'s `FrameSource`, `pose`'s `PoseEstimator`, `filtering`'s
-`FilterStage` and `club`'s `ClubDetector`. Golf-specific reasoning is confined to
-`phases`, `sync`, `club`, `biomechanics` and `coaching`; everything below is
+`ml` is the one package with no path to the desktop app, and deliberately: it is
+a developer's workbench, not a feature. Training runs over a corpus that does not
+ship, `scripts/gen_types.py` exports nothing from it, and `dispatch` has no method
+that reaches it. Its dependency direction is the ordinary one — it reads
+`filtering` and `phases` and is read by nothing — so removing it would leave the
+engine intact, which is the correct relationship between an evaluation harness
+and the thing it evaluates.
+
+Later phases add `coaching` as a sibling package. Golf-specific reasoning is
+confined to `phases`, `sync`, `club`, `ball`, `ml`, `biomechanics` and
+`coaching`; everything below is
 general computer vision that would serve any moving body. `sync` and `club` are
 the marginal members of that set. `sync`'s mechanism — an affine time map and a
 masked cross-correlation — would align any pair of recordings of anything, and
