@@ -56,6 +56,7 @@ from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.projects import Project, ProjectList
 from analyzer.contracts.reconstruction import ReconstructionReport
 from analyzer.contracts.rpc import EngineError
+from analyzer.contracts.scene import ReconstructionScene
 from analyzer.contracts.sync import SyncModel
 from analyzer.contracts.video import SeekIndex, TimestampSource, VideoMetadata
 from analyzer.dispatch import call
@@ -2042,6 +2043,132 @@ def reconstruct(
     # pair produced no positions rather than reading an empty report as success.
     if not result.reconstructed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def scene(
+    project: Annotated[int, typer.Argument(help="Which project's pair to draw.")],
+    reference_clip: Annotated[
+        int | None,
+        typer.Option("--reference-clip", help="Which clip sets the clock and the frame."),
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="The second view.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use for both clips.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, for both clips.")
+    ] = None,
+    start_frame: Annotated[int, typer.Option("--start", help="First reference frame.")] = 0,
+    end_frame: Annotated[
+        int | None, typer.Option("--end", help="Exclusive last reference frame.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the whole scene as JSON instead of a summary.")
+    ] = False,
+) -> None:
+    """The reconstruction shaped for a viewport, and what a viewpoint would hide.
+
+    The summary's last row is the one worth reading. It is the fraction of each
+    joint's positional uncertainty that is visible from the reference camera --
+    which is where a viewport opens unless somebody moves it -- and a low number
+    means the picture will look more confident than the measurement is.
+    """
+    params: dict[str, object] = {
+        "project_id": project,
+        "model": model,
+        "start_frame": start_frame,
+    }
+    if reference_clip is not None:
+        params["reference_clip_id"] = reference_clip
+    if target_clip is not None:
+        params["target_clip_id"] = target_clip
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if end_frame is not None:
+        params["end_frame"] = end_frame
+
+    try:
+        result = call("reconstruct_scene", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ReconstructionScene)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_scene(result)
+
+
+def _render_scene(result: ReconstructionScene) -> None:
+    """What a viewport is about to draw, and how honest the default view of it is."""
+    import numpy as np
+
+    from analyzer.reconstruction.triangulate import visible_uncertainty_fraction
+
+    summary = Table(title="Scene", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("space", f"{result.space.value}  [dim]metres, centred on the reference[/dim]")
+    summary.add_row(
+        "frames", f"{len(result.frames)}  [dim]{result.start_frame}..{result.end_frame}[/dim]"
+    )
+    summary.add_row(
+        "reconstructed",
+        f"{sum(frame.reconstructed for frame in result.frames)} points over "
+        f"{sum(1 for frame in result.frames if frame.reconstructed)} frames",
+    )
+    summary.add_row("framing", f"radius {result.radius_m:.2f} m about the measured centroid")
+    for camera in result.cameras:
+        summary.add_row(
+            f"{camera.kind.value} camera",
+            f"{camera.name}  [dim]{camera.role.value}, {camera.horizontal_fov_deg:.0f} deg h-fov, "
+            f"at ({camera.position.x:+.2f}, {camera.position.y:+.2f}, {camera.position.z:+.2f}) m[/dim]",
+        )
+
+    # The phase's own number. The reference camera is the origin, so the
+    # direction to each point is the point.
+    points, matrices, sigmas = [], [], []
+    for frame in result.frames:
+        for point in frame.points:
+            if point.position is None or point.uncertainty is None:
+                continue
+            points.append([point.position.x, point.position.y, point.position.z])
+            unknown = point.uncertainty
+            matrices.append(
+                [
+                    [unknown.xx, unknown.xy, unknown.xz],
+                    [unknown.xy, unknown.yy, unknown.yz],
+                    [unknown.xz, unknown.yz, unknown.zz],
+                ]
+            )
+            sigmas.append(unknown.sigma_m)
+
+    if points:
+        fraction = visible_uncertainty_fraction(np.array(matrices), np.array(points))
+        finite = np.isfinite(fraction)
+        worst = np.array(sigmas)[finite]
+        shown = float(np.median(fraction[finite]))
+        summary.add_row("uncertainty", f"{np.median(worst) * 1000:.1f} mm at the median")
+        tone = "green" if shown > 0.7 else "yellow" if shown > 0.4 else "red"
+        summary.add_row(
+            "visible from the reference camera",
+            f"[{tone}]{shown:.0%}[/{tone}]  [dim]of it; the rest points down the line of "
+            f"sight and draws as {np.median(worst * fraction[finite]) * 1000:.1f} mm[/dim]",
+        )
+
+    console.print(summary)
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
 
 
 def _render_club(result: ClubTrackingReport) -> None:

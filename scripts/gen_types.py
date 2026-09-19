@@ -51,6 +51,10 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.coaching", "CoachingReport"),
     ("analyzer.contracts.video", "SeekIndex"),
     ("analyzer.contracts.overlay", "PoseOverlay"),
+    # Phase 15. `ReconstructionReport` has been exported since Phase 9 and is
+    # still the numbers; this is the same reconstruction as geometry, and the
+    # viewport is what draws it.
+    ("analyzer.contracts.scene", "ReconstructionScene"),
 )
 
 # `Project` and `ProjectList` went in with Phase 14.1, which is the phase their
@@ -143,6 +147,42 @@ def _rewrite_prefix_items(node: Any) -> None:
             _rewrite_prefix_items(item)
 
 
+def _rewrite_documented_refs(node: Any) -> None:
+    """Let a field document a shared model without the generator copying it.
+
+    Pydantic writes a described reference as `{"$ref": ..., "description": ...}`,
+    which JSON Schema 2020-12 allows and `json-schema-to-typescript` treats as an
+    anonymous schema: it inlines a **copy** of the target and names it after the
+    original with a digit stuck on. A contract using one `Vec3` for five fields
+    comes out as `Vec3` plus `Vec31` through `Vec35`, five structurally identical
+    interfaces that a reader has to work out are the same type.
+
+    Draft-07's way of saying the same thing -- a one-element `allOf` around the
+    reference -- the generator reads as a reference, so the named type survives
+    and the description still lands on the property as a comment. Both readings
+    are the same schema; this is a spelling the tool understands.
+
+    Same shape of fix as `_rewrite_prefix_items`, and the same argument: the
+    limitation belongs in the generator's input rather than in the contract.
+    Dropping the descriptions would have de-duplicated the types too, at the cost
+    of deleting the sentence that says `up` points along the image's -y -- which
+    is exactly the kind of convention this project writes down because getting it
+    wrong produces a plausible picture rather than an error.
+    """
+    if isinstance(node, dict):
+        reference = node.get("$ref")
+        if isinstance(reference, str) and len(node) > 1:
+            siblings = {key: value for key, value in node.items() if key != "$ref"}
+            node.clear()
+            node["allOf"] = [{"$ref": reference}]
+            node.update(siblings)
+        for value in node.values():
+            _rewrite_documented_refs(value)
+    elif isinstance(node, list):
+        for item in node:
+            _rewrite_documented_refs(item)
+
+
 def _json_schema(model: Any) -> dict[str, Any]:
     """Derive JSON Schema in serialization mode.
 
@@ -153,6 +193,7 @@ def _json_schema(model: Any) -> dict[str, Any]:
     schema: dict[str, Any] = model.model_json_schema(mode="serialization")
     _strip_property_titles(schema)
     _rewrite_prefix_items(schema)
+    _rewrite_documented_refs(schema)
     schema["title"] = model.__name__
     return schema
 

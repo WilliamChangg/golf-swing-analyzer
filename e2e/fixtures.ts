@@ -872,3 +872,181 @@ export const POSE_OVERLAY = {
 
 /** An empty session list, which is what a first run shows. */
 export const NO_PROJECTS = { schema_version: 1, projects: [] };
+
+// --- three dimensions (Phase 15) -------------------------------------------
+
+/** One session, so the Three-D screen has something to reconstruct. */
+export const ONE_PROJECT = {
+  schema_version: 1,
+  projects: [
+    {
+      schema_version: 1,
+      id: 3,
+      name: "Range session",
+      notes: "",
+      created_at: "2026-09-18T10:00:00Z",
+      clips: [],
+      syncs: [],
+      rig: null,
+    },
+  ],
+  database_path: "/Users/example/Library/Application Support/gsa/projects.db",
+};
+
+/** Landmarks the scene fixture carries: two shoulders and two elbows. */
+const SCENE_LANDMARKS = [11, 12, 13, 14];
+
+/**
+ * A reconstruction over the same 45 frames the real fixture clip has.
+ *
+ * **The content key is the fixture clip's**, which is the whole point: the
+ * viewport refuses to scrub against a recording it cannot prove is the one that
+ * was reconstructed, and a scene carrying a made-up key would exercise the
+ * refusal instead of the pairing. `scene.spec.ts` flips it to test the other
+ * branch.
+ *
+ * The geometry is synthetic and deliberately simple — a body 2.5 m down the
+ * reference camera's axis, sliding sideways one centimetre a frame — because
+ * what this fixture is for is the *frame the viewport draws*, and a joint that
+ * moves a known amount per frame is one whose drawn position says which frame is
+ * on screen. The engine's real output is checked against a body whose 3D
+ * positions are inputs in `python/tests/test_scene.py`, and the projection that
+ * draws it is pinned to the engine's own in `projection.test.ts`.
+ *
+ * One frame is left entirely unreconstructed, because a viewport that held the
+ * previous pose across it would look perfectly correct.
+ */
+export const SCENE_EMPTY_FRAME = 20;
+
+export const RECONSTRUCTION_SCENE = {
+  schema_version: 1,
+  space: "camera",
+  reference_content_key: VFR_SEEK_INDEX.content_key,
+  reference_name: "vfr_30_to_15fps.mp4",
+  target_name: "down_the_line.mp4",
+  reference_role: "face_on",
+  target_role: "down_the_line",
+  start_frame: 0,
+  end_frame: 45,
+  frames: Array.from({ length: 45 }, (_, index) => {
+    const empty = index === SCENE_EMPTY_FRAME;
+    const points = SCENE_LANDMARKS.map((landmark) => ({
+      landmark,
+      position: empty
+        ? null
+        : {
+            // One centimetre of travel per frame: over 45 frames that is 45 cm,
+            // which at fx = 1400 and 2.5 m is about 250 px on screen. A frame
+            // out is visibly a frame out.
+            x: (landmark % 2 === 1 ? -0.2 : 0.2) + index * 0.01,
+            y: landmark < 13 ? -0.25 : 0.05,
+            z: 2.5,
+          },
+      refused: empty ? "not_seen" : null,
+      uncertainty: empty
+        ? null
+        : {
+            sigma_m: 0.02,
+            xx: 1e-5,
+            yy: 1e-5,
+            zz: 4e-4,
+            xy: 0,
+            xz: 0,
+            yz: 0,
+          },
+      convergence_deg: empty ? null : 88,
+      reprojection_px: empty ? null : 0.9,
+      visibility: empty ? 0.2 : 0.95,
+    }));
+    return {
+      frame_index: index,
+      timestamp_s: VFR_SEEK_INDEX.timestamps_s[index] ?? 0,
+      points,
+      reconstructed: empty ? 0 : points.length,
+    };
+  }),
+  landmarks: SCENE_LANDMARKS,
+  connections: [
+    [11, 12],
+    [11, 13],
+    [12, 14],
+  ],
+  trajectories: [],
+  cameras: [
+    {
+      kind: "reference",
+      role: "face_on",
+      name: "vfr_30_to_15fps.mp4",
+      position: { x: 0, y: 0, z: 0 },
+      forward: { x: 0, y: 0, z: 1 },
+      up: { x: 0, y: -1, z: 0 },
+      right: { x: 1, y: 0, z: 0 },
+      fx: 1400,
+      fy: 1400,
+      cx: 960,
+      cy: 540,
+      image_width: 1920,
+      image_height: 1080,
+      horizontal_fov_deg: 69,
+    },
+    {
+      kind: "target",
+      role: "down_the_line",
+      name: "down_the_line.mp4",
+      position: { x: -2.5, y: 0, z: 2.5 },
+      forward: { x: 1, y: 0, z: 0 },
+      up: { x: 0, y: -1, z: 0 },
+      right: { x: 0, y: 0, z: -1 },
+      fx: 1500,
+      fy: 1500,
+      cx: 960,
+      cy: 540,
+      image_width: 1920,
+      image_height: 1080,
+      horizontal_fov_deg: 65,
+    },
+  ],
+  calibration: "stereo",
+  centroid: { x: 0.02, y: -0.1, z: 2.5 },
+  radius_m: 0.45,
+  slow_motion_factor: 1,
+  pixel_sigma_px: 2.29,
+  report: {
+    schema_version: 1,
+    reconstructed: true,
+    space: "camera",
+    reference_role: "face_on",
+    target_role: "down_the_line",
+    reference_name: "vfr_30_to_15fps.mp4",
+    target_name: "down_the_line.mp4",
+    frames: 45,
+    reconstructed_frames: 44,
+    slow_motion_factor: 1,
+    calibration: "stereo",
+    baseline_m: 3.54,
+    convergence_deg: 90,
+    quality: {
+      points_attempted: 180,
+      points_reconstructed: 176,
+      coverage: 0.978,
+      median_reprojection_px: 0.9,
+      max_reprojection_px: 2.4,
+      median_convergence_deg: 88,
+      min_convergence_deg: 71,
+      median_uncertainty_m: 0.02,
+      p95_uncertainty_m: 0.031,
+      bones: [],
+      symmetry: [],
+      worst_bone_variation: 0.04,
+      pixel_sigma_px: 2.29,
+      methodology: "DLT, refined on reprojection error in both views",
+    },
+    pairing: null,
+    landmarks: [],
+    reconstructed_at: null,
+    config: {},
+    refusal: null,
+    warnings: [],
+  },
+  warnings: [],
+};

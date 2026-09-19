@@ -31,7 +31,9 @@ from analyzer.reconstruction.triangulate import (
     positional_uncertainty,
     reprojection_errors,
     triangulate,
+    uncertainty_covariance,
     velocity_from_image,
+    visible_uncertainty_fraction,
 )
 
 __all__ = [
@@ -49,5 +51,7 @@ __all__ = [
     "require_stereo_rig",
     "track_from",
     "triangulate",
+    "uncertainty_covariance",
     "velocity_from_image",
+    "visible_uncertainty_fraction",
 ]

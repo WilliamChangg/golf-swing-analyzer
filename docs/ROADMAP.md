@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-14 complete (15 / 21).**
+**Progress: Phases 0-15 complete (16 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -23,8 +23,8 @@ advance past a broken phase.
 | 12  | Temporal ML           | ✅ **Done** | Leak-free splits; **no metrics — no labelled set exists**      |
 | 13  | Coaching engine       | ✅ **Done** | Every finding cites computed evidence; 9 of 12 rules refuse    |
 | 14  | Desktop UI            | ✅ **Done** | Full workflow end-to-end; seek verified in a real browser      |
-| 15  | 3D visualisation      | ⬜ Next     | Scrub stays in sync with video                                 |
-| 16  | Swing comparison      | ⬜          | Differences shown, no "better/worse" score                     |
+| 15  | 3D visualisation      | ✅ **Done** | Scrub stays in sync; the viewpoint reports what it hides       |
+| 16  | Swing comparison      | ⬜ Next     | Differences shown, no "better/worse" score                     |
 | 17  | Performance           | ⬜          | Before/after numbers recorded                                  |
 | 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                         |
 | 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                         |
@@ -2275,14 +2275,229 @@ pose extraction already cost. Nothing new is cached.
 - No two-camera screen, for the reason above: no pair of clips in this
   repository is two views of one swing.
 
-## Phase 15 — 3D visualisation ⬜
+## Phase 15 — 3D visualisation ✅
 
-- [ ] 15.1 R3F scene + camera controls
-- [ ] 15.2 Skeleton + trajectory from reconstruction output
-- [ ] 15.3 Shared timeline store (video ↔ 3D)
-- [ ] 15.4 Confidence + calibration status encoded in the viewport
-- [ ] 15.5 Tests: store sync, degenerate frames
-- [ ] 15.6 Commit
+`python/analyzer/{scene.py,contracts/scene.py}` ·
+`apps/desktop/src/features/scene/` ·
+[ADR-0019](decisions/ADR-0019-the-viewpoint-is-part-of-the-measurement.md)
+
+**A drawing is made from somewhere, and a report is not.** That is the whole
+phase. Phase 9 measured how well two cameras locate a joint and reported a
+number; Phase 15 draws the joint, and discovers that the same measurement looks
+like a confident dot or a ten-centimetre smear depending only on where the
+reader is standing — with the default viewpoint, the one almost nobody moves,
+being the most flattering one available.
+
+- [x] **15.1 Scene + camera controls** — orbit, zoom, and a default that is the
+      **reference camera itself**, with the focal length the calibration
+      measured. Not R3F; see the deviation below, and the measurement behind it
+- [x] **15.2 Skeleton + trajectory from reconstruction output** — a new
+      `ReconstructionScene` contract, because `ReconstructionReport` deliberately
+      carries no points. Bones drawn only where both ends survived; hand paths
+      **broken** at a refused instant rather than drawn across
+- [x] **15.3 Shared timeline** — not a store: one number. The viewport reads the
+      frame `useFramePlayer` reports the browser **painted**, so there is no
+      second clock to drift. What is added is the guard that number cannot
+      supply — a content-key check that the video is the recording the geometry
+      came from
+- [x] **15.4 Confidence + calibration status in the viewport** — the calibration
+      status, the ray convergence, the uncertainty in millimetres, and the number
+      this phase exists for: **what fraction of that uncertainty the current
+      viewpoint can show**
+- [x] **15.5 Tests** — 23 pytest, 68 Vitest, 7 Playwright: the projection pinned
+      across two languages, degenerate frames, and the scrub against a real
+      decoder
+- [x] **15.6 Commit** — with the measurements below
+
+### The headline, and it is the third instance of the same shape
+
+`scripts/benchmark_viewport.py --sweep convergence`, Apple M1 Pro / macOS
+26.4.1. The synthetic stereo fixture at the 2.7 px landmark scatter Phase 3
+measured on real footage, with the two cameras brought together from a right
+angle — which is what someone filming with two phones on one side of a bay does:
+
+| separation | ray angle | true sigma  | visible fraction | **sigma on screen** |
+| ---------- | --------- | ----------- | ---------------- | ------------------- |
+| 90°        | 94°       | 5.5 mm      | 0.96             | **5.3 mm**          |
+| 60°        | 64°       | 7.3 mm      | 0.74             | **5.3 mm**          |
+| 45°        | 48°       | 9.4 mm      | 0.57             | **5.3 mm**          |
+| 30°        | 32°       | 13.7 mm     | 0.39             | **5.3 mm**          |
+| 20°        | 21°       | 20.2 mm     | 0.26             | **5.3 mm**          |
+| 15°        | 17°       | **25.6 mm** | 0.20             | **5.2 mm**          |
+
+**The last column is flat to one decimal place while the third grows 4.7x.** A
+reader looking at the default view of a 15° capture sees the same smear as a
+reader looking at a 90° one, because the direction that grew is the direction
+that camera is looking along. Phase 8 found a residual flat across a 400x change
+in focal error; Phase 9 found one flat across a 4.7x change in 3D error; this is
+the same blindness a third time, and it is worse than both because it is a
+picture rather than a number somebody might think to distrust.
+
+Walking round the body, at the same two captures:
+
+| orbit from reference | 90° pair: visible | on screen | 15° pair: visible | on screen |
+| -------------------- | ----------------- | --------- | ----------------- | --------- |
+| 0° (reference)       | 0.96              | 5.3 mm    | **0.20**          | 5.2 mm    |
+| 15°                  | 0.97              | 5.3 mm    | 0.17              | 4.3 mm    |
+| 30°                  | 0.97              | 5.4 mm    | 0.36              | 9.2 mm    |
+| 45°                  | 0.98              | 5.4 mm    | 0.57              | 14.4 mm   |
+| 60°                  | 0.98              | 5.3 mm    | 0.75              | 19.0 mm   |
+| 90°                  | 0.96              | 5.3 mm    | **0.98**          | 24.7 mm   |
+
+A well-conditioned pair barely changes — its ellipsoid is nearly a sphere and
+there is no bad direction to find. A shallow one hides four fifths of its error
+at zero and gives all of it up by ninety. **On screen this is unmissable**: the
+15° capture drawn from the reference camera is a tidy skeleton with small round
+halos, and the same frame orbited 90° is a stick figure inside four flat
+ellipses wider than the body.
+
+### The claim that makes a hand-written projection safe to ship
+
+`benchmark_viewport.py --sweep projection`, over 8,778 reconstructed points:
+
+| points | max disagreement with `StereoGeometry.project` |
+| ------ | ---------------------------------------------- |
+| 8,778  | **0.000e+00 px**                               |
+
+Placed at the reference camera and projected with the intrinsics the scene
+carries, every point lands exactly where the engine puts it — which is where
+that camera saw the landmark and where `PoseOverlay` draws it. The viewport's
+default view and the video are then two renderings of one measurement.
+`projection-truth.json` carries 32 of those points and their pixels into
+TypeScript, and `projection.test.ts` asserts the same thing there, so the two
+implementations cannot drift apart without a test failing.
+
+### Cost
+
+`benchmark_viewport.py --sweep cost`, plus `JSON.parse` measured in Node:
+
+| frames | build    | serialise | parse   | payload | per frame |
+| ------ | -------- | --------- | ------- | ------- | --------- |
+| 68     | 26.5 ms  | 5.8 ms    | —       | 0.98 MB | 14.0 KB   |
+| 96     | 42.0 ms  | 8.0 ms    | —       | 1.37 MB | 13.9 KB   |
+| 312    | 158.3 ms | 23.7 ms   | 11.9 ms | 3.98 MB | 12.5 KB   |
+
+Against roughly 1.3 s per clip to extract poses and ~70 ms to reconstruct.
+A scene point carries a position, six covariance elements and three diagnostics
+against an overlay point's two coordinates, which is what set `MAX_SCENE_FRAMES`
+at **600** rather than the overlay's 2000. Nothing is cached, for Phase 3's
+measured reason.
+
+### Deliberate deviations from the original plan
+
+- **No React Three Fiber, and no WebGL.** 15.1 asks for an R3F scene; what
+  shipped is a projection written in `projection.ts` and an SVG figure. Three
+  reasons, in the order they decided it. **(1) The exit criterion is a
+  measurement.** "Scrub stays in sync with video" has to be _checked_, and Phase
+  14 established what checking means here — a real browser, a real decoder, and
+  the frame it reports painting looked back up. A WebGL canvas exposes nothing
+  about what it drew, so verifying it is a screenshot diff, which cannot say
+  _which frame_ is on screen. Every joint in the viewport is a DOM node carrying
+  its landmark, so `e2e/scene.spec.ts` asserts that the wrist moved 112 px when
+  the painted frame moved 20 — against a fixture that travels a known centimetre
+  per frame. **(2) The uncertainty ellipse needs the projection in hand**: what
+  is drawn per joint is `A S A'`, the 3D covariance pushed through this camera's
+  own Jacobian, which is not a scaled sphere. **(3) The scene is small** — about
+  150 nodes a frame, which is not what a scene graph is for. The cost is stated
+  rather than hidden: no depth buffer, no lighting, and drawing order standing in
+  for occlusion. That is the right trade for a stick figure whose job is to show
+  where a measurement is weak, and it would not survive a mesh.
+- **15.3's "shared timeline store" is not a store, and building one would have
+  been the bug.** Two timelines kept in step is two things that can drift; the
+  viewport instead reads the single frame index `useFramePlayer` already
+  publishes — the frame the **browser reported painting**, not the one that was
+  requested. What a shared number cannot supply is whether the pixels and the
+  geometry are the same recording, so `sceneMatchesClip` compares the scene's
+  `reference_content_key` against the seek index's. That failure is the one worth
+  guarding: the video plays, the skeleton moves, the frame numbers agree, and the
+  body on screen has nothing to do with the footage behind it.
+- **The uncertainty ellipses are magnified, and the factor is drawn in the
+  picture.** At true scale a joint determined to 5.4 mm at 3.4 m through a
+  1400 px focal length is 2.2 px of a 1920-wide frame — about two thirds of one
+  screen pixel. Drawn honestly at 1x the feature shows nothing in exactly the
+  cases it exists for. So it is exaggerated, ×20 by default, with
+  `uncertainty ×20 · 1σ` rendered in the corner of every frame that has one and
+  ×1 offered so the true scale can be seen for what it is. The millimetres in the
+  panel remain the truth; the ellipse carries the part a number cannot, which is
+  the shape and how it changes as the reader moves.
+- **`uncertainty_covariance` is new; `positional_uncertainty` is untouched.**
+  Phase 9's scalar is what every gate and report uses and it is cheaper. The
+  covariance is built from `J'J`'s own eigendecomposition rather than by
+  inverting it — the systems a shallow convergence angle produces are nearly
+  singular and a direct inverse loses precision first in the smallest eigenvalue,
+  which is the largest axis of the covariance and the entire reason for computing
+  one. A test asserts the two agree to 1e-9, because "the same by construction"
+  across two functions is a claim and not a guarantee.
+- **`ReconstructedSequence` gained a `refusal` array.** The report counts Phase
+  9's five refusal reasons per landmark, which is what a reader of numbers needs;
+  a viewport draws the individual hole and has to say which of the five it is.
+  The reason could not be re-derived downstream, because every diagnostic array
+  is masked to NaN for a refused point — refusal removes the evidence a reason
+  would be inferred from.
+- **The type generator needed fixing again, and again rather than the contract.**
+  Pydantic writes a documented reference as `{"$ref": ..., "description": ...}`,
+  which `json-schema-to-typescript` treats as an anonymous schema and inlines a
+  **copy** of: one `Vec3` used by five fields came out as `Vec3` plus `Vec31`
+  through `Vec35`. `gen_types.py` now rewrites those into draft-07's
+  one-element `allOf`, which the generator reads as a reference. Dropping the
+  descriptions would have de-duplicated the types too, at the cost of deleting
+  the sentence saying `up` points along the image's -y — exactly the kind of
+  convention that produces a plausible picture rather than an error. The fix
+  improved every other generated file: a shared model now keeps its own docstring
+  instead of having it overwritten by whichever field referenced it.
+- **The viewport is a fifth screen, not a panel on Swing.** It is the only screen
+  that needs a _pair_ — two clips, a calibration and an alignment — and none of
+  the three is recoverable from the loose file the Swing screen works on.
+- **The reference clip is still picked by hand.** The project knows its path and
+  the WebView still may not read it: Phase 14's asset scope ships empty and
+  `choose_clip` opens its own dialog in Rust precisely so that a grant is tied to
+  something the frontend could not have fabricated. A command taking a path would
+  have saved a click and undone the only thing making that scope mean anything.
+  The content key is what confirms the right file was chosen.
+- **No ground plane, no horizon, no gravity.** The scene is `CAMERA` metres.
+  Phase 9 recorded that a scene-fixed frame needs a measured vertical and a
+  target line and that a stereo pair supplies neither; a grid on the floor would
+  be a drawing of that assumption. The orbit turns about the reference camera's
+  own up, which is a statement about the picture and is labelled as one.
+- **A `scene.fixture.ts` sits beside the tests and is imported by nothing in the
+  app.** Its scene starts at frame 10, refuses one landmark on one frame and
+  every landmark on another. A fixture starting at zero would let a viewport that
+  indexed positionally pass every test and draw the wrong body on every windowed
+  scene.
+
+### Verified
+
+`analyzer scene <project>` on the only two-clip project this repository can build
+refuses before reading any footage — _"Triangulation needs both cameras
+calibrated and their relative pose measured; this project has 'none'"_ — which is
+Phase 9's `require_stereo_rig` running first, so the reported failure is the
+first thing that was wrong rather than the last thing that went wrong.
+
+The viewport itself was run in a browser against a real reconstruction of the
+synthetic stereo fixture and **looked at**, which is how Phase 9 caught a camera
+convention its own error metric could not see. The body is the right way up, the
+hand path arcs up and back, and at frame 60 the arms are at the top. At 90°
+separation the panel reads 5.4 mm / 92% visible / drawn as 4.9 mm; at 15° it
+reads 22.8 mm / 21% / **drawn as 4.9 mm** — the benchmark's flat column, live on
+screen, with nine landmarks refused for rays too shallow to intersect.
+
+**Open, and not resolved here:**
+
+- **Nothing here has been run on a real reconstruction**, and the benchmark says
+  so in its own docstring. Phase 7 established that this repository's only
+  two-angle pair is not the same swing and Phase 8 that no real calibration
+  footage exists, so every millimetre above comes from a fixture whose body is an
+  input and which contains no pose estimator. The viewpoint arithmetic is exact —
+  it is geometry, and does not care where the points came from — and the
+  millimetres are a floor.
+- The viewport is verified in **Chromium**, the app ships on WKWebView, and
+  `tauri-driver` is still not wired up. Phase 14's limitation, unchanged.
+- **`MAX_SCENE_FRAMES` is 600 because of a JSON encoding.** A columnar payload
+  would cut it several-fold; it was not taken because the per-point object is
+  what carries the "null exactly when refused" invariant into TypeScript, and a
+  positional array would move that check out of the type system and into every
+  consumer. Worth revisiting in Phase 17, where it is a measured bottleneck or it
+  is nothing.
 
 ## Phase 16 — Swing comparison ⬜
 

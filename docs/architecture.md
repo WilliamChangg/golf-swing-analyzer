@@ -13,7 +13,8 @@ Three processes, one machine, no network.
 │  │                      │        │                       │  │
 │  │  features/analysis   │ invoke │  commands.rs          │  │
 │  │  features/player  ───┼───────►│  engine/mod.rs        │  │
-│  │  features/projects   │        │  engine/resolve.rs    │  │
+│  │  features/scene      │        │  engine/resolve.rs    │  │
+│  │  features/projects   │        │                       │  │
 │  │  features/video      │        │                       │  │
 │  │  features/health     │  asset │  asset_protocol_scope │  │
 │  │  lib/ipc.ts       ◄──┼────────┤  (one file at a time) │  │
@@ -99,10 +100,22 @@ CI runs `npm run gen:types:check`, which regenerates and fails on any diff. A
 Python contract change that is not reflected in the TypeScript therefore breaks
 the build rather than drifting until it fails at runtime.
 
-Two post-processing steps keep the output reviewable: per-field `title`s are
-stripped (Pydantic emits one per field, which the generator turns into a wall of
-single-use aliases), and structurally identical numbered duplicates
-(`HealthStatus1`) are collapsed.
+Three post-processing steps keep the output usable, each working around
+something the generator cannot read rather than reshaping a contract to suit it:
+
+- **Per-field `title`s are stripped.** Pydantic emits one per field, and the
+  generator turns each into its own exported alias — a wall of single-use string
+  aliases, plus duplicated enums.
+- **`prefixItems` is also written in draft-07's tuple form.** A `tuple[A, B]` is
+  JSON Schema 2020-12; the generator reads only the older spelling and otherwise
+  emits `[unknown, unknown]`, a type that compiles, carries nothing, and fails at
+  the point of use.
+- **A documented `$ref` is wrapped in a one-element `allOf`.** Pydantic writes
+  `{"$ref": ..., "description": ...}`, which the generator treats as an anonymous
+  schema and inlines a **copy** of — one shared `Vec3` used by five fields came
+  out as `Vec3` plus `Vec31` through `Vec35`. The `allOf` spelling is the same
+  schema and is read as a reference, so the named type survives and the
+  description still lands on the property.
 
 Types that exist only on the TypeScript side — `EngineError`, `EngineResult` —
 are hand-written in `packages/types/src/ipc.ts`, because they describe the
@@ -128,6 +141,8 @@ club/           the shaft: a ray from the hands, and when to emit nothing
 ball/           the ball at rest, and the frame it stops being there
 impact.py       four estimates of one instant, ranked rather than averaged
 biomechanics/   measured metrics, with units, confidence and methodology
+overlay.py      the filtered skeleton, converted back into drawing coordinates
+scene.py        the reconstruction as geometry: metres, cameras and ellipsoids
 coaching/       findings, the thresholds they borrow, and the guard on what may be said
 ml/             labels, features, splits, a learned detector, and what may be claimed
 projects/       the clips of one swing, and their stored alignments (SQLite)
@@ -975,14 +990,41 @@ Reconstructing 312 frames (8,778 points) costs 70 ms, against ~95 ms to filter
 both clips and ~1.3 s per clip to extract poses. Nothing is cached, for the same
 measured reason as Phase 3.
 
+### The 3D viewport (Phase 15, 2026-09-18)
+
+`scripts/benchmark_viewport.py`, on the same synthetic fixture and with the same
+caveat: the millimetres are a floor, and what is exact here is the viewpoint
+arithmetic, which is geometry.
+
+A joint is drawn as a dot and a dot carries no direction, so a viewpoint decides
+whether that joint's uncertainty spreads across the picture or hides behind it.
+Bringing the two cameras together from a right angle, at 2.7 px of scatter:
+
+| separation | true sigma | visible fraction | **sigma on screen** |
+| ---------- | ---------- | ---------------- | ------------------- |
+| 90°        | 5.5 mm     | 0.96             | **5.3 mm**          |
+| 45°        | 9.4 mm     | 0.57             | **5.3 mm**          |
+| 15°        | 25.6 mm    | 0.20             | **5.2 mm**          |
+
+The same shape as the two sweeps above, one layer up: a number flat across a
+range over which the thing it appears to describe grows 4.7x — except that here
+the flat number is a picture. `ViewpointPanel` reports the fraction, which is a
+property of the _view_ rather than of the reconstruction. See
+[ADR-0019](decisions/ADR-0019-the-viewpoint-is-part-of-the-measurement.md).
+
+Building a 312-frame scene costs 158 ms, serialising it 24 ms and parsing it in
+the browser 12 ms, for 3.98 MB — against ~1.3 s per clip to extract poses. A
+scene point is roughly four times an overlay point, which is why the range limit
+is 600 frames. Nothing is cached, for the same measured reason as Phase 3.
+
 ## Testing strategy
 
-| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                                                                            |
-| ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Contracts, probes, dispatch, protocol | pytest (905)    | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction, club tracking |
-| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                                                                                   |
-| IPC wrappers, component rendering     | Vitest (99)     | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage                                                                                                       |
-| UI flows                              | Playwright (34) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review                                                                                                                                                   |
+| Layer                                 | Tool            | Covers                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Contracts, probes, dispatch, protocol | pytest (1,309)  | serialization, status aggregation, hash verification, error normalisation, RPC framing, rotation conventions, VFR detection, decode, caching, pose, filtering, phase detection, biomechanics, camera views, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, the ML apparatus, coaching rules, the seek map, the overlay and scene builders |
+| Transport framing, path resolution    | cargo test (12) | notification vs reply, id correlation, malformed frames, `uv`/project discovery                                                                                                                                                                                                                                                                                                                                  |
+| IPC wrappers, component rendering     | Vitest (220)    | error normalisation, status rendering, remediation display, metadata panels, failure states, frame-by-frame inspection, alignment presentation, manual anchor picking, calibration coverage, overlay drawing, metrics and findings panels, and the viewport's projection pinned to the engine's own pixels                                                                                                       |
+| UI flows                              | Playwright (55) | layout, engine data rendering, import flow, screen switching, failure panel, phase timeline scrubbing, two-camera alignment, calibration review, frame-accurate seek against a real decoder, and the 3D viewport scrubbing against one                                                                                                                                                                           |
 
 The ingestion tests are split between pure parsing tests, which take ffprobe
 output as literal strings and need no ffmpeg, and integration tests that run the

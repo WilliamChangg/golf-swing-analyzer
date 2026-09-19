@@ -154,7 +154,11 @@
           "type": "number"
         },
         "family": {
-          "$ref": "#/$defs/BoardFamily",
+          "allOf": [
+            {
+              "$ref": "#/$defs/BoardFamily"
+            }
+          ],
           "default": "DICT_5X5_100"
         },
         "legacy_pattern": {
@@ -177,7 +181,11 @@
       "description": "Policy for calibration.\n\nThe bounds are **stated policy informed by measurement**, not measured\noptima: `scripts/benchmark_calibration.py` establishes the shape of each\nrelationship -- that focal uncertainty explodes as tilt range collapses,\nfor instance -- and where on that curve to refuse is a judgement about what\na wrong answer costs downstream. Where a number came from a sweep, the field\nsays so.",
       "properties": {
         "distortion_model": {
-          "$ref": "#/$defs/DistortionModel",
+          "allOf": [
+            {
+              "$ref": "#/$defs/DistortionModel"
+            }
+          ],
           "default": "radial_tangential_4",
           "description": "Which coefficients to fit. Four rather than OpenCV's five, on the measurement: with the board reaching the frame edge the fifth term buys almost nothing, and without it the fifth term is fitted to noise and does its damage at the corners where the swing is. `scripts/benchmark_calibration.py --sweep distortion` has the numbers, and a fisheye lens is the case for overriding this."
         },

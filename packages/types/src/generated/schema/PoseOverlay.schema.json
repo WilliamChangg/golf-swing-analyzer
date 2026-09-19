@@ -135,7 +135,11 @@
       "description": "One landmark on one frame, ready to be drawn.\n\n`x` and `y` are null exactly when `state` is `blocked`. They are not NaN:\nJSON has no NaN, and a serialiser that emitted one would produce a document\nno strict parser accepts -- so the absence is carried in the type where a\nTypeScript consumer has to handle it.",
       "properties": {
         "landmark": {
-          "$ref": "#/$defs/Landmark",
+          "allOf": [
+            {
+              "$ref": "#/$defs/Landmark"
+            }
+          ],
           "description": "The model's own landmark index; see `Landmark`."
         },
         "x": {
@@ -240,7 +244,11 @@
       "$ref": "#/$defs/ContentKey"
     },
     "geometry": {
-      "$ref": "#/$defs/FrameGeometry",
+      "allOf": [
+        {
+          "$ref": "#/$defs/FrameGeometry"
+        }
+      ],
       "description": "The displayed pixel size the coordinates are fractions of. Carried so a canvas can size itself, and so a caller can tell that a clip is portrait without probing the file again."
     },
     "start_frame": {

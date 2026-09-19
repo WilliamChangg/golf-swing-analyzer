@@ -166,7 +166,11 @@
       "type": "string"
     },
     "overall_status": {
-      "$ref": "#/$defs/HealthStatus",
+      "allOf": [
+        {
+          "$ref": "#/$defs/HealthStatus"
+        }
+      ],
       "description": "Worst status across all components, in the order OK < DEGRADED < MISSING < ERROR."
     },
     "platform": {

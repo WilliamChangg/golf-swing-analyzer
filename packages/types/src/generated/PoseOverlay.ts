@@ -19,7 +19,12 @@
  */
 export type HashAlgorithm = "sha256" | "sha256-sampled-v1";
 /**
- * The model's own landmark index; see `Landmark`.
+ * The 33 body landmarks produced by MediaPipe's pose models.
+ *
+ * The integer values are the model's own output indices, so this enum doubles
+ * as the mapping: `result.pose_landmarks[0][Landmark.LEFT_WRIST]` is the left
+ * wrist. Keeping the values rather than renumbering means there is no
+ * translation table to get wrong.
  */
 export type Landmark =
   | 0
@@ -92,6 +97,9 @@ export interface PoseOverlay {
   schema_version?: number;
   video_path: string;
   content_key: ContentKey;
+  /**
+   * The displayed pixel size the coordinates are fractions of. Carried so a canvas can size itself, and so a caller can tell that a clip is portrait without probing the file again.
+   */
   geometry: FrameGeometry;
   start_frame: number;
   /**
@@ -139,7 +147,20 @@ export interface ContentKey {
   size_bytes: number;
 }
 /**
- * The displayed pixel size the coordinates are fractions of. Carried so a canvas can size itself, and so a caller can tell that a clip is portrait without probing the file again.
+ * The displayed pixel dimensions IMAGE landmarks were normalised against.
+ *
+ * Carried with the landmarks because IMAGE space is **anisotropic** and
+ * nothing downstream can discover that on its own. x is divided by the frame
+ * width and y by the frame height, so on a 1080x1920 clip one pixel of
+ * vertical travel becomes 1/1920 while one pixel of horizontal travel becomes
+ * 1/1080: the same displacement in pixels counts for 0.5625 as much going down
+ * as going across. Any Euclidean quantity that mixes the two -- a distance, a
+ * speed, an angle -- is wrong by an amount that depends only on the shape of
+ * the frame, and nothing about the result looks wrong.
+ *
+ * One number fixes it, and it is not recoverable from the landmarks: the
+ * aspect ratio. It is recorded here, at the point where it is still known,
+ * rather than re-derived later by probing a video file that may have moved.
  */
 export interface FrameGeometry {
   /**
@@ -178,6 +199,9 @@ export interface OverlayFrame {
  * TypeScript consumer has to handle it.
  */
 export interface OverlayPoint {
+  /**
+   * The model's own landmark index; see `Landmark`.
+   */
   landmark: Landmark;
   /**
    * Fraction of the displayed width. Null when blocked.

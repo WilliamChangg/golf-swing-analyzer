@@ -534,3 +534,50 @@ pub async fn remove_clip(
         json!({ "project_id": project_id, "clip_id": clip_id }),
     )
 }
+
+/// A project's reconstruction, shaped for a viewport: metres, cameras, ellipsoids.
+///
+/// Project-based rather than path-based, like `reconstruct` and for the reason
+/// `ReconstructSceneParams` gives: a reconstruction needs which camera filmed
+/// which clip, the rig relating them and the map relating their clocks, and a
+/// project is the only thing in this system that records any of the three. Two
+/// loose paths cannot supply them, so there is no signature here that takes two.
+///
+/// This is the longest call in the app — it filters both clips, aligns them and
+/// triangulates — so it reports progress like the analysis commands rather than
+/// leaving a window that looks wedged.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn reconstruct_scene(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    project_id: i64,
+    reference_clip_id: Option<i64>,
+    target_clip_id: Option<i64>,
+    model: Option<String>,
+    window_s: Option<f64>,
+    start_frame: Option<u32>,
+    end_frame: Option<u32>,
+) -> Result<Value, EngineError> {
+    let mut params = json!({
+        "project_id": project_id,
+        "model": model,
+        "start_frame": start_frame.unwrap_or(0),
+        "end_frame": end_frame,
+    });
+    if let Some(value) = reference_clip_id {
+        params["reference_clip_id"] = json!(value);
+    }
+    if let Some(value) = target_clip_id {
+        params["target_clip_id"] = json!(value);
+    }
+    if let Some(window) = window_s {
+        params["filter"] = json!({ "smoothing": { "window_s": window } });
+    }
+
+    engine.request_with_notifications("reconstruct_scene", params, &|method, params| {
+        if method == PROGRESS_NOTIFICATION {
+            let _ = app.emit(PROGRESS_EVENT, params.clone());
+        }
+    })
+}

@@ -252,7 +252,10 @@ export interface CoachingReport {
    * How many rules were evaluated, whatever came out of them.
    */
   rules_considered?: number;
-  view?: CameraView;
+  /**
+   * The camera position the metrics were measured from. Decides several rules.
+   */
+  view?: CameraView & string;
   /**
    * The clip's own clock resolution, in real seconds, as the swing events imply it. Every duration comparison's bracket comes from this, so a clip that did not supply one has its timing rules refused rather than compared against a threshold it cannot resolve.
    */
@@ -407,7 +410,7 @@ export interface RefusedFinding {
  * `RefusedMetric` exists for one layer down.
  */
 export interface PhrasingReport {
-  mode?: PhrasingMode;
+  mode?: PhrasingMode & string;
   /**
    * What produced the candidates. None when nothing did.
    */
@@ -456,7 +459,10 @@ export interface CoachingConfig {
    * Confidence below which a metric does not support a conclusion, even one the arithmetic would reach comfortably. Stated policy: it is roughly the level at which the anchor factor alone -- how sure Phase 4 is that this frame is the top at all -- stops supporting a statement about the top.
    */
   min_confidence?: number;
-  phrasing?: PhrasingMode;
+  /**
+   * Off by default, and off is a complete configuration. Every finding already has a sentence; the model layer rewords, and a reworded finding is not a better-founded one.
+   */
+  phrasing?: PhrasingMode & string;
   /**
    * Base URL of a language model running on this machine. Only used when `phrasing` is `local`. There is no remote default and no hosted fallback: a finding is a measurement of a person's body, and the decision to send one anywhere is not a default.
    */

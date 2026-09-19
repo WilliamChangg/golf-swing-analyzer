@@ -22,7 +22,11 @@
           "type": "number"
         },
         "phrasing": {
-          "$ref": "#/$defs/PhrasingMode",
+          "allOf": [
+            {
+              "$ref": "#/$defs/PhrasingMode"
+            }
+          ],
           "default": "off",
           "description": "Off by default, and off is a complete configuration. Every finding already has a sentence; the model layer rewords, and a reworded finding is not a better-founded one."
         },
@@ -377,7 +381,11 @@
       "description": "What the optional language layer did, if anything.\n\n`attempted` is zero in the default configuration and that is the expected\nstate. Every count here is present so that \"the model rephrased nothing\" and\n\"the model was never asked\" cannot be confused, which is the same distinction\n`RefusedMetric` exists for one layer down.",
       "properties": {
         "mode": {
-          "$ref": "#/$defs/PhrasingMode",
+          "allOf": [
+            {
+              "$ref": "#/$defs/PhrasingMode"
+            }
+          ],
           "default": "off"
         },
         "provider": {
@@ -593,7 +601,11 @@
       "type": "integer"
     },
     "view": {
-      "$ref": "#/$defs/CameraView",
+      "allOf": [
+        {
+          "$ref": "#/$defs/CameraView"
+        }
+      ],
       "default": "unknown",
       "description": "The camera position the metrics were measured from. Decides several rules."
     },

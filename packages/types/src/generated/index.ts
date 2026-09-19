@@ -20,3 +20,4 @@ export type { ProjectList, Project, ProjectClip, ProjectSync } from "./ProjectLi
 export type { Comparison, ThresholdMethod, FindingRefusal, PhrasingMode, CoachingReport, Finding, ThresholdSource, Evidence, RefusedFinding, PhrasingReport, GuardRejection, CoachingConfig } from "./CoachingReport";
 export type { SeekIndex } from "./SeekIndex";
 export type { Landmark, OverlayState, PoseOverlay, OverlayFrame, OverlayPoint, OverlayShaft } from "./PoseOverlay";
+export type { RefusalReason, SceneCameraKind, ReconstructionScene, SceneFrame, ScenePoint, Vec3, PointUncertainty, SceneTrajectory, SceneCamera } from "./ReconstructionScene";

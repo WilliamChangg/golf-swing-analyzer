@@ -535,7 +535,7 @@ def _reconstruction_for_metrics(
         return (
             reconstruct_pair(
                 filtered,
-                _filtered_for_clip(project, other, reconstruct_params, reporter),
+                _filtered_for_clip(project, other, reconstruct_params, reporter)[0],
                 project.rig,
                 time_map,
                 reference_role=this.role,
@@ -1984,7 +1984,25 @@ class ReconstructParams(BaseModel, extra="forbid"):
 
 
 def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
-    """Triangulate a project's pair of clips into 3D positions.
+    """Triangulate a project's pair of clips into 3D positions."""
+    reconstruction, _ = _reconstructed_pair(ReconstructParams.model_validate(params), reporter)
+    return reconstruction.report
+
+
+def _reconstructed_pair(parsed: ReconstructParams, reporter: ProgressReporter) -> tuple[Any, Any]:
+    """Run one project pair all the way to metres, with the reference clip's identity.
+
+    Split out of `_reconstruct` because `reconstruct_scene` needs the points and
+    `reconstruct` needs only the report, and the twenty lines of gating in
+    between -- the rig, the stored alignment, the overlap -- must be one
+    implementation. Two copies would eventually disagree about which clip is the
+    reference, which is the one disagreement that silently swaps the coordinate
+    frame every number is expressed in.
+
+    Returns the `ReconstructedSequence` and the reference clip's `ContentKey`.
+    The key is carried out because the scene is scrubbed against a video element,
+    and the only way to be sure the pixels and the frame numbers belong together
+    is to compare identities.
 
     Filtering and phase detection are recomputed rather than taken as input, for
     the reason `compute_metrics` gives: they cost milliseconds, and accepting
@@ -1992,8 +2010,6 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     were fitted under different settings -- a difference that would surface as
     reconstruction error with no way to attribute it.
     """
-    parsed = ReconstructParams.model_validate(params)
-
     from analyzer.contracts.sync import SyncModel
     from analyzer.projects import ProjectError, ProjectStore
     from analyzer.reconstruction import (
@@ -2078,8 +2094,8 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
 
     try:
         reconstruction = reconstruct_pair(
-            filtered["reference"],
-            filtered["target"],
+            filtered["reference"][0],
+            filtered["target"][0],
             project.rig,
             alignment.time_map,
             reference_role=reference.role,
@@ -2091,14 +2107,13 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     except ReconstructionError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
 
-    report = reconstruction.report
-    report.warnings = [*warnings, *report.warnings]
-    return report
+    reconstruction.report.warnings = [*warnings, *reconstruction.report.warnings]
+    return reconstruction, filtered["reference"][1]
 
 
 def _filtered_for_clip(
     project: Project, clip: ProjectClip, parsed: ReconstructParams, reporter: ProgressReporter
-) -> Any:
+) -> tuple[Any, Any]:
     """Load, undistort and filter one clip of a pair, ready to be triangulated.
 
     The undistortion is not optional here, which is the difference from
@@ -2110,6 +2125,10 @@ def _filtered_for_clip(
     this engine's history and the same reason -- a lens displaces a landmark by
     tens of pixels near the frame edge, and correcting after fitting would leave
     the fit describing the distorted trajectory.
+
+    Returns the filtered sequence and the clip's `ContentKey`, which is read off
+    the stored poses rather than re-probed. It travels with a scene so a viewport
+    can prove the video it is scrubbing is the video that was reconstructed.
     """
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.pose.estimator import PoseEstimationError
@@ -2134,7 +2153,7 @@ def _filtered_for_clip(
     ):
         intrinsics = None
 
-    return filter_sequence(
+    filtered = filter_sequence(
         sequence,
         parsed.filter,
         space=LandmarkSpace.FRAME_WIDTHS,
@@ -2142,6 +2161,74 @@ def _filtered_for_clip(
         intrinsics=intrinsics,
         reporter=reporter,
     )
+    return filtered, sequence.video_content_key
+
+
+class ReconstructSceneParams(ReconstructParams, extra="forbid"):
+    """Parameters for `reconstruct_scene`.
+
+    Everything `reconstruct` takes, plus the range. Inheriting rather than
+    repeating so a reconstruction and the picture of it cannot be produced under
+    different smoothing, a different alignment or a different gate -- a viewport
+    showing a body fitted differently from the report beside it would be two
+    measurements presented as one.
+    """
+
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(
+        default=None,
+        description=(
+            "Exclusive end of the range, in **reference clip** frames. None takes "
+            "the reconstruction whole, which is refused past the range limit "
+            "rather than silently truncated -- a viewport that could scrub past "
+            "the end of what it was sent would show an empty scene and no reason."
+        ),
+    )
+    trajectories: list[int] | None = Field(
+        default=None,
+        description=(
+            "`Landmark` values whose paths are stroked through the scene. None "
+            "takes the wrists, which is where every metric in this engine is "
+            "anchored. An empty list asks for none."
+        ),
+    )
+
+
+def _reconstruct_scene(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """A project's reconstruction, shaped for a viewport: metres, cameras, ellipsoids.
+
+    Runs the same reconstruction `reconstruct` does and then arranges it. The
+    report is embedded in the result rather than left to a second call, because
+    the numbers qualifying a picture belong beside the picture -- and two calls
+    could return two different reconstructions.
+    """
+    parsed = ReconstructSceneParams.model_validate(params)
+
+    from analyzer.contracts.pose import Landmark
+    from analyzer.scene import SceneError, build_scene
+
+    reconstruction, content_key = _reconstructed_pair(parsed, reporter)
+
+    trajectories: tuple[Landmark, ...] | None = None
+    if parsed.trajectories is not None:
+        try:
+            trajectories = tuple(Landmark(value) for value in parsed.trajectories)
+        except ValueError as exc:
+            raise _unsupported_input(
+                ValueError(f"{exc}. Trajectories are `Landmark` values, 0 to 32."),
+                "Use the landmark indices the pose contracts define.",
+            ) from exc
+
+    try:
+        return build_scene(
+            reconstruction,
+            reference_content_key=content_key,
+            start_frame=parsed.start_frame,
+            end_frame=parsed.end_frame,
+            trajectories=trajectories,
+        )
+    except SceneError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
 
 
 def _get_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
@@ -2198,6 +2285,7 @@ METHODS: dict[str, Method] = {
     "get_calibration": _get_calibration,
     "clear_calibration": _clear_calibration,
     "reconstruct": _reconstruct,
+    "reconstruct_scene": _reconstruct_scene,
     "track_club": _track_club,
     "detect_ball": _detect_ball,
     "locate_impact": _locate_impact,

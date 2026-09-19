@@ -138,7 +138,11 @@
           "type": "array"
         },
         "view": {
-          "$ref": "#/$defs/CameraView",
+          "allOf": [
+            {
+              "$ref": "#/$defs/CameraView"
+            }
+          ],
           "description": "The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing."
         },
         "interpretation": {
@@ -554,7 +558,11 @@
       "type": "integer"
     },
     "calibration": {
-      "$ref": "#/$defs/CalibrationStatus",
+      "allOf": [
+        {
+          "$ref": "#/$defs/CalibrationStatus"
+        }
+      ],
       "default": "none",
       "description": "What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.\n\n`none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`."
     },

@@ -44,6 +44,17 @@ are nearly parallel, which is exactly the case the residual cannot see -- and it
 `sigma` is **measured from the clip**, as the filter's own residual RMS, rather
 than assumed. It is an upper bound on the fitted trajectory's error, because
 smoothing averages several samples, and it is used as one.
+
+## The direction, which a report has no use for and a picture does
+
+`uncertainty_covariance` returns the whole `3x3` rather than its largest
+eigenvalue, and `visible_uncertainty_fraction` is what reads it. Phase 9 never
+needed either: a report is a list of numbers, and a number has no direction.
+Phase 15 *draws* the point, from a viewpoint a person chooses, and the same
+covariance then looks like a small circle or a long smear depending only on where
+they chose to stand. Both are honest renderings of one measurement, which is the
+uncomfortable part, and the fraction is how a viewport says which one is on
+screen.
 """
 
 from __future__ import annotations
@@ -413,6 +424,109 @@ def positional_uncertainty(
     smallest = np.linalg.eigvalsh(gram)[:, 0]
     with np.errstate(divide="ignore", invalid="ignore"):
         result[finite] = sigma_px / np.sqrt(np.where(smallest > 0.0, smallest, np.nan))
+    return result
+
+
+def uncertainty_covariance(
+    points: NDArray[np.float64], geometry: StereoGeometry, sigma_px: float
+) -> NDArray[np.float64]:
+    """The whole `(N, 3, 3)` positional covariance, in metres squared.
+
+    `positional_uncertainty` answers "how badly is this point known", in one
+    number, in the direction it is known worst. This answers the question that
+    number deliberately collapses: **which direction that is**, and how much
+    better the other two are.
+
+    Phase 9 had no use for the distinction, because a report is a list of numbers
+    and a number has no direction. Phase 15 draws the point, and a drawing is made
+    from a viewpoint -- so the difference between a spherical uncertainty and a
+    ten-centimetre cigar pointing away from the reader is the difference between a
+    picture that shows what is not known and one that hides it. The eigenvector
+    is what decides which of those a given viewpoint produces, and it only exists
+    here.
+
+    `sigma^2 (J'J)^-1`, assembled from `J'J`'s own eigendecomposition rather than
+    by inverting it. That is not a micro-optimisation: the systems a shallow
+    convergence angle produces are nearly singular, and a direct inverse loses its
+    precision first and worst in the smallest eigenvalue -- which is the largest
+    axis of the covariance, and the entire reason for computing one.
+
+    NaN rows wherever the Jacobian is not finite, matching every other per-point
+    array in this module, so a caller masks once.
+    """
+    jacobian = stacked_jacobian(points, geometry)
+    finite = np.isfinite(jacobian).all(axis=(1, 2))
+
+    result = np.full((points.shape[0], 3, 3), np.nan, dtype=np.float64)
+    if not np.any(finite):
+        return result
+
+    gram = np.swapaxes(jacobian[finite], 1, 2) @ jacobian[finite]
+    eigenvalues, eigenvectors = np.linalg.eigh(gram)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inverted = np.where(eigenvalues > 0.0, 1.0 / eigenvalues, np.nan)
+    # V diag(1/lambda) V', scaled by the pixel variance. `eigenvectors` holds the
+    # eigenvectors in its *columns*, so scaling along the last axis scales each
+    # eigenvector by its own reciprocal eigenvalue.
+    result[finite] = (sigma_px * sigma_px) * (
+        (eigenvectors * inverted[:, None, :]) @ np.swapaxes(eigenvectors, 1, 2)
+    )
+    return result
+
+
+def visible_uncertainty_fraction(
+    covariance: NDArray[np.float64], view_direction: NDArray[np.float64]
+) -> NDArray[np.float64]:
+    """How much of a point's uncertainty a viewer looking along `view_direction` sees.
+
+    **The measurement Phase 15 exists to make.** A 3D viewport draws a point as a
+    dot, and a dot carries no direction -- so everything the reconstruction does
+    not know about that point is either spread across the picture, where a reader
+    can see it, or pointing down the line of sight, where it is hidden behind the
+    dot and the picture looks exactly as confident as a perfect one would.
+
+    Which of those happens is decided entirely by where the viewport's camera is,
+    and this is the number that says so: the largest standard deviation in the
+    plane perpendicular to the view, over the largest standard deviation there is.
+    One means the viewpoint shows the worst of what is unknown; a tenth means the
+    reader is looking straight down the cigar.
+
+        visible = sqrt(lambda_max(P S P'))  /  sqrt(lambda_max(S))
+
+    with `P` any orthonormal basis of the plane across the view. It is a ratio, so
+    it says nothing about whether the reconstruction is good -- a perfectly
+    determined point and a hopeless one both score 1.0 from a viewpoint that shows
+    their (respectively tiny and enormous) uncertainty honestly. It is a property
+    of the *view*, which is what a viewport control needs to report and what no
+    number Phase 9 produced could have.
+
+    `covariance` is `(N, 3, 3)`; `view_direction` is `(3,)` or `(N, 3)` and need
+    not be normalised. NaN where the covariance is NaN or the point is degenerate.
+    """
+    matrices = np.asarray(covariance, dtype=np.float64).reshape(-1, 3, 3)
+    direction = np.asarray(view_direction, dtype=np.float64).reshape(-1, 3)
+    direction = np.broadcast_to(direction, (matrices.shape[0], 3))
+
+    norms = np.linalg.norm(direction, axis=1)
+    finite = np.isfinite(matrices).all(axis=(1, 2)) & np.isfinite(norms) & (norms > 0.0)
+
+    result = np.full(matrices.shape[0], np.nan, dtype=np.float64)
+    if not np.any(finite):
+        return result
+
+    unit = direction[finite] / norms[finite][:, None]
+    # The across-view variance is the covariance with its along-view part
+    # projected out: (I - dd') S (I - dd'). Its two non-trivial eigenvalues are
+    # the variances a viewer can see, and the third is zero by construction, so
+    # the largest of the three is the one wanted either way.
+    projector = np.eye(3)[None, :, :] - unit[:, :, None] * unit[:, None, :]
+    across = projector @ matrices[finite] @ projector
+
+    largest_visible = np.linalg.eigvalsh(across)[:, -1]
+    largest_total = np.linalg.eigvalsh(matrices[finite])[:, -1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.sqrt(np.where(largest_total > 0.0, largest_visible / largest_total, np.nan))
+    result[finite] = np.clip(ratio, 0.0, 1.0)
     return result
 
 

@@ -6,14 +6,16 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-14 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-15 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
 > explicit coordinate frames with measured camera-view tagging, two-camera time
 > alignment, camera calibration, multi-view 3D reconstruction, club shaft
-> tracking, ball detection, the temporal-ML apparatus, the coaching engine and
-> the desktop workflow — a frame-accurate player, a pose overlay, and the
-> metrics and findings panels — are built and verified. **Nothing has been reconstructed, calibrated or
+> tracking, ball detection, the temporal-ML apparatus, the coaching engine, the
+> desktop workflow — a frame-accurate player, a pose overlay, and the metrics and
+> findings panels — and the 3D viewport, which reports how much of a
+> reconstruction's uncertainty the reader's own viewpoint is hiding, are built
+> and verified. **Nothing has been reconstructed, calibrated or
 > club-tracked from real footage** — no board capture and no simultaneous
 > two-camera recording exists in this repository, and the club figures come from
 > a rendered shaft whose angle is an input, so every figure in §9 and §10a is
@@ -113,10 +115,12 @@ cameras calibrated, and reasoned about.
 The app's **Swing** screen runs that whole chain on one clip and puts a
 frame-accurate player under it, with the pose overlay, the measurements and the
 findings on the same screen — because each of the last three is only checkable
-against the first. **Sessions** manages which clips belong together, **Video**
-keeps the stage-by-stage panels for checking one step in isolation, and
-**Environment** is the health report. Reconstruction, club tracking, ball
-detection and labelling remain terminal-only.
+against the first. **Three-D** triangulates a session's pair and draws the
+result, with the frame the browser reports painting shared between the video and
+the viewport; **Sessions** manages which clips belong together, **Video** keeps
+the stage-by-stage panels for checking one step in isolation, and **Environment**
+is the health report. Club tracking, ball detection and labelling remain
+terminal-only.
 
 Everything is available from a terminal:
 
@@ -153,6 +157,8 @@ uv run --project python analyzer project list
 uv run --project python analyzer reconstruct 1
 uv run --project python analyzer reconstruct 1 --json
 uv run --project python analyzer metrics faceon.mov --project 1   # now includes the 3D metrics
+uv run --project python analyzer scene 1        # the same, shaped for a viewport
+uv run --project python analyzer scene 1 --start 0 --end 200      # a window of it
 
 # The club. Coverage per swing phase first, because the clip-wide rate misleads.
 uv run --project python analyzer club faceon.mov
@@ -850,6 +856,72 @@ were moving fastest, which an overlay that interpolated across would hide.
 Full reasoning, including what the browser test found that the design did not
 predict, in [ADR-0018](docs/decisions/ADR-0018-seeking-by-measured-time.md).
 
+## 13a. The viewport, and the errors a viewpoint hides
+
+Section 9 reports what a reconstruction is worth: a positional uncertainty in
+millimetres, propagated through the triangulation's own Jacobian from a pixel
+sigma measured on the clip. That number is honest. Drawing the point it describes
+is where it stops being sufficient, because **a drawing is made from somewhere
+and a report is not.**
+
+A joint is drawn as a dot, and a dot carries no direction. Everything the
+reconstruction does not know about that joint therefore lands in one of two
+places: across the line of sight, where it spreads over the picture and a reader
+can see it, or **along** the line of sight, where it hides behind the dot. Which
+happens is decided entirely by where the viewer's camera is — and the camera
+almost nobody moves is the default one.
+
+`scripts/benchmark_viewport.py --sweep convergence`, bringing the two cameras
+together from a right angle at the 2.7 px landmark scatter section 8 measures on
+real footage:
+
+| separation | ray angle | true sigma  | visible fraction | **sigma on screen** |
+| ---------- | --------- | ----------- | ---------------- | ------------------- |
+| 90°        | 94°       | 5.5 mm      | 0.96             | **5.3 mm**          |
+| 60°        | 64°       | 7.3 mm      | 0.74             | **5.3 mm**          |
+| 45°        | 48°       | 9.4 mm      | 0.57             | **5.3 mm**          |
+| 30°        | 32°       | 13.7 mm     | 0.39             | **5.3 mm**          |
+| 20°        | 21°       | 20.2 mm     | 0.26             | **5.3 mm**          |
+| 15°        | 17°       | **25.6 mm** | 0.20             | **5.2 mm**          |
+
+**The last column is flat while the third grows 4.7x.** The picture a reader sees
+from the default viewpoint is the same whether the capture determined that joint
+to five millimetres or to twenty-six, because the direction that grew is the
+direction that camera is looking along.
+
+This is the third time this project has measured a number that is blind to the
+capture in exactly the same way. Section 9's calibration residual is flat across
+a four-hundred-fold change in focal-length error; its reprojection residual is
+flat across a 4.7x change in 3D error and is _exactly zero_ for a displacement
+along the epipolar line. This one is worse than both, because it is a picture
+rather than a number somebody might think to distrust.
+
+So the viewport reports it. Beside the body it shows what the measurement is
+worth, **what fraction of that the current viewpoint can show**, and what the
+picture therefore looks like it is worth — and it warns, below 70%, with the only
+instruction that helps: orbit, because the error does not change, only whether
+you can see it.
+
+Three consequences worth knowing before reading a picture from it:
+
+- **The default view is the reference camera itself**, with the focal length the
+  calibration measured — so it is the projection that produced the video, run
+  again on the reconstruction. That is the most flattering viewpoint available,
+  and it is the default anyway, because it is the only one that can be checked
+  against the footage. The answer to a flattering default is a viewport that says
+  how flattering it is being.
+- **The uncertainty ellipses are magnified, ×20 by default, and the factor is
+  drawn in the corner of the picture.** At true scale a joint determined to
+  5.4 mm at 3.4 m is about two thirds of a screen pixel, so the honest drawing is
+  an invisible one. The millimetres in the panel are the truth; the ellipse
+  carries the shape, which is the part a number cannot.
+- **There is no ground plane and no horizon.** The scene is metres in the
+  reference camera's frame, not a scene-fixed one — nothing here measures which
+  way is up — so a grid on the floor would be a drawing of an assumption.
+
+Full reasoning in
+[ADR-0019](docs/decisions/ADR-0019-the-viewpoint-is-part-of-the-measurement.md).
+
 ## 14. Model architecture
 
 **No model is trained on real swings, and none can be.** Phase 12 built the whole
@@ -910,14 +982,25 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| pytest     | 1,286 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                    |
-| Vitest     | 152   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management                                                                                                                                           |
-| Playwright | 48    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, and **frame-accurate seek against a real decoder**                                                                                                                                                                                                                       |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,309 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder, the scene builder |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                                       |
+| Vitest     | 220   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management, **the viewport's projection pinned to the engine's own pixels**                                                                                             |
+| Playwright | 55    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, **frame-accurate seek against a real decoder**, and the 3D viewport scrubbing against one                                                                                                                                                                                                   |
 
-All 1,498 pass as of Phase 14.
+All 1,596 pass as of Phase 15.
+
+**One test crosses the language boundary, and it is the reason the viewport is
+allowed to do its own arithmetic.** A 3D camera moves with the mouse, so the
+projection cannot live behind an IPC call — which makes it a second
+implementation of something the engine already has.
+`scripts/benchmark_viewport.py --write-fixture` emits real points from the
+synthetic stereo reconstruction together with the pixels
+`StereoGeometry.project` puts them at, and `projection.test.ts` asserts the
+TypeScript reproduces them to floating-point precision. A sign flipped in either
+language fails a test rather than producing a convincing picture of a body that
+is inside out.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -1502,6 +1585,34 @@ golf coaching quotes in words.
 for pose extraction. Nothing here is worth caching, which is what Phases 3 and 5
 concluded about the layers below it.
 
+**The 3D viewport** (2026-09-18, `scripts/benchmark_viewport.py`). What a
+viewpoint shows of what the reconstruction does not know, as the two cameras are
+brought together — the table [section 13a](#13a-the-viewport-and-the-errors-a-viewpoint-hides)
+discusses:
+
+| separation | true sigma | visible fraction | **sigma on screen** |
+| ---------- | ---------- | ---------------- | ------------------- |
+| 90°        | 5.5 mm     | 0.96             | **5.3 mm**          |
+| 45°        | 9.4 mm     | 0.57             | **5.3 mm**          |
+| 15°        | 25.6 mm    | 0.20             | **5.2 mm**          |
+
+The projection the viewport draws with agrees with the engine's own to
+**0.000e+00 px** over 8,778 reconstructed points, which is what makes a
+hand-written projection in the UI safe to ship.
+
+**Cost of a scene**, `--sweep cost`, plus `JSON.parse` timed in Node:
+
+| frames | build    | serialise | parse   | payload | per frame |
+| ------ | -------- | --------- | ------- | ------- | --------- |
+| 68     | 26.5 ms  | 5.8 ms    | —       | 0.98 MB | 14.0 KB   |
+| 96     | 42.0 ms  | 8.0 ms    | —       | 1.37 MB | 13.9 KB   |
+| 312    | 158.3 ms | 23.7 ms   | 11.9 ms | 3.98 MB | 12.5 KB   |
+
+Against roughly 1.3 s per clip to extract poses. A scene point carries a
+position, six covariance elements and three diagnostics against an overlay
+point's two coordinates, which is why the range limit is 600 frames rather than
+the overlay's 2,000.
+
 A general benchmark harness arrives in Phase 17.
 
 ## 17. Limitations
@@ -1529,6 +1640,23 @@ A general benchmark harness arrives in Phase 17.
   simultaneous pair. This repository contains none: the only two-angle candidate
   aligns at a 95.8 ms residual against a 2.4 ms floor, which is the system
   correctly reporting that the two clips are not the same swing.
+- **A 3D viewport is at its most flattering exactly where a capture is worst,
+  and the default viewpoint is the flattering one.** Measured, the uncertainty a
+  reader can see from the reference camera is flat at 5.3 mm while the
+  uncertainty being drawn grows from 5.5 mm to 25.6 mm as the two cameras close
+  from 90° to 15°. The viewport reports the fraction it is hiding and warns below
+  70%, which makes the problem visible rather than solving it — the picture from
+  that viewpoint is still the reassuring one. See
+  [section 13a](#13a-the-viewport-and-the-errors-a-viewpoint-hides).
+- **The uncertainty ellipses in the viewport are not to scale.** At true scale
+  they are a fraction of a screen pixel, so they are magnified — ×20 by default,
+  with the factor drawn in the corner of the picture. Their _shape_ is the
+  measurement; their size is not, and the millimetres in the panel are.
+- **The viewport has never drawn a real reconstruction.** It is verified against
+  the synthetic stereo fixture, whose body is an input and which contains no pose
+  estimator, for the same reason section 9's figures are: no two clips here are
+  one swing and no real calibration exists. The viewpoint arithmetic is exact
+  because it is geometry; the millimetres it is drawing are a floor.
 - **Engine requests are serialised.** A mutex guards the worker; concurrent
   request multiplexing is not implemented because nothing needs it yet.
 - **Nothing can tell that two clips show the same swing.** Synchronisation
@@ -1843,10 +1971,9 @@ A general benchmark harness arrives in Phase 17.
 
 ## 18. Future work
 
-Phases 14-20: desktop visualisation, 3D rendering, swing comparison, performance
-work, model management, test hardening and documentation. Sequencing,
-deliverables, and exit criteria per phase are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 16-20: swing comparison, performance work, model management, test
+hardening and documentation. Sequencing, deliverables, and exit criteria per
+phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
 and settled the first of the two things a second view needs: the relation between
@@ -1855,7 +1982,7 @@ settled the second — where the cameras were. Phase 9 spends both, and the six
 metrics in §9 are the first numbers here that describe a body rather than a
 picture of one.
 
-Five open items carry forward:
+Six open items carry forward:
 
 - **Nothing here has been reconstructed from real footage.** It needs two
   calibrated cameras that filmed one swing at once, and no such recording exists
@@ -1865,7 +1992,14 @@ Five open items carry forward:
 - **A scene frame is one capture away.** Laying the calibration board on the
   ground with an edge along the target line would supply the vertical and the
   target line that a stereo pair does not, and with them a 3D forward spine
-  tilt. `data/README.md` now asks for that footage; nothing reads it yet.
+  tilt. `data/README.md` now asks for that footage; nothing reads it yet. Phase
+  15 inherits the gap directly: the viewport draws no ground plane and no
+  horizon, because it has neither.
+- **The viewport's default view is the most flattering one, by construction.**
+  It is the reference camera, which is what makes it the only view that can be
+  checked against the footage — and it is also the view a shallow capture's
+  errors point away from. The fraction it is hiding is reported and warned on;
+  nothing yet makes a reader orbit.
 - **Phase 4 is the limit on 3D metrics under noise, not the triangulation.**
   Measured: at 5 px of landmark scatter the reconstruction is still accurate to
   millimetres and the phase detector declines to call the clip a swing, so there

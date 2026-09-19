@@ -56,6 +56,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "get_calibration": {"project_id": 1},
     "clear_calibration": {"project_id": 1},
     "reconstruct": {"project_id": 1},
+    "reconstruct_scene": {"project_id": 1},
     "track_club": {"path": str(CFR_30FPS)},
     "detect_ball": {"path": str(CFR_30FPS)},
     "locate_impact": {"path": str(CFR_30FPS)},
@@ -96,7 +97,9 @@ _FAST_METHODS = {
 # holding two calibrated clips *and* an alignment between them, which is three
 # pieces of state that only exist together on a real session.
 # `tests/test_reconstruction.py` drives the engine it calls into directly, from a
-# synthetic body whose 3D positions are inputs.
+# synthetic body whose 3D positions are inputs. `reconstruct_scene` runs the same
+# reconstruction and arranges it, so it is absent on the same grounds and
+# `tests/test_scene.py` covers the builder.
 
 
 class TestCall:

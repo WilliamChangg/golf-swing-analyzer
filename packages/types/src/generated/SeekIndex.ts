@@ -19,7 +19,22 @@
  */
 export type HashAlgorithm = "sha256" | "sha256-sampled-v1";
 /**
- * Where the times came from. `container_rate` means they were synthesised, so seeking by them is a guess of exactly the kind this contract exists to avoid -- see `warnings`.
+ * Where a clip's per-frame times came from.
+ *
+ * DECODED_FRAMES  - presentation timestamps of the frames a decoder actually
+ *                   emits, accounting for any edit list the container applies.
+ *                   Authoritative: these are the times the frames are shown at,
+ *                   whether or not they are evenly spaced.
+ *
+ *                   Deliberately not the container's *packet* timestamps. Those
+ *                   are cheaper to read and are wrong on real recordings: a
+ *                   clip with an MP4 edit list has packets a decoder never
+ *                   emits, and packet times offset from presentation times.
+ *
+ * CONTAINER_RATE  - synthesised from the container's declared average frame
+ *                   rate because no usable timestamps were found. A fallback,
+ *                   and one that makes variable frame rate undetectable, so
+ *                   anything derived from it is flagged.
  */
 export type TimestampSource = "decoded_frames" | "container_rate";
 
@@ -66,6 +81,9 @@ export interface SeekIndex {
   schema_version?: number;
   path: string;
   content_key: ContentKey;
+  /**
+   * Where the times came from. `container_rate` means they were synthesised, so seeking by them is a guess of exactly the kind this contract exists to avoid -- see `warnings`.
+   */
   source: TimestampSource;
   frame_count: number;
   /**

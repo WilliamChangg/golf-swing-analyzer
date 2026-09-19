@@ -55,7 +55,11 @@
       "$ref": "#/$defs/ContentKey"
     },
     "source": {
-      "$ref": "#/$defs/TimestampSource",
+      "allOf": [
+        {
+          "$ref": "#/$defs/TimestampSource"
+        }
+      ],
       "description": "Where the times came from. `container_rate` means they were synthesised, so seeking by them is a guess of exactly the kind this contract exists to avoid -- see `warnings`."
     },
     "frame_count": {

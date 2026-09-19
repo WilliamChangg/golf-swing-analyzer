@@ -60,6 +60,78 @@
       "title": "CameraRole",
       "type": "string"
     },
+    "ContentKey": {
+      "description": "Identity of a file's contents, used to key derived artifacts.\n\nThe algorithm travels with the digest so a cache written under one scheme is\nnever silently compared against a digest produced by another.",
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/HashAlgorithm"
+        },
+        "digest": {
+          "description": "Lowercase hex sha256 digest.",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "File size at the time the digest was taken.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "size_bytes"
+      ],
+      "title": "ContentKey",
+      "type": "object"
+    },
+    "HashAlgorithm": {
+      "description": "How a `ContentKey` digest was computed.\n\nSHA256          - the whole file. Use when the answer must be an integrity\n                  check, as it is for model weights.\nSHA256_SAMPLED  - size, plus sha256 over three fixed windows of the file.\n                  **This is not an integrity check.** It exists because\n                  hashing every byte of a multi-gigabyte recording on every\n                  open costs seconds, and a cache key only has to change\n                  when the file changes, not prove that it did not.",
+      "enum": [
+        "sha256",
+        "sha256-sampled-v1"
+      ],
+      "title": "HashAlgorithm",
+      "type": "string"
+    },
+    "Landmark": {
+      "description": "The 33 body landmarks produced by MediaPipe's pose models.\n\nThe integer values are the model's own output indices, so this enum doubles\nas the mapping: `result.pose_landmarks[0][Landmark.LEFT_WRIST]` is the left\nwrist. Keeping the values rather than renumbering means there is no\ntranslation table to get wrong.",
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32
+      ],
+      "title": "Landmark",
+      "type": "integer"
+    },
     "LandmarkReconstruction": {
       "description": "One landmark's reconstruction across the clip, and where it failed.\n\nPer landmark rather than clip-wide, because the failures are per landmark:\ndown-the-line footage hides one wrist behind the other for half a swing, and\na clip-wide coverage figure would report that as a uniform 80% rather than as\none landmark at 40% and the rest at 95%. The first reading suggests a\nmarginal capture; the second names the landmark to distrust.",
       "properties": {
@@ -235,6 +307,45 @@
         "max_landmark_speed_px_s"
       ],
       "title": "PairingSummary",
+      "type": "object"
+    },
+    "PointUncertainty": {
+      "description": "Where a reconstructed joint could be, as the ellipsoid it really is.\n\nThe six unique elements of the `3x3` covariance in scene metres squared, plus\nthe worst-direction standard deviation `ReconstructionQuality` already\nreports, so the two cannot drift apart in a consumer that needs both.\n\n**Six numbers rather than a radius** because the ellipsoid is not a sphere and\nthe departure from one is the finding. A stereo pair localises a point well\nacross both rays and poorly along their bisector; at the right-angled capture\nthe protocol asks for those are comparable, and as the two cameras move\ntogether the bisector axis grows without bound while the other two do not.\nDrawing `sigma_m` as a circle would report the worst axis in every direction,\nwhich overstates two of them and -- worse -- makes every viewpoint look\nequally informative.\n\nA consumer rebuilds the matrix as\n\n    [[xx, xy, xz],\n     [xy, yy, yz],\n     [xz, yz, zz]]\n\nand projects it with `A S A'` for the `2x3` Jacobian `A` of its own\nprojection, which is the ellipse to draw. It is a first-order statement, like\nevery propagated uncertainty in this engine.",
+      "properties": {
+        "sigma_m": {
+          "description": "Standard deviation along the worst-determined direction, in metres. The square root of the covariance's largest eigenvalue, and the same quantity `LandmarkReconstruction.median_uncertainty_m` summarises.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "xx": {
+          "type": "number"
+        },
+        "yy": {
+          "type": "number"
+        },
+        "zz": {
+          "type": "number"
+        },
+        "xy": {
+          "type": "number"
+        },
+        "xz": {
+          "type": "number"
+        },
+        "yz": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "sigma_m",
+        "xx",
+        "yy",
+        "zz",
+        "xy",
+        "xz",
+        "yz"
+      ],
+      "title": "PointUncertainty",
       "type": "object"
     },
     "ReconstructionConfig": {
@@ -442,6 +553,145 @@
       "title": "ReconstructionQuality",
       "type": "object"
     },
+    "ReconstructionReport": {
+      "description": "Everything the engine concluded about reconstructing one pair of clips.\n\nThe landmarks themselves are **not** here, for the reason\n`PoseExtractionResult` leaves them out: a swing at 240 fps is tens of\nthousands of frames of 33 points, which belongs in an array in the engine or\na columnar file on disk rather than in a JSON-RPC response. What crosses the\nboundary is what a reader needs in order to decide whether to believe it.\n\n`reconstructed` is false whenever no point could be produced, and then the\nquality fields are None rather than zero -- zero coverage and \"no\nreconstruction attempted\" are different facts, and a consumer reading a zero\nas a measurement would be reading a refusal as a result.",
+      "properties": {
+        "schema_version": {
+          "default": 1,
+          "type": "integer"
+        },
+        "reconstructed": {
+          "type": "boolean"
+        },
+        "space": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/LandmarkSpace"
+            }
+          ],
+          "default": "camera",
+          "description": "The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would."
+        },
+        "reference_role": {
+          "$ref": "#/$defs/CameraRole"
+        },
+        "target_role": {
+          "$ref": "#/$defs/CameraRole"
+        },
+        "reference_name": {
+          "description": "Basename of the reference clip, for display.",
+          "type": "string"
+        },
+        "target_name": {
+          "type": "string"
+        },
+        "frames": {
+          "description": "Reference-clip frames the reconstruction spans.",
+          "type": "integer"
+        },
+        "reconstructed_frames": {
+          "description": "Frames carrying at least one reconstructed landmark.",
+          "type": "integer"
+        },
+        "slow_motion_factor": {
+          "default": 1.0,
+          "description": "The reference clip's factor. Timestamps here are real seconds, as everywhere else above Phase 3.",
+          "type": "number"
+        },
+        "calibration": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CalibrationStatus"
+            }
+          ],
+          "description": "What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it."
+        },
+        "baseline_m": {
+          "description": "Distance between the two optical centres, from the rig.",
+          "type": "number"
+        },
+        "convergence_deg": {
+          "description": "Angle between the two optical axes, from the rig. Distinct from the per-point ray convergence in `ReconstructionQuality`: this is where the cameras pointed, that is how well two particular rays met.",
+          "type": "number"
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReconstructionQuality"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "pairing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PairingSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "landmarks": {
+          "items": {
+            "$ref": "#/$defs/LandmarkReconstruction"
+          },
+          "type": "array"
+        },
+        "reconstructed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "config": {
+          "$ref": "#/$defs/ReconstructionConfig"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why nothing was produced, in words. Set exactly when `reconstructed` is false."
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reconstructed",
+        "reference_role",
+        "target_role",
+        "reference_name",
+        "target_name",
+        "frames",
+        "reconstructed_frames",
+        "calibration",
+        "baseline_m",
+        "convergence_deg",
+        "config"
+      ],
+      "title": "ReconstructionReport",
+      "type": "object"
+    },
     "RefusalReason": {
       "description": "Why one landmark at one frame produced no point.\n\nCounted per landmark rather than summarised into a single \"failed\" tally,\nbecause the four have completely different fixes: re-film with the cameras\nfurther apart, re-film with the subject unoccluded, re-synchronise, or\nre-calibrate. A single number would tell a reader that something went wrong\nand nothing about which.\n\nNOT_SEEN\n    One or both cameras had no usable position for this landmark at this\n    instant -- never detected, gated out for low confidence, inside a refused\n    gap, or outside the window the filter could support.\nOUTSIDE_OVERLAP\n    The reference instant maps outside the target clip's own timestamps, so\n    resampling would be extrapolation. The clips overlap for less than the\n    whole of the reference.\nILL_CONDITIONED\n    The two rays meet at too shallow an angle for their intersection to mean\n    anything. See the module docstring: this is the gate.\nREPROJECTION\n    The fitted point lands too far from where one of the cameras saw it. The\n    two views are not looking at the same thing -- a mis-paired instant, a\n    landmark one camera has confused, or extrinsics that have moved.\nUNCERTAIN\n    The point was determined, and not well enough to be worth reporting: the\n    propagated positional uncertainty is past the bound. Distinct from\n    ILL_CONDITIONED because the causes differ -- that one is the camera\n    placement, this one can also be a subject who was simply a long way off,\n    since uncertainty grows with the square of distance while the convergence\n    angle only shrinks.",
       "enum": [
@@ -453,6 +703,257 @@
       ],
       "title": "RefusalReason",
       "type": "string"
+    },
+    "SceneCamera": {
+      "description": "One of the two real cameras, placed in the scene it produced.\n\nThe attitude is three named unit vectors rather than a rotation matrix, for\n`Vec3`'s reason one level up: a matrix has a convention, a convention can be\ntransposed, and a transposed one here produces a plausible picture of a rig\nthat never existed. `forward` is the optical axis, pointing the way the camera\nlooks; `up` points along the image's -y, since image y increases downward.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SceneCameraKind"
+        },
+        "role": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/CameraRole"
+            }
+          ],
+          "description": "The camera position declared for this clip."
+        },
+        "name": {
+          "description": "Basename of the clip this camera filmed, for display.",
+          "type": "string"
+        },
+        "position": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Vec3"
+            }
+          ],
+          "description": "Optical centre, in scene metres. Zero for the reference."
+        },
+        "forward": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Vec3"
+            }
+          ],
+          "description": "Unit optical axis. `(0, 0, 1)` for the reference."
+        },
+        "up": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Vec3"
+            }
+          ],
+          "description": "Unit vector along the image's -y, so up on screen."
+        },
+        "right": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/Vec3"
+            }
+          ],
+          "description": "Unit vector along the image's +x."
+        },
+        "fx": {
+          "type": "number"
+        },
+        "fy": {
+          "type": "number"
+        },
+        "cx": {
+          "type": "number"
+        },
+        "cy": {
+          "type": "number"
+        },
+        "image_width": {
+          "type": "integer"
+        },
+        "image_height": {
+          "type": "integer"
+        },
+        "horizontal_fov_deg": {
+          "description": "Field of view implied by `fx` and the image width. Carried so a viewport can adopt this camera's framing without re-deriving an arctangent, and so a frustum can be drawn at the right shape.",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "role",
+        "name",
+        "position",
+        "forward",
+        "up",
+        "right",
+        "fx",
+        "fy",
+        "cx",
+        "cy",
+        "image_width",
+        "image_height",
+        "horizontal_fov_deg"
+      ],
+      "title": "SceneCamera",
+      "type": "object"
+    },
+    "SceneCameraKind": {
+      "description": "What a camera in the scene is.\n\nREFERENCE\n    The camera the coordinates are centred on. It sits at the origin looking\n    down +z by construction, and its intrinsics are what make the\n    \"look from here\" view reproducible against `PoseOverlay`.\nTARGET\n    The second view, at its measured position and attitude in the reference\n    camera's frame. Drawn because **where these two stood is the single\n    largest thing determining what the reconstruction is worth**, and a\n    reader who can see the angle between them can see the conditioning.",
+      "enum": [
+        "reference",
+        "target"
+      ],
+      "title": "SceneCameraKind",
+      "type": "string"
+    },
+    "SceneFrame": {
+      "description": "Everything drawn at one instant of the swing.",
+      "properties": {
+        "frame_index": {
+          "description": "The **reference clip's** frame number.",
+          "type": "integer"
+        },
+        "timestamp_s": {
+          "description": "Real-clock seconds from the reference clip's first frame, after any slow-motion factor has been divided out. Not where the frame sits in the video file, which is what a player seeks by -- see `SeekIndex`.",
+          "type": "number"
+        },
+        "points": {
+          "description": "One entry per landmark asked for, in ascending landmark order.",
+          "items": {
+            "$ref": "#/$defs/ScenePoint"
+          },
+          "type": "array"
+        },
+        "reconstructed": {
+          "description": "How many of them produced a position. Zero is a real frame with nothing in it, and a viewport should draw nothing rather than hold the previous pose -- which would put a body on screen in a position it was never measured in.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "frame_index",
+        "timestamp_s",
+        "points",
+        "reconstructed"
+      ],
+      "title": "SceneFrame",
+      "type": "object"
+    },
+    "ScenePoint": {
+      "description": "One landmark at one instant, in metres or refused.\n\n`position` and `uncertainty` are null exactly when `refused` is set, and\n`refused` is set exactly when they are null -- the same invariant\n`OverlayPoint` holds between `state` and its coordinates, for the same reason:\nJSON has no NaN, so an absence that is real has to be carried in the type\nwhere a consumer must handle it.\n\n**`refused` is the reason, not a flag.** Phase 9 counts its five refusal\nreasons per landmark rather than as one \"failed\" tally because the fixes are\nunrelated -- move a camera, re-film the occlusion, re-synchronise, or accept\nthat the subject was too far away. A viewport that draws a hole in a skeleton\nshould be able to say which of those it is looking at, and a boolean could\nnot.",
+      "properties": {
+        "landmark": {
+          "$ref": "#/$defs/Landmark"
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec3"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Scene metres. Null exactly when `refused` is set."
+        },
+        "refused": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefusalReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Why this landmark produced no point here. Null when it did produce one."
+        },
+        "uncertainty": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PointUncertainty"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "convergence_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Angle the two rays met at, at this point. The conditioning of this particular intersection, which varies across a frame -- a hand out in front of the body converges differently from a hip."
+        },
+        "reprojection_px": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "RMS distance over both views between this point's projection and where each camera saw the landmark. **Not the accuracy**, for the reason `analyzer/contracts/reconstruction.py` opens with."
+        },
+        "visibility": {
+          "description": "The weaker of the two views' reported visibilities. The estimator's own opinion of itself, shown and never trusted -- this project has measured it reporting 1.00 across frames whose implied shoulder turn varied by 27 degrees.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "landmark",
+        "position",
+        "visibility"
+      ],
+      "title": "ScenePoint",
+      "type": "object"
+    },
+    "SceneTrajectory": {
+      "description": "One landmark's path through the clip, ready to be stroked as a polyline.\n\nSent as its own series rather than left to a consumer to gather out of\n`frames`, because the gathering has a trap in it: a refused instant is a\n**break** in the path, not a point to interpolate across. A consumer that\nfiltered the nulls out and joined what was left would draw a straight line\nthrough the gap -- exactly the failure `OverlayState.BLOCKED` exists to\nprevent one dimension down, where Phase 4 found the wrists untracked for\n1.92 s of a real clip precisely when they were moving fastest.",
+      "properties": {
+        "landmark": {
+          "$ref": "#/$defs/Landmark"
+        },
+        "name": {
+          "type": "string"
+        },
+        "points": {
+          "description": "One entry per frame in the scene's range, in order. Null where the landmark was refused -- the polyline breaks there and resumes after.",
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Vec3"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "array"
+        },
+        "reconstructed": {
+          "description": "How many of them are non-null.",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "landmark",
+        "name",
+        "points",
+        "reconstructed"
+      ],
+      "title": "SceneTrajectory",
+      "type": "object"
     },
     "SymmetryCheck": {
       "description": "How far a left segment's reconstructed length sits from its right twin.\n\nA second check that needs no ground truth, for a second reason: a person's\nleft and right upper arms are the same length to within a per cent or two,\nand the two are reconstructed from completely different landmarks with\ncompletely different occlusion histories. A large disagreement is evidence\nabout the reconstruction rather than about the body.\n\n**It is corroboration, not a stronger instrument, and the design here\nexpected otherwise.** The argument for it was that a landmark with a\n*consistent* depth bias -- one camera placing a hip a few centimetres deep\nthroughout, which occlusion does routinely -- would give a stable wrong\nlength in every frame and sail through the variation check. Measured, it does\nnot: a swing rotates the body, so a displacement that is constant in the\ncamera's frame is not constant relative to the bone, and the length moves.\nDisplacing one elbow 5 cm along the optical axis on the synthetic body makes\nthe forearm's variation 11% -- past the bound -- while the left-right\ndisagreement is 2.6%, well inside it. Variation gets there first.\n\nSo what this adds is **localisation**, which is worth its two lines: it\ncompares two chains reconstructed from different landmarks, so a large\ndisagreement says one *side* is systematically worse, which a per-segment\nvariation does not say. The test asserting this is\n`test_a_depth_bias_reaches_variation_before_symmetry`, and it is written to\nfail if anyone restores the stronger claim.",
@@ -486,16 +987,34 @@
       ],
       "title": "SymmetryCheck",
       "type": "object"
+    },
+    "Vec3": {
+      "description": "A point or a direction in `LandmarkSpace.CAMERA` metres.\n\nNamed components rather than a three-element tuple, which JSON Schema would\nexpress as `prefixItems` and TypeScript would receive as a positional array.\nA consumer assembling a basis from `[0]`, `[1]`, `[2]` can transpose it\nsilently; one reading `.x` cannot. This engine has already paid for a\ntransposed convention once -- `tests/synthetic_body3d.look_at` built two\ncameras upside down and mirrored, and triangulation could not see it.",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "title": "Vec3",
+      "type": "object"
     }
   },
-  "description": "Everything the engine concluded about reconstructing one pair of clips.\n\nThe landmarks themselves are **not** here, for the reason\n`PoseExtractionResult` leaves them out: a swing at 240 fps is tens of\nthousands of frames of 33 points, which belongs in an array in the engine or\na columnar file on disk rather than in a JSON-RPC response. What crosses the\nboundary is what a reader needs in order to decide whether to believe it.\n\n`reconstructed` is false whenever no point could be produced, and then the\nquality fields are None rather than zero -- zero coverage and \"no\nreconstruction attempted\" are different facts, and a consumer reading a zero\nas a measurement would be reading a refusal as a result.",
+  "description": "A reconstructed swing, everything needed to draw it, and what it is worth.\n\nA frame range rather than a whole clip, for `PoseOverlay`'s reason and more\nstrongly: a scene point carries a position, a covariance and three diagnostics\nwhere an overlay point carried two coordinates, so the same number of frames\nis several times the payload. `MAX_SCENE_FRAMES` in `analyzer/scene.py` is the\nbound, and a request past it is refused by name rather than truncated.\n\n`report` is embedded whole rather than fetched separately. The viewport has to\nstate the calibration status and the conditioning next to the picture --\notherwise the picture is a claim with its qualifications on another screen --\nand a second call would let the two disagree about which reconstruction is on\nscreen.",
   "properties": {
     "schema_version": {
       "default": 1,
       "type": "integer"
-    },
-    "reconstructed": {
-      "type": "boolean"
     },
     "space": {
       "allOf": [
@@ -504,7 +1023,21 @@
         }
       ],
       "default": "camera",
-      "description": "The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would."
+      "description": "Metres, centred on the reference camera. **Not WORLD**: there is no measured gravity direction and no target line, so nothing here may be drawn as a ground plane or labelled 'towards the target'. A viewport that draws a horizon is drawing an assumption."
+    },
+    "reference_content_key": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/ContentKey"
+        }
+      ],
+      "description": "Identity of the clip whose frame numbers `frames` carry. A viewport scrubbing against a video element compares this with the clip it is playing, and refuses rather than pairing one recording's pixels with another's reconstruction."
+    },
+    "reference_name": {
+      "type": "string"
+    },
+    "target_name": {
+      "type": "string"
     },
     "reference_role": {
       "$ref": "#/$defs/CameraRole"
@@ -512,25 +1045,63 @@
     "target_role": {
       "$ref": "#/$defs/CameraRole"
     },
-    "reference_name": {
-      "description": "Basename of the reference clip, for display.",
-      "type": "string"
+    "start_frame": {
+      "type": "integer"
     },
-    "target_name": {
-      "type": "string"
+    "end_frame": {
+      "description": "Exclusive, as every frame range in this project is.",
+      "type": "integer"
     },
     "frames": {
-      "description": "Reference-clip frames the reconstruction spans.",
-      "type": "integer"
+      "items": {
+        "$ref": "#/$defs/SceneFrame"
+      },
+      "type": "array"
     },
-    "reconstructed_frames": {
-      "description": "Frames carrying at least one reconstructed landmark.",
-      "type": "integer"
+    "landmarks": {
+      "description": "Which landmarks each frame carries, in the order they appear.",
+      "items": {
+        "$ref": "#/$defs/Landmark"
+      },
+      "type": "array"
     },
-    "slow_motion_factor": {
-      "default": 1.0,
-      "description": "The reference clip's factor. Timestamps here are real seconds, as everywhere else above Phase 3.",
-      "type": "number"
+    "connections": {
+      "description": "Skeleton edges to draw, from `POSE_CONNECTIONS` -- the same tuple Phase 9's bone-length checks read and `PoseOverlay` draws, so the app cannot grow a second opinion about human anatomy. Edges whose endpoints were not both requested are omitted.",
+      "items": {
+        "maxItems": 2,
+        "minItems": 2,
+        "prefixItems": [
+          {
+            "$ref": "#/$defs/Landmark"
+          },
+          {
+            "$ref": "#/$defs/Landmark"
+          }
+        ],
+        "type": "array",
+        "items": [
+          {
+            "$ref": "#/$defs/Landmark"
+          },
+          {
+            "$ref": "#/$defs/Landmark"
+          }
+        ]
+      },
+      "type": "array"
+    },
+    "trajectories": {
+      "items": {
+        "$ref": "#/$defs/SceneTrajectory"
+      },
+      "type": "array"
+    },
+    "cameras": {
+      "description": "The reference camera first, then the target. Both are real placements.",
+      "items": {
+        "$ref": "#/$defs/SceneCamera"
+      },
+      "type": "array"
     },
     "calibration": {
       "allOf": [
@@ -538,70 +1109,31 @@
           "$ref": "#/$defs/CalibrationStatus"
         }
       ],
-      "description": "What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it."
+      "description": "What was known about the two cameras' geometry. Always `stereo` for a scene that exists, and carried so a viewport states it rather than letting three dimensions on screen imply it."
     },
-    "baseline_m": {
-      "description": "Distance between the two optical centres, from the rig.",
+    "centroid": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/Vec3"
+        }
+      ],
+      "description": "Median position of every reconstructed point in the range. What a viewport orbits around -- **measured from the body rather than chosen**, so a subject filmed from four metres and one from two both open framed."
+    },
+    "radius_m": {
+      "description": "Distance from `centroid` containing 95% of the reconstructed points. The scale to frame by, robust so that one badly triangulated hand cannot push the whole swing into the distance.",
+      "exclusiveMinimum": 0.0,
       "type": "number"
     },
-    "convergence_deg": {
-      "description": "Angle between the two optical axes, from the rig. Distinct from the per-point ray convergence in `ReconstructionQuality`: this is where the cameras pointed, that is how well two particular rays met.",
+    "slow_motion_factor": {
+      "description": "The factor the reference clip's timestamps were divided by.",
       "type": "number"
     },
-    "quality": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/ReconstructionQuality"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
+    "pixel_sigma_px": {
+      "description": "The per-view landmark scatter every covariance here was propagated from, in pixels. Measured from the clip where the filter's residual supplied one; `ReconstructionQuality.methodology` says which.",
+      "type": "number"
     },
-    "pairing": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/PairingSummary"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "landmarks": {
-      "items": {
-        "$ref": "#/$defs/LandmarkReconstruction"
-      },
-      "type": "array"
-    },
-    "reconstructed_at": {
-      "anyOf": [
-        {
-          "format": "date-time",
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "config": {
-      "$ref": "#/$defs/ReconstructionConfig"
-    },
-    "refusal": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Why nothing was produced, in words. Set exactly when `reconstructed` is false."
+    "report": {
+      "$ref": "#/$defs/ReconstructionReport"
     },
     "warnings": {
       "items": {
@@ -611,18 +1143,24 @@
     }
   },
   "required": [
-    "reconstructed",
-    "reference_role",
-    "target_role",
+    "reference_content_key",
     "reference_name",
     "target_name",
+    "reference_role",
+    "target_role",
+    "start_frame",
+    "end_frame",
     "frames",
-    "reconstructed_frames",
+    "landmarks",
+    "connections",
+    "cameras",
     "calibration",
-    "baseline_m",
-    "convergence_deg",
-    "config"
+    "centroid",
+    "radius_m",
+    "slow_motion_factor",
+    "pixel_sigma_px",
+    "report"
   ],
-  "title": "ReconstructionReport",
+  "title": "ReconstructionScene",
   "type": "object"
 }

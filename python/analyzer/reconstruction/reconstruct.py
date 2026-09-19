@@ -112,6 +112,15 @@ class ReconstructedSequence:
     uncertainty_m: NDArray[np.float64]
     convergence_deg: NDArray[np.float64]
     reprojection_px: NDArray[np.float64]
+    refusal: NDArray[np.str_]
+    """`RefusalReason` values per point, empty where the point was produced.
+
+    The report counts these per landmark, which is what a reader of numbers
+    needs; a viewport draws the individual hole and has to be able to say which
+    of the five it is. Kept as the strings the gates assigned rather than
+    re-derived later, because every diagnostic array above is masked to NaN for a
+    refused point -- so the evidence a reason could be inferred from is exactly
+    what refusal removes."""
     visibility: NDArray[np.float64]
     """The weaker of the two views' reported visibilities, per point."""
     landmarks: tuple[Landmark, ...]
@@ -525,6 +534,7 @@ def reconstruct_pair(
         return np.where(accepted, values, np.nan).reshape(shape)
 
     valid = accepted.reshape(shape)
+    shaped_reasons = reasons.reshape(shape)
     kept_points = np.where(accepted[:, None], points, np.nan).reshape(frames, width, 3)
     kept_velocity = np.where(accepted[:, None], velocity, np.nan).reshape(frames, width, 3)
 
@@ -536,7 +546,7 @@ def reconstruct_pair(
         uncertainty=_shape(uncertainty),
         convergence=_shape(convergence),
         residual=_shape(residual),
-        reasons=reasons.reshape(shape),
+        reasons=shaped_reasons,
         geometry=geometry,
         rig=rig,
         pairing=_pairing_summary(
@@ -559,6 +569,7 @@ def reconstruct_pair(
         uncertainty_m=_shape(uncertainty),
         convergence_deg=_shape(convergence),
         reprojection_px=_shape(residual),
+        refusal=shaped_reasons,
         visibility=np.where(valid, visibility, 0.0),
         landmarks=selected,
         geometry=geometry,

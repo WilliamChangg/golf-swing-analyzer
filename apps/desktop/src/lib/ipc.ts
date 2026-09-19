@@ -18,6 +18,7 @@ import type {
   ProgressUpdate,
   Project,
   ProjectList,
+  ReconstructionScene,
   CameraCalibration,
   CameraRig,
   CameraRole,
@@ -49,6 +50,7 @@ const COMMANDS = {
   deleteProject: "delete_project",
   addClip: "add_clip",
   removeClip: "remove_clip",
+  reconstructScene: "reconstruct_scene",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -514,6 +516,42 @@ export function removeClip(
   clipId: number,
 ): Promise<EngineResult<Project>> {
   return call<Project>(COMMANDS.removeClip, { projectId, clipId });
+}
+
+/**
+ * A project's swing in metres, with everything a viewport needs to draw it.
+ *
+ * The longest call the app makes: it filters both clips, aligns them and
+ * triangulates every landmark at every instant. It also refuses more often than
+ * anything else here, and each refusal is a real answer — a project whose
+ * cameras were never calibrated as a pair, or whose two clips have no measured
+ * relationship between their clocks, genuinely has no third dimension in it, and
+ * the engine names which of the two is missing.
+ *
+ * A range for `poseOverlay`'s reason and more strongly: a scene point carries a
+ * position, a covariance and three diagnostics, which is roughly four times an
+ * overlay point. The engine refuses a range past its own limit rather than
+ * truncating it.
+ */
+export function reconstructScene(
+  projectId: number,
+  range: { startFrame?: number; endFrame?: number } = {},
+  options: {
+    referenceClipId?: number;
+    targetClipId?: number;
+    model?: string;
+    windowS?: number;
+  } = {},
+): Promise<EngineResult<ReconstructionScene>> {
+  return call<ReconstructionScene>(COMMANDS.reconstructScene, {
+    projectId,
+    referenceClipId: options.referenceClipId ?? null,
+    targetClipId: options.targetClipId ?? null,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+    startFrame: range.startFrame ?? 0,
+    endFrame: range.endFrame ?? null,
+  });
 }
 
 /**

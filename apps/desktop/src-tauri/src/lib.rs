@@ -44,7 +44,8 @@ pub fn run() {
             commands::create_project,
             commands::delete_project,
             commands::add_clip,
-            commands::remove_clip
+            commands::remove_clip,
+            commands::reconstruct_scene
         ])
         .run(tauri::generate_context!())
         .expect("error while running the application");
