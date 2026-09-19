@@ -22,6 +22,7 @@ from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationCo
 from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.club import ClubConfig
 from analyzer.contracts.coaching import CoachingConfig
+from analyzer.contracts.comparison import ComparisonConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
@@ -367,8 +368,12 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
 
 def _metrics_chain(
     parsed: ComputeMetricsParams, reporter: ProgressReporter
-) -> tuple[Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any]:
     """Landmarks to filtered trajectories to phases to metrics, for one clip.
+
+    Returns the stored pose sequence alongside the three results, because Phase
+    16 identifies a clip by content rather than by path and the content key lives
+    on the sequence. Nothing else in the chain carries it.
 
     Runs the whole chain rather than taking a detection as input: filtering is
     milliseconds and detection is cheaper still, so recomputing them here costs
@@ -417,12 +422,12 @@ def _metrics_chain(
         raise _unsupported_input(exc, None) from exc
 
     result.warnings = [*result.warnings, *notes]
-    return filtered, detected, result
+    return sequence, filtered, detected, result
 
 
 def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
     """Measure the biomechanics metrics for a clip's stored landmarks."""
-    _, _, result = _metrics_chain(ComputeMetricsParams.model_validate(params), reporter)
+    _, _, _, result = _metrics_chain(ComputeMetricsParams.model_validate(params), reporter)
     return result
 
 
@@ -458,7 +463,7 @@ def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     from analyzer.coaching.phrasing import PhrasingError, phrase
     from analyzer.contracts.coaching import PhrasingReport
 
-    filtered, detected, metrics = _metrics_chain(parsed, reporter)
+    _, filtered, detected, metrics = _metrics_chain(parsed, reporter)
     report = coach(metrics, detected, parsed.coaching, times=filtered.t.tolist())
 
     try:
@@ -477,6 +482,98 @@ def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     # warned about, without having to fetch the metric set separately.
     report.warnings.extend(metrics.warnings)
     return report
+
+
+class CompareSwingsParams(BaseModel):
+    """Parameters for `compare_swings`.
+
+    Two clips and one set of analysis inputs, and the sharing is deliberate.
+    Smoothing both clips differently would move the very features the comparison
+    keys on -- the same argument Phase 7 makes for giving a pair one window --
+    and a difference between two filter configurations would arrive looking
+    exactly like a difference between two swings.
+
+    The **slow-motion factors are per clip**, because two recordings of one
+    player are routinely not both slowed, and a single shared factor would be
+    wrong for one of them in a way nothing could detect afterwards.
+    """
+
+    reference_path: str = Field(
+        description="The clip the differences are measured *from*. Order decides their sign only."
+    )
+    target_path: str = Field(description="The clip the differences are measured *to*.")
+    model: str | None = Field(
+        default=None, description="Which extraction to use, when given videos."
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description=(
+            "Smoothing policy, applied to **both** clips. One configuration for "
+            "the pair, so a difference between the curves cannot be a difference "
+            "between two filters."
+        ),
+    )
+    phases: PhaseConfig = Field(default_factory=PhaseConfig)
+    metrics: MetricConfig = Field(default_factory=MetricConfig)
+    comparison: ComparisonConfig = Field(
+        default_factory=ComparisonConfig,
+        description="When two recordings are close enough together to be compared at all.",
+    )
+    reference_slow_motion: float = Field(default=1.0, gt=0.0)
+    target_slow_motion: float = Field(default=1.0, gt=0.0)
+    project_id: int | None = Field(
+        default=None,
+        description=(
+            "Apply this project's camera calibration to whichever clips belong to "
+            "it. A calibration applied to one clip and not the other is refused by "
+            "the comparison itself rather than hidden, because undistortion moves "
+            "an image-plane measurement on its own."
+        ),
+    )
+
+
+def _compare_swings(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Lay two recordings of a swing over each other, and refuse what cannot be compared.
+
+    Both clips go through the identical chain the metrics panel runs -- landmarks,
+    filter, detection, metrics -- and the comparison layer never sees a pixel or a
+    path afterwards. That is what makes the report testable against metric sets
+    built by hand, and it is the same boundary Phase 13 drew around coaching.
+    """
+    parsed = CompareSwingsParams.model_validate(params)
+
+    from analyzer.comparison import SwingInput, compare
+    from analyzer.comparison.compare import ComparisonError
+
+    sides = []
+    for path, factor in (
+        (parsed.reference_path, parsed.reference_slow_motion),
+        (parsed.target_path, parsed.target_slow_motion),
+    ):
+        chain = ComputeMetricsParams(
+            path=path,
+            model=parsed.model,
+            filter=parsed.filter,
+            phases=parsed.phases,
+            metrics=parsed.metrics,
+            project_id=parsed.project_id,
+            slow_motion_factor=factor,
+        )
+        sequence, filtered, detected, metrics = _metrics_chain(chain, reporter)
+        sides.append(
+            SwingInput(
+                path=path,
+                content_key=sequence.video_content_key,
+                filtered=filtered,
+                phases=detected,
+                metrics=metrics,
+            )
+        )
+
+    try:
+        return compare(sides[0], sides[1], parsed.comparison)
+    except ComparisonError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
 
 
 def _reconstruction_for_metrics(
@@ -2271,6 +2368,7 @@ METHODS: dict[str, Method] = {
     "detect_phases": _detect_phases,
     "compute_metrics": _compute_metrics,
     "coach_swing": _coach_swing,
+    "compare_swings": _compare_swings,
     "sync_clips": _sync_clips,
     "create_project": _create_project,
     "list_projects": _list_projects,

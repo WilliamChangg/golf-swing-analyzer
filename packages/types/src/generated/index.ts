@@ -21,3 +21,4 @@ export type { Comparison, ThresholdMethod, FindingRefusal, PhrasingMode, Coachin
 export type { SeekIndex } from "./SeekIndex";
 export type { Landmark, OverlayState, PoseOverlay, OverlayFrame, OverlayPoint, OverlayShaft } from "./PoseOverlay";
 export type { RefusalReason, SceneCameraKind, ReconstructionScene, SceneFrame, ScenePoint, Vec3, PointUncertainty, SceneTrajectory, SceneCamera } from "./ReconstructionScene";
+export type { Direction, DifferenceRefusal, TrajectoryChannel, SwingComparison, ClipSummary, PhaseClock, ClockKnot, CameraAgreement, MetricDifference, BracketTerm, RefusedDifference, TrajectoryComparison, ChannelSample, HandPathOverlay, PathSample, ComparisonConfig } from "./SwingComparison";

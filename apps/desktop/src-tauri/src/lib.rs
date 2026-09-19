@@ -39,6 +39,7 @@ pub fn run() {
             commands::pose_overlay,
             commands::compute_metrics,
             commands::coach_swing,
+            commands::compare_swings,
             commands::list_projects,
             commands::get_project,
             commands::create_project,

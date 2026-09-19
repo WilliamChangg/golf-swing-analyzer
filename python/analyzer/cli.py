@@ -39,6 +39,7 @@ from analyzer.contracts.calibration import (
 )
 from analyzer.contracts.club import ClubTrackingReport
 from analyzer.contracts.coaching import CoachingReport, Comparison, FindingRefusal
+from analyzer.contracts.comparison import ClipSummary, DifferenceRefusal, SwingComparison
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.impact import FusedImpact
@@ -3352,6 +3353,241 @@ def coach(
     # Non-zero when no conclusion was reached, so a script driving this learns
     # that the swing produced nothing rather than reading silence as approval.
     if not result.findings:
+        raise typer.Exit(code=1)
+
+
+_DIFFERENCE_TAG: dict[DifferenceRefusal, str] = {
+    DifferenceRefusal.NO_SWING: "no swing",
+    DifferenceRefusal.MISSING: "one clip only",
+    DifferenceRefusal.VIEW_MISMATCH: "different views",
+    DifferenceRefusal.CAMERA_MOVED: "camera moved",
+    DifferenceRefusal.CALIBRATION_MISMATCH: "one lens corrected",
+    DifferenceRefusal.SUPPLIED_TIMEBASE: "supplied timebase",
+    DifferenceRefusal.LOW_CONFIDENCE: "low confidence",
+    DifferenceRefusal.NO_BRACKET: "no uncertainty",
+    DifferenceRefusal.UNRESOLVED: "cannot resolve",
+}
+
+
+def _render_clock(summary: ClipSummary, title: str) -> Table:
+    """One clip's knots, which is what the normalisation divided out."""
+    table = Table(title=title, title_justify="left", expand=True)
+    table.add_column("event", no_wrap=True)
+    table.add_column("frame", justify="right", no_wrap=True)
+    table.add_column("time", justify="right", no_wrap=True)
+    table.add_column("+/-", justify="right", no_wrap=True)
+    table.add_column("located to", overflow="fold", ratio=2)
+
+    for knot in summary.clock.knots:
+        table.add_row(
+            knot.event.value,
+            str(knot.frame_index),
+            f"{knot.timestamp_s:.3f} s",
+            f"{knot.ambiguity_s * 1000:.0f} ms",
+            knot.ambiguity_source,
+        )
+    return table
+
+
+def _render_comparison(result: SwingComparison) -> None:
+    summary = Table(title="Comparison", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("reference", overflow="fold")
+    summary.add_column("target", overflow="fold")
+    for label, left, right in (
+        ("clip", Path(result.reference.path).name, Path(result.target.path).name),
+        ("frames", str(result.reference.frames), str(result.target.frames)),
+        ("view", result.reference.view.value, result.target.view.value),
+        ("calibration", result.reference.calibration.value, result.target.calibration.value),
+        (
+            "slow motion",
+            f"{result.reference.slow_motion_factor:g}x",
+            f"{result.target.slow_motion_factor:g}x",
+        ),
+        (
+            "torso length",
+            _opt_widths(result.reference.torso_length),
+            _opt_widths(result.target.torso_length),
+        ),
+        (
+            "shoulders at address",
+            _opt_torso(result.camera.reference_span),
+            _opt_torso(result.camera.target_span),
+        ),
+        (
+            "camera azimuth",
+            _opt_deg(result.camera.reference_azimuth_deg),
+            _opt_deg(result.camera.target_azimuth_deg),
+        ),
+    ):
+        summary.add_row(label, left, right)
+    console.print(summary)
+
+    verdict = (
+        "same position" if result.camera.consistent else "[yellow]moved, or not one body[/yellow]"
+    )
+    spans = (
+        f"spans disagree by {result.camera.span_disagreement * 100:.0f}%"
+        if result.camera.span_disagreement is not None
+        else "the spans could not be compared"
+    )
+    console.print(
+        f"Cameras: {verdict} — {spans}"
+        + (
+            f", up to {result.camera.azimuth_separation_deg:.1f} degrees apart"
+            if result.camera.azimuth_separation_deg is not None
+            else ""
+        )
+    )
+
+    if not result.computed:
+        for warning in result.warnings:
+            console.print(f"[yellow]![/yellow] {warning}")
+        return
+
+    console.print(_render_clock(result.reference, "Reference clock"))
+    console.print(_render_clock(result.target, "Target clock"))
+
+    if result.differences:
+        table = Table(title="Differences", title_justify="left", expand=True)
+        table.add_column("quantity", overflow="fold")
+        table.add_column("reference", justify="right", no_wrap=True)
+        table.add_column("target", justify="right", no_wrap=True)
+        table.add_column("difference", justify="right", no_wrap=True)
+        table.add_column("had to clear", justify="right", no_wrap=True)
+        for entry in result.differences:
+            table.add_row(
+                entry.label,
+                _format_measure(entry.reference_value, entry.unit),
+                _format_measure(entry.target_value, entry.unit),
+                f"[bold]{entry.difference:+.3g}[/bold]",
+                f"{entry.bracket:.3g}",
+            )
+        console.print(table)
+    else:
+        console.print(
+            "[yellow]No quantity measured in both clips differs by more than the "
+            "two recordings can resolve.[/yellow]"
+        )
+
+    if result.refused:
+        refusals = Table(title="Not compared", title_justify="left", expand=True)
+        refusals.add_column("quantity", no_wrap=True)
+        refusals.add_column("why", overflow="fold", ratio=2)
+        for refusal in result.refused:
+            refusals.add_row(
+                refusal.label,
+                f"[yellow]{_DIFFERENCE_TAG[refusal.refusal]}[/yellow] — {refusal.reason}",
+            )
+        console.print(refusals)
+
+    trajectories = Table(title="Trajectories", title_justify="left", expand=True)
+    trajectories.add_column("channel", no_wrap=True)
+    trajectories.add_column("resolved", justify="right", no_wrap=True)
+    trajectories.add_column("largest", justify="right", no_wrap=True)
+    trajectories.add_column("at", justify="right", no_wrap=True)
+    trajectories.add_column("note", overflow="fold", ratio=2)
+    for channel in result.trajectories:
+        if channel.refusal is not None:
+            trajectories.add_row(
+                channel.label,
+                "—",
+                "—",
+                "—",
+                f"[yellow]{_DIFFERENCE_TAG[channel.refusal]}[/yellow] — {channel.reason}",
+            )
+            continue
+        trajectories.add_row(
+            channel.label,
+            f"{channel.resolved_fraction * 100:.0f}%",
+            "—"
+            if channel.largest_difference is None
+            else f"{channel.largest_difference:+.3g} {channel.unit.value}",
+            "—" if channel.largest_at is None else f"{channel.largest_at:.2f}",
+            "of the sampled positions carry a difference bigger than the bracket",
+        )
+    console.print(trajectories)
+
+    console.print(
+        "[dim]Positions run 0 at the takeaway, 1 at the top, 2 at impact, 3 at the "
+        "finish. Putting both clips on that axis is what makes the shapes "
+        "comparable and it divides out every timing difference between them — those "
+        "are in the table above, as durations, or refused there.\n"
+        "There is no score and no better: a difference has a direction and a size, "
+        "and which direction is desirable is not something this system measures or "
+        "has a source for.[/dim]"
+    )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _opt_deg(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f}°"
+
+
+def _opt_torso(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f} torso"
+
+
+def _opt_widths(value: float | None) -> str:
+    return "—" if value is None else f"{value:.3f} frame widths"
+
+
+@app.command()
+def compare(
+    reference: Annotated[Path, typer.Argument(help="The clip differences are measured from.")],
+    target: Annotated[Path, typer.Argument(help="The clip differences are measured to.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given videos.")
+    ] = None,
+    window: Annotated[
+        float | None,
+        typer.Option("--window", help="Filtering window in seconds, applied to both clips."),
+    ] = None,
+    reference_slow_motion: Annotated[
+        float, typer.Option("--reference-slow-motion", help="Factor for the reference clip.")
+    ] = 1.0,
+    target_slow_motion: Annotated[
+        float, typer.Option("--target-slow-motion", help="Factor for the target clip.")
+    ] = 1.0,
+    project: Annotated[
+        int | None, typer.Option("--project", help="Apply this project's camera calibration.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw comparison as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Lay two recordings of a swing over each other, and refuse what cannot be compared."""
+    params: dict[str, object] = {
+        "reference_path": str(reference),
+        "target_path": str(target),
+        "model": model,
+        "reference_slow_motion": reference_slow_motion,
+        "target_slow_motion": target_slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if project is not None:
+        params["project_id"] = project
+
+    # `_run_with_progress` reports a failure and exits non-zero itself, so there
+    # is nothing to catch here. Quiet under `--json` so the bar does not land in
+    # a pipe somebody is parsing.
+    result = _run_with_progress("compare_swings", params, "Comparing", quiet=as_json)
+
+    assert isinstance(result, SwingComparison)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_comparison(result)
+
+    # Non-zero when nothing could be compared at all, so a script driving this
+    # learns that the pair produced no comparison rather than reading an empty
+    # table as agreement.
+    if not result.computed:
         raise typer.Exit(code=1)
 
 

@@ -23,6 +23,7 @@ import type {
   CameraRig,
   CameraRole,
   SeekIndex,
+  SwingComparison,
   SwingPhases,
   SyncModel,
   VideoMetadata,
@@ -51,6 +52,7 @@ const COMMANDS = {
   addClip: "add_clip",
   removeClip: "remove_clip",
   reconstructScene: "reconstruct_scene",
+  compareSwings: "compare_swings",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -551,6 +553,46 @@ export function reconstructScene(
     windowS: options.windowS ?? null,
     startFrame: range.startFrame ?? 0,
     endFrame: range.endFrame ?? null,
+  });
+}
+
+/**
+ * Lay two recordings of a swing over each other, and refuse what cannot be compared.
+ *
+ * The longest call in the app after a reconstruction: it runs the whole analysis
+ * chain on both clips. It is also the one that refuses most, and every refusal is
+ * a real answer — two clips filmed from different positions do not contain a
+ * comparison of a projected angle, and no amount of arithmetic puts one in.
+ *
+ * **The smoothing window is shared and the slow-motion factors are not.**
+ * Smoothing two clips differently moves the features the comparison keys on, so
+ * a difference between two filter configurations would arrive looking exactly
+ * like a difference between two swings. A slow-motion factor is a property of one
+ * recording, and two swings by one player are routinely not both slowed.
+ *
+ * **`computed: false` is a success**, as it is for every other call here. It means
+ * one of the clips produced no usable clock — no swing, or a swing missing one of
+ * the four events — and the report says which.
+ */
+export function compareSwings(
+  referencePath: string,
+  targetPath: string,
+  options: {
+    model?: string;
+    windowS?: number;
+    referenceSlowMotion?: number;
+    targetSlowMotion?: number;
+    projectId?: number;
+  } = {},
+): Promise<EngineResult<SwingComparison>> {
+  return call<SwingComparison>(COMMANDS.compareSwings, {
+    referencePath,
+    targetPath,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+    referenceSlowMotion: options.referenceSlowMotion ?? null,
+    targetSlowMotion: options.targetSlowMotion ?? null,
+    projectId: options.projectId ?? null,
   });
 }
 

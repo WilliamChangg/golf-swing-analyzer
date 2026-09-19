@@ -110,17 +110,18 @@ checked-in TypeScript does not match.
 A clip can be imported, inspected, run through pose estimation, filtered into
 trajectories with derivatives, segmented into swing phases, measured, aligned
 against a second camera, reconstructed into 3D positions in metres with both
-cameras calibrated, and reasoned about.
+cameras calibrated, reasoned about, and laid over another swing.
 
 The app's **Swing** screen runs that whole chain on one clip and puts a
 frame-accurate player under it, with the pose overlay, the measurements and the
 findings on the same screen — because each of the last three is only checkable
 against the first. **Three-D** triangulates a session's pair and draws the
 result, with the frame the browser reports painting shared between the video and
-the viewport; **Sessions** manages which clips belong together, **Video** keeps
-the stage-by-stage panels for checking one step in isolation, and **Environment**
-is the health report. Club tracking, ball detection and labelling remain
-terminal-only.
+the viewport; **Compare** lays two swings over each other on a phase-relative
+clock and refuses every difference the camera could explain; **Sessions** manages
+which clips belong together, **Video** keeps the stage-by-stage panels for
+checking one step in isolation, and **Environment** is the health report. Club
+tracking, ball detection and labelling remain terminal-only.
 
 Everything is available from a terminal:
 
@@ -181,6 +182,11 @@ uv run --project python analyzer models                           # what each ma
 uv run --project python analyzer coach faceon.mov
 uv run --project python analyzer coach faceon.mov --slow-motion 7
 uv run --project python analyzer coach faceon.mov --phrase-with http://127.0.0.1:11434/api/generate
+
+# Two swings, one clock, and everything the camera explains instead.
+uv run --project python analyzer compare before.mov after.mov
+uv run --project python analyzer compare before.mov after.mov --window 0.15
+uv run --project python analyzer compare before.mov after.mov --reference-slow-motion 7
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -922,6 +928,134 @@ Three consequences worth knowing before reading a picture from it:
 Full reasoning in
 [ADR-0019](docs/decisions/ADR-0019-the-viewpoint-is-part-of-the-measurement.md).
 
+## 13b. Comparing two swings, and the camera that ruins it
+
+Everything above measures one recording. Comparing two is the first thing this
+system does whose output is a statement about a pair, and the whole difficulty is
+one sentence: **two recordings differ for reasons that have nothing to do with
+the two swings.**
+
+Four such reasons, and only the last was a surprise. A supplied slow-motion
+factor makes a duration a guess multiplied by a measurement (§12 already gates on
+that). A lens correction applied to one clip and not the other displaces every
+landmark by tens of pixels near the frame edge (§16 measures that). Each clip's
+frame rate bounds what it can resolve (§12's bracket computes that).
+
+The fourth is where the tripod was, and it is larger than all of them.
+
+### One swing, seven cameras, twenty-five degrees of difference
+
+`scripts/benchmark_compare.py --sweep camera`. The **same** synthetic 3D swing —
+same body, same instants, same joint angles — projected through cameras that
+differ only in where they stand, at the 2.7 px landmark scatter §8 measures on
+real footage. Median of five seeds:
+
+| azimuth | address span | spans disagree | **shoulder turn reported** | what the engine does |
+| ------- | ------------ | -------------- | -------------------------- | -------------------- |
+| 0°      | 1.05 torso   | 0%             | **57.7°**                  | unresolved           |
+| 5°      | 1.04         | 1%             | 56.9°                      | unresolved           |
+| 10°     | 1.02         | 3%             | 55.1°                      | unresolved           |
+| 15°     | 0.99         | 6%             | 52.1°                      | unresolved           |
+| 20°     | 0.95         | 11%            | 47.7°                      | **refuses**          |
+| 30°     | 0.83         | 24%            | **32.9°**                  | **refuses**          |
+
+Nothing about the body changes down that table, and **every row is still
+classified `face_on`** — §10's three labels decide whether a recording contains a
+measurement at all, and a camera can move thirty degrees round a player without
+leaving one. The arithmetic behind it is not subtle: from a camera `a` degrees off
+broadside, a line that truly turned `t` projects `cos(a + t)` against an address
+span of `cos(a)`, so the reported angle is `arccos(cos(a + t) / cos(a))`, which
+equals `t` only at `a = 0`.
+
+So the comparison gates on the **address shoulder span** — a directly measured
+quantity in torso lengths — and refuses every projected, image-plane and
+foreshortened difference when two clips disagree by more than 10%. The azimuth
+derived from `openness` is reported and used to widen a bracket, never to decide:
+the arccosine is flat near broadside, so 1% of landmark noise comes out as 8
+degrees, and a gate on it would refuse every pair ever filmed. Full reasoning in
+[ADR-0020](docs/decisions/ADR-0020-a-difference-between-recordings.md).
+
+### Both swings on one clock, and what that costs
+
+Two swings take different amounts of time, so the curves are mapped onto **swing
+position**: 0 at the takeaway, 1 at the top, 2 at impact, 3 at the finish, linear
+in time within each phase. The four events are the only instants two recordings
+are known to share, so they are the only places a map between them can be pinned.
+
+`--sweep warp`, against warps whose answer is zero by construction — the
+synthetic fixture builds its arc from the fraction through each phase, so two
+tempos of it are one swing warped in time:
+
+| tempo | **phase-relative residual** | one uniform stretch |
+| ----- | --------------------------- | ------------------- |
+| 1.92  | **0.0000**                  | 0.0000              |
+| 1.17  | **0.0049**                  | 0.1685              |
+| 0.98  | **0.0073**                  | 0.2085              |
+| 3.59  | **0.0080**                  | 0.2643              |
+
+Hand height in frame widths, over a signal ranging about 0.30. The right-hand
+column is the obvious alternative — scale each clip's takeaway-to-finish interval
+to the same length — and it is **thirty times worse**, exact only where the two
+tempos happen to match. Tempo is the quantity two golfers are most likely to
+differ by.
+
+**The map destroys every timing difference, deliberately.** Nothing in an
+overlaid trajectory can say one player reached the top later; that is what the
+normalisation did to make the shapes comparable. Durations are compared
+separately, as durations with brackets of their own, and both clocks stay on
+screen so a reader can see what was divided out.
+
+### What a difference has to clear
+
+Each knot is located to a frame, so a real instant's position on the axis is known
+only as well as the events bounding it — and a curve read a frame early is a
+different curve. Every sample carries that ambiguity, propagated onto the axis and
+through the signal's own local range, and the app draws it as a **band** rather
+than leaving two lines for a reader to attribute gaps between.
+
+`--sweep resolution`, two swings of genuinely different shape at one tempo:
+
+| fps | of the swing that differs by more than the pair can resolve |
+| --- | ----------------------------------------------------------- |
+| 30  | 39%                                                         |
+| 60  | 61%                                                         |
+| 120 | 80%                                                         |
+| 240 | 89%                                                         |
+| 480 | 94%                                                         |
+
+The difference itself is the same at every rate. What grows is how much of it can
+be attributed to the swings rather than to the clock.
+
+### There is no score
+
+A difference carries a direction — higher or lower — and nothing else. No
+severity, no rank, no total. Such a number would be the most quoted output of this
+system and the least defensible: it would need a scale relating degrees of
+shoulder turn to seconds of tempo, which nobody has measured, and it would need to
+know which direction of each quantity is _desirable_, which §12 established no
+source supplies.
+
+There is also no "the same". Two values closer together than the pair can resolve
+are reported as **unresolved**, with both numbers and the bracket printed — the
+recordings could not tell them apart, which is the absence of evidence rather than
+evidence of agreement.
+
+### What the reference footage produces
+
+`--sweep clips`, over the three pairs this repository can build. Two are a face-on
+camera against a down-the-line one, so every projected quantity refuses and only
+the timings survive: a tempo difference of 1.63 on the amateur pair, 0.572 on the
+tour pair — the second independently corroborating §16's finding that those two
+clips are not the same swing.
+
+The third is the only pair of two swings by one player from one position, and it
+refuses too: `rory_dtl_2.mp4` begins at the takeaway, a clip with no address phase
+has no measured view, and a comparison that cannot say where either camera stood
+will not compare a projection. **That is a capture instruction rather than a
+defect. Start recording before the player is set up to the ball** — the address
+phase is where the view, the rotation baseline and the hand-path origin all come
+from.
+
 ## 14. Model architecture
 
 **No model is trained on real swings, and none can be.** Phase 12 built the whole
@@ -982,14 +1116,22 @@ rather than trusting an import, which is what caught it. See
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 1,309 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder, the scene builder |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                                       |
-| Vitest     | 220   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management, **the viewport's projection pinned to the engine's own pixels**                                                                                             |
-| Playwright | 55    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, **frame-accurate seek against a real decoder**, and the 3D viewport scrubbing against one                                                                                                                                                                                                   |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,382 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder, the scene builder, **the phase-relative clock against warps whose answer is zero by construction** |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Vitest     | 250   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management, **the viewport's projection pinned to the engine's own pixels**, the comparison plots' refusal to bridge a gap                                                                                                                               |
+| Playwright | 62    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, **frame-accurate seek against a real decoder**, the 3D viewport scrubbing against one, and the comparison plots laid out by a real browser                                                                                                                                                                                                                                   |
 
-All 1,596 pass as of Phase 15.
+All 1,706 pass as of Phase 16.
+
+**Two tests assert an absence, in two languages.** `MetricDifference` and
+`SwingComparison` are checked for field names meaning a score, a severity or a
+rank, and the Compare panel is checked for those words anywhere in its rendered
+text — because a comparison screen is the most natural place in this application
+for a single number ranking two swings to appear, and a component could invent
+one out of fields that are individually honest. The word "score" is permitted
+exactly once on that panel, in the sentence saying there is not one.
 
 **One test crosses the language boundary, and it is the reason the viewport is
 allowed to do its own arithmetic.** A 3D camera moves with the mouse, so the
@@ -1613,6 +1755,26 @@ position, six covariance elements and three diagnostics against an overlay
 point's two coordinates, which is why the range limit is 600 frames rather than
 the overlay's 2,000.
 
+### Swing comparison
+
+`scripts/benchmark_compare.py --sweep cost`, median of five. The interesting
+column is the first: a comparison is arithmetic over two analyses that have
+already been paid for.
+
+| samples on the axis | compare | serialise | payload |
+| ------------------- | ------- | --------- | ------- |
+| 61                  | 6.1 ms  | 1.8 ms    | 68 KB   |
+| **121** (default)   | 11.2 ms | 1.4 ms    | 111 KB  |
+| 241                 | 21.7 ms | 2.4 ms    | 197 KB  |
+| 481                 | 42.5 ms | 4.6 ms    | 371 KB  |
+
+Against roughly 1.3 s per clip to extract poses, **twice** — the comparison is
+under one per cent of what it takes to reach it. 121 samples puts one every
+fortieth of a phase, which is finer than the frame rate of any clip here.
+
+The measurements that matter for this phase are not timings; they are in
+[section 13b](#13b-comparing-two-swings-and-the-camera-that-ruins-it).
+
 A general benchmark harness arrives in Phase 17.
 
 ## 17. Limitations
@@ -1648,6 +1810,32 @@ A general benchmark harness arrives in Phase 17.
   70%, which makes the problem visible rather than solving it — the picture from
   that viewpoint is still the reassuring one. See
   [section 13a](#13a-the-viewport-and-the-errors-a-viewpoint-hides).
+- **A camera moved thirty degrees round a player changes a reported shoulder turn
+  by twenty-five, and the view label does not notice.** Measured on one unchanged
+  synthetic swing: 57.7° seen square on and 32.9° from thirty degrees round, with
+  every row still classified `face_on`. The comparison layer gates on the address
+  shoulder span and refuses above a 10% disagreement, which makes the problem a
+  refusal rather than a wrong number — but it also means **two swings filmed from
+  two positions cannot be compared at all**, and every projected comparison over
+  the footage in this repository refuses for exactly that reason. See
+  [section 13b](#13b-comparing-two-swings-and-the-camera-that-ruins-it).
+- **That gate cannot tell a camera that moved from a player built differently.**
+  A broader-shouldered golfer projects a broader shoulder line from the same
+  tripod, so two different people filmed from one position can fail it. Nothing
+  in either recording separates the two explanations, and both account for a
+  difference the swing did not make.
+- **A trajectory comparison brackets _when_ a sample was taken, not _how well_
+  the value at it was measured.** Measured: on one unchanged swing recorded twice
+  with different landmark noise, **5% of sampled positions report a difference
+  that clears the bracket**. Closing that needs a per-sample landmark
+  uncertainty, and the filter's own residual cannot supply one — it is exactly
+  zero whenever the smoothing window holds as many samples as the polynomial has
+  coefficients, which is every clip below about 60 fps at the shipped defaults.
+- **The horizontal bracket on a comparison is one frame per event, and section 16
+  measured the takeaway moving sixty-five.** Under landmark noise at 120 fps the
+  top moves 8 ms and the takeaway 542 ms. Nothing in a single clip measures that,
+  so the refusals a comparison makes are a lower bound on the refusals warranted,
+  and the takeaway end of every overlaid plot is its least trustworthy part.
 - **The uncertainty ellipses in the viewport are not to scale.** At true scale
   they are a fraction of a screen pixel, so they are magnified — ×20 by default,
   with the factor drawn in the corner of the picture. Their _shape_ is the
@@ -1971,9 +2159,9 @@ A general benchmark harness arrives in Phase 17.
 
 ## 18. Future work
 
-Phases 16-20: swing comparison, performance work, model management, test
-hardening and documentation. Sequencing, deliverables, and exit criteria per
-phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 17-20: performance work, model management, test hardening and
+documentation. Sequencing, deliverables, and exit criteria per phase are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
 and settled the first of the two things a second view needs: the relation between
@@ -2012,6 +2200,13 @@ Six open items carry forward:
   single player. Three people would produce a split; eight would allow a number
   to be quoted. `data/README.md` says what to record and asks for consent in
   writing before anyone else's swing enters a training set.
+- **The comparison layer is one capture away from being useful, and the capture
+  is cheap.** Two swings by one player, filmed from one tripod that nobody
+  touches between them, each started before the player addresses the ball. This
+  repository contains the first two conditions once and fails the third: the only
+  same-player, same-position pair has a clip that begins at the takeaway, and a
+  clip with no address phase has no measured view. `data/README.md` now asks for
+  that footage.
 - **What the coaching engine is short of divides cleanly, and only half of it is
   a recording.** Its three timing rules would fire on ordinary footage shot above
   about 60 fps, which is a capture away. `rotation.x_factor_top_3d` needs a

@@ -372,6 +372,63 @@ Two smaller things follow from the same arithmetic:
   where a tour swing is known for about 3:1, and the finding's own cited frames
   point at the takeaway rather than at the swing.
 
+### Filming so two swings can be compared (Phase 16)
+
+Comparing two recordings is the one thing here where a capture mistake does not
+degrade the answer — it removes it. Three requirements, and each one is a gate
+that refuses rather than a preference.
+
+**Do not touch the tripod between the two swings.** This is the big one, and it
+is much less forgiving than it sounds. `scripts/benchmark_compare.py --sweep
+camera` films one unchanged synthetic swing from a series of positions:
+
+| camera moved | address shoulder span | **shoulder turn reported** | what the engine does |
+| ------------ | --------------------- | -------------------------- | -------------------- |
+| 0°           | 1.05 torso            | **57.7°**                  | compares             |
+| 10°          | 1.02                  | 55.1°                      | compares             |
+| 20°          | 0.95                  | 47.7°                      | **refuses**          |
+| 30°          | 0.83                  | **32.9°**                  | **refuses**          |
+
+The body is identical in every row, and every row is still classified `face_on` —
+the view detector's three labels decide whether a recording contains a
+measurement at all, not whether two recordings contain the same one. A camera
+moved thirty degrees round a player changes the most quoted number in golf
+instruction by twenty-five degrees, with nothing in either clip to say so. The
+comparison therefore refuses every projected quantity once the two clips' address
+shoulder spans disagree by more than 10%.
+
+**Start recording before the player addresses the ball.** The address phase is
+where the camera view, the rotation baseline and the hand-path origin all come
+from, and a clip without one has none of them — so every projected comparison
+refuses, however good the rest of the footage is. This is not hypothetical: the
+only same-player, same-position pair in this repository fails on exactly this,
+because `data/rory/dtl/rory_dtl_2.mp4` begins at the takeaway.
+
+**Shoot both clips at the same frame rate, above 60 fps, and slow neither or
+both.** Each clip's own clock sets how finely it resolves a difference, and the
+two brackets are added; a slow-motion factor is supplied rather than measured, so
+a duration compared across clips whose factors were guessed is a difference of
+two guesses. Ratios survive that; seconds do not.
+
+What that buys, measured on two swings of genuinely different shape (`--sweep
+resolution`), as the fraction of the swing whose difference clears the bracket:
+
+| fps | of the swing that can be called different |
+| --- | ----------------------------------------- |
+| 30  | 39%                                       |
+| 60  | 61%                                       |
+| 120 | 80%                                       |
+| 240 | 89%                                       |
+
+The difference between the two swings is the same at every rate. What grows is
+how much of it can be attributed to them rather than to the clock.
+
+One thing no capture fixes: **nothing here can tell two swings by one player from
+two different players.** Lengths are in each subject's own torso lengths and
+durations on each clip's own clock, which makes the arithmetic meaningful across
+subjects — it does not make the comparison meaningful. Whether the two clips are
+comparable in that sense is the judgement of whoever chose them.
+
 ## Camera calibration (Phase 8)
 
 Metric-scale 3D reconstruction requires calibration, and a calibration is only

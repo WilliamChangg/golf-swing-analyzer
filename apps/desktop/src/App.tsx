@@ -4,11 +4,13 @@ import {
   FileVideo,
   FlagTriangleRight,
   FolderKanban,
+  GitCompare,
 } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { SwingScreen } from "@/features/analysis/SwingScreen";
+import { CompareScreen } from "@/features/compare/CompareScreen";
 import { HealthScreen } from "@/features/health/HealthScreen";
 import { ProjectsScreen } from "@/features/projects/ProjectsScreen";
 import { SceneScreen } from "@/features/scene/SceneScreen";
@@ -17,25 +19,27 @@ import { VideoScreen } from "@/features/video/VideoScreen";
 /**
  * Application root.
  *
- * Five screens, still switched by local state rather than by a router. Phase 14
+ * Six screens, still switched by local state rather than by a router. Phase 14
  * was where a router was expected to earn its place, and it did not: the thing
  * that would justify one is a URL worth addressing — a link to a project, a
  * swing, a frame — and nothing here is addressed from outside the window. There
  * is no second window, no deep link and no browser history to be wrong about.
  * A router would be indirection with nothing on the other side of it, which is
- * the same conclusion Phase 0 reached for a different reason. Phase 15 adds a
- * screen and changes none of that.
+ * the same conclusion Phase 0 reached for a different reason. Phases 15 and 16
+ * each add a screen and change none of that.
  *
  * The Swing screen is the workflow; Video remains the panel-by-panel view of
  * one clip, which is where an individual stage is checked in isolation. Three-D
- * is separate from Swing rather than a panel on it because it is the one screen
- * that needs a *pair* — two clips, a calibration and an alignment, none of which
- * a loose file has.
+ * and Compare are separate from Swing rather than panels on it because each
+ * needs a *pair*, and for different reasons: Three-D needs two clips, a
+ * calibration and an alignment, and Compare needs two clips that are two
+ * different swings. A loose file has neither.
  */
 
 const SCREENS = [
   { id: "swing", label: "Swing", icon: FlagTriangleRight },
   { id: "scene", label: "Three-D", icon: Box },
+  { id: "compare", label: "Compare", icon: GitCompare },
   { id: "projects", label: "Sessions", icon: FolderKanban },
   { id: "video", label: "Video", icon: FileVideo },
   { id: "health", label: "Environment", icon: Activity },
@@ -72,6 +76,7 @@ export function App() {
       <main>
         {screen === "swing" ? <SwingScreen /> : null}
         {screen === "scene" ? <SceneScreen /> : null}
+        {screen === "compare" ? <CompareScreen /> : null}
         {screen === "projects" ? <ProjectsScreen /> : null}
         {screen === "video" ? <VideoScreen /> : null}
         {screen === "health" ? <HealthScreen /> : null}

@@ -62,6 +62,7 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "locate_impact": {"path": str(CFR_30FPS)},
     "seek_index": {"path": str(CFR_30FPS)},
     "pose_overlay": {"path": "poses.parquet"},
+    "compare_swings": {"reference_path": "a.parquet", "target_path": "b.parquet"},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -100,6 +101,12 @@ _FAST_METHODS = {
 # synthetic body whose 3D positions are inputs. `reconstruct_scene` runs the same
 # reconstruction and arranges it, so it is absent on the same grounds and
 # `tests/test_scene.py` covers the builder.
+#
+# `compare_swings` is absent from both sets because it runs that whole chain
+# *twice*, on two clips that each need a stored pose sequence. The table entry
+# exists so a method added without a test is still caught here;
+# `tests/test_comparison_compare.py` drives `compare()` directly, from two
+# synthetic swings whose relationship to each other is known by construction.
 
 
 class TestCall:

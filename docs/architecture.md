@@ -144,6 +144,7 @@ biomechanics/   measured metrics, with units, confidence and methodology
 overlay.py      the filtered skeleton, converted back into drawing coordinates
 scene.py        the reconstruction as geometry: metres, cameras and ellipsoids
 coaching/       findings, the thresholds they borrow, and the guard on what may be said
+comparison/     two recordings on one clock, and what the camera explains instead
 ml/             labels, features, splits, a learned detector, and what may be claimed
 projects/       the clips of one swing, and their stored alignments (SQLite)
 dispatch/       method registry
@@ -159,7 +160,7 @@ engine intact, which is the correct relationship between an evaluation harness
 and the thing it evaluates.
 
 Golf-specific reasoning is confined to `phases`, `sync`, `club`, `ball`, `ml`,
-`biomechanics` and `coaching`; everything below is
+`biomechanics`, `coaching` and `comparison`; everything below is
 general computer vision that would serve any moving body. `sync` and `club` are
 the marginal members of that set. `sync`'s mechanism — an affine time map and a
 masked cross-correlation — would align any pair of recordings of anything, and
@@ -238,6 +239,29 @@ The optional language layer sits inside `coaching` rather than beside it, under
 a deterministic guard that also runs over the engine's own sentences. The
 direction is one-way: findings are produced first and phrased second, so no model
 can change which findings exist.
+
+`comparison` sits beside `coaching` and is the only package whose input is a
+**pair**. Its entry point is `compare(reference, target, config)`, each side a
+`SwingInput` carrying one clip's filtered trajectories, detection and metric set
+— so like `coaching` it never reads a pixel, a landmark file or a path, and is
+testable against inputs built by hand.
+
+It **imports `coaching.bracket` rather than deriving its own**, which is a
+dependency between two packages at the same level and is deliberate: what one
+recording can resolve is one question with one answer, and two layers computing
+it separately would eventually disagree about a number a reader sees in both. It
+departs from that module in exactly one place, and says why: two brackets from
+two _recordings_ are summed rather than combined in quadrature, because the
+quadrature is excused by a shared systematic error that two separate recordings
+do not have.
+
+Its own addition is a gate nothing below it has: `CameraAgreement`, measured from
+the address shoulder span, which refuses every projected comparison when two
+clips disagree about where the camera stood. That gate runs before every gate
+that is a fact about one clip, for the reason Phase 13 found
+`BASIS_NOT_PERMITTED` had to sit above `NO_METRIC` — a refusal a reader can act
+on has to name the thing that would still be wrong after they acted. See
+[ADR-0020](decisions/ADR-0020-a-difference-between-recordings.md).
 
 ## Video ingestion
 

@@ -455,6 +455,52 @@ fn analysis_params(
     params
 }
 
+/// Lay two recordings of a swing over each other, and refuse what cannot be compared.
+///
+/// The filter window is shared and the slow-motion factors are per clip. Both are
+/// deliberate: smoothing two clips differently would move the very features the
+/// comparison keys on, so a difference between two filter configurations would
+/// arrive looking exactly like a difference between two swings — while two
+/// recordings of one player are routinely not both slowed, and one shared factor
+/// would be wrong for one of them in a way nothing afterwards could detect.
+///
+/// A long call: it runs the whole analysis chain twice. It also refuses a great
+/// deal, and each refusal is a real answer — two clips filmed from different
+/// positions genuinely do not contain a comparison of a projected angle.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn compare_swings(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    reference_path: String,
+    target_path: String,
+    model: Option<String>,
+    window_s: Option<f64>,
+    reference_slow_motion: Option<f64>,
+    target_slow_motion: Option<f64>,
+    project_id: Option<i64>,
+) -> Result<Value, EngineError> {
+    let mut params = json!({
+        "reference_path": reference_path,
+        "target_path": target_path,
+        "model": model,
+        "reference_slow_motion": reference_slow_motion.unwrap_or(1.0),
+        "target_slow_motion": target_slow_motion.unwrap_or(1.0),
+    });
+    if let Some(window) = window_s {
+        params["filter"] = json!({ "smoothing": { "window_s": window } });
+    }
+    if let Some(value) = project_id {
+        params["project_id"] = json!(value);
+    }
+
+    engine.request_with_notifications("compare_swings", params, &|method, notification| {
+        if method == PROGRESS_NOTIFICATION {
+            let _ = app.emit(PROGRESS_EVENT, notification.clone());
+        }
+    })
+}
+
 // --- projects (Phase 14.1) -------------------------------------------------
 //
 // The first state in this engine that cannot be recomputed, which is why it

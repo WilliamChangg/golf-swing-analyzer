@@ -55,6 +55,9 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     # still the numbers; this is the same reconstruction as geometry, and the
     # viewport is what draws it.
     ("analyzer.contracts.scene", "ReconstructionScene"),
+    # Phase 16. The first contract here whose subject is a *pair*, and the
+    # Compare screen is what draws it.
+    ("analyzer.contracts.comparison", "SwingComparison"),
 )
 
 # `Project` and `ProjectList` went in with Phase 14.1, which is the phase their

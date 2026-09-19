@@ -15,6 +15,7 @@ edge, and that is a property of the fixture rather than of the engine.
 
 from __future__ import annotations
 
+from analyzer.contracts.calibration import CalibrationStatus
 from analyzer.contracts.metrics import (
     CameraView,
     Metric,
@@ -94,7 +95,18 @@ def metric_set(
     refused: list[RefusedMetric] | None = None,
     slow_motion_factor: float = 1.0,
     computed: bool = True,
+    shoulder_span_ratio: float = 0.83,
+    openness: float = 1.0,
+    calibration: CalibrationStatus = CalibrationStatus.NONE,
 ) -> MetricSet:
+    """A metric set carrying only what a layer above reads from one.
+
+    The three keyword arguments after `computed` exist for Phase 16, which reads
+    things Phase 13 never did: the address shoulder span and the openness decide
+    whether two clips were filmed from the same place, and the calibration status
+    decides whether one clip's landmarks had a lens removed and the other's did
+    not. Defaulted, so every fixture written before them is unchanged.
+    """
     return MetricSet(
         computed=computed,
         metrics=metrics,
@@ -102,9 +114,9 @@ def metric_set(
         view=ViewEstimate(
             view=view,
             confidence=1.0,
-            shoulder_span_ratio=0.83,
+            shoulder_span_ratio=shoulder_span_ratio,
             hip_span_ratio=0.42,
-            openness=1.0,
+            openness=openness,
             frames=[0, 1, 2],
             methodology="Constructed by a test.",
         ),
@@ -112,6 +124,7 @@ def metric_set(
         geometry=FRAME_GEOMETRY,
         frames=400,
         slow_motion_factor=slow_motion_factor,
+        calibration=calibration,
         config=MetricConfig(),
     )
 

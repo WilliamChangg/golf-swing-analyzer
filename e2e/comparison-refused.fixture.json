@@ -1,0 +1,346 @@
+{
+  "schema_version": 1,
+  "computed": true,
+  "reference": {
+    "path": "/clips/square.mov",
+    "content_key": {
+      "algorithm": "sha256-sampled-v1",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1
+    },
+    "frames": 312,
+    "view": "face_on",
+    "lead_side": "left",
+    "calibration": "none",
+    "slow_motion_factor": 1.0,
+    "torso_length": 0.08847121230611714,
+    "clock": {
+      "knots": [
+        {
+          "event": "takeaway",
+          "position": 0.0,
+          "frame_index": 64,
+          "timestamp_s": 0.5333333333333333,
+          "confidence": 0.9700000000000002,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "top",
+          "position": 1.0,
+          "frame_index": 155,
+          "timestamp_s": 1.2916666666666667,
+          "confidence": 0.9102337587676148,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "impact",
+          "position": 2.0,
+          "frame_index": 204,
+          "timestamp_s": 1.7,
+          "confidence": 0.9689258560508002,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "finish",
+          "position": 3.0,
+          "frame_index": 251,
+          "timestamp_s": 2.091666666666667,
+          "confidence": 0.9700000000000002,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        }
+      ],
+      "usable": true,
+      "frame_interval_s": 0.008333333333333335,
+      "slow_motion_factor": 1.0,
+      "methodology": "Piecewise-linear in real seconds between the four detected events, which are the only instants two recordings of a swing are known to share. Position 0 is the takeaway, 1 the top, 2 impact and 3 the finish. Every difference in timing between two clips normalised this way has been divided out by the map itself; the knots above are what it divided out."
+    }
+  },
+  "target": {
+    "path": "/clips/round.mov",
+    "content_key": {
+      "algorithm": "sha256-sampled-v1",
+      "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 1
+    },
+    "frames": 312,
+    "view": "face_on",
+    "lead_side": "right",
+    "calibration": "none",
+    "slow_motion_factor": 1.0,
+    "torso_length": 0.09369257021220044,
+    "clock": {
+      "knots": [
+        {
+          "event": "takeaway",
+          "position": 0.0,
+          "frame_index": 64,
+          "timestamp_s": 0.5333333333333333,
+          "confidence": 0.9700000000000002,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "top",
+          "position": 1.0,
+          "frame_index": 155,
+          "timestamp_s": 1.2916666666666667,
+          "confidence": 0.9482337823709693,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "impact",
+          "position": 2.0,
+          "frame_index": 211,
+          "timestamp_s": 1.7583333333333333,
+          "confidence": 0.9665399825922765,
+          "ambiguity_s": 0.04166666666666674,
+          "ambiguity_source": "Two independent estimates of this instant disagree by more than one frame, so their disagreement is the ambiguity rather than the clock."
+        },
+        {
+          "event": "finish",
+          "position": 3.0,
+          "frame_index": 272,
+          "timestamp_s": 2.2666666666666666,
+          "confidence": 0.6062500000000002,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        }
+      ],
+      "usable": true,
+      "frame_interval_s": 0.008333333333333333,
+      "slow_motion_factor": 1.0,
+      "methodology": "Piecewise-linear in real seconds between the four detected events, which are the only instants two recordings of a swing are known to share. Position 0 is the takeaway, 1 the top, 2 impact and 3 the finish. Every difference in timing between two clips normalised this way has been divided out by the map itself; the knots above are what it divided out."
+    }
+  },
+  "camera": {
+    "reference_span": 1.0549061158648267,
+    "target_span": 0.8336522856537827,
+    "span_disagreement": 0.23430975714929606,
+    "reference_openness": 0.9766073500906131,
+    "target_openness": 0.8397743459657431,
+    "reference_azimuth_deg": 12.417312288279616,
+    "target_azimuth_deg": 32.883701220510176,
+    "azimuth_separation_deg": 45.301013508789794,
+    "consistent": false,
+    "methodology": "Projected shoulder span at address, in torso lengths, from each clip's own view estimate; the azimuth is the arccosine of that span divided by the widest the line was seen in the same clip. The verdict is on the spans, which are measured; the azimuths are reported and used to widen a bracket, because the arccosine is flat near broadside and would turn a percent of landmark noise into eight degrees. It assumes both recordings show the same body, since a broader player projects a broader line from the same place, and it depends on each clip containing a frame where the shoulders come square."
+  },
+  "differences": [
+    {
+      "name": "downswing_duration",
+      "label": "Downswing duration",
+      "group": "timing",
+      "unit": "seconds",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 0.3999999999999999,
+      "target_value": 0.45833333333333326,
+      "difference": 0.05833333333333335,
+      "direction": "higher",
+      "bracket": 0.01666666666666667,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.008333333333333335,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        },
+        {
+          "source": "target clip",
+          "value": 0.008333333333333333,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        }
+      ],
+      "margin": 0.04166666666666668,
+      "confidence": 0.8912705554599563,
+      "reference_frames": [155, 203],
+      "target_frames": [155, 210],
+      "interpretation": "Time from the top to impact. A clock reading; the camera position does not enter it.",
+      "methodology": "Elapsed time from the top to the estimated impact, from the clip's presentation timestamps. Located to within a frame at each end, so it carries about 8 ms of uncertainty. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    },
+    {
+      "name": "follow_through_duration",
+      "label": "Follow-through duration",
+      "group": "timing",
+      "unit": "seconds",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 0.39166666666666683,
+      "target_value": 0.5083333333333333,
+      "difference": 0.11666666666666647,
+      "direction": "higher",
+      "bracket": 0.01666666666666667,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.008333333333333335,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        },
+        {
+          "source": "target clip",
+          "value": 0.008333333333333333,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        }
+      ],
+      "margin": 0.09999999999999981,
+      "confidence": 0.5963114754098363,
+      "reference_frames": [204, 251],
+      "target_frames": [211, 272],
+      "interpretation": "Time from impact to the finish. A clock reading; the camera position does not enter it.",
+      "methodology": "Elapsed time from the impact to the finish, from the clip's presentation timestamps. Located to within a frame at each end, so it carries about 8 ms of uncertainty. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    },
+    {
+      "name": "takeaway_to_impact",
+      "label": "Takeaway to impact",
+      "group": "timing",
+      "unit": "seconds",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 1.1666666666666665,
+      "target_value": 1.225,
+      "difference": 0.05833333333333357,
+      "direction": "higher",
+      "bracket": 0.01666666666666667,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.008333333333333335,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        },
+        {
+          "source": "target clip",
+          "value": 0.008333333333333333,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        }
+      ],
+      "margin": 0.0416666666666669,
+      "confidence": 0.9599648806698801,
+      "reference_frames": [64, 204],
+      "target_frames": [64, 211],
+      "interpretation": "Time for the whole swing. A clock reading; the camera position does not enter it.",
+      "methodology": "Elapsed time from the takeaway to the estimated impact, from the clip's presentation timestamps. Located to within a frame at each end, so it carries about 8 ms of uncertainty. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    },
+    {
+      "name": "tempo_ratio",
+      "label": "Tempo ratio",
+      "group": "timing",
+      "unit": "ratio",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 1.8750000000000002,
+      "target_value": 1.6363636363636365,
+      "difference": -0.23863636363636376,
+      "direction": "lower",
+      "bracket": 0.10999176158750634,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.061170212765957466,
+          "reason": "One frame of ambiguity at the top, which lengthens the backswing and shortens the downswing at the same time."
+        },
+        {
+          "source": "target clip",
+          "value": 0.04882154882154888,
+          "reason": "One frame of ambiguity at the top, which lengthens the backswing and shortens the downswing at the same time."
+        }
+      ],
+      "margin": 0.12864460204885741,
+      "confidence": 0.8912705554599563,
+      "reference_frames": [64, 155, 204],
+      "target_frames": [64, 155, 211],
+      "interpretation": "Backswing against downswing. Unitless and view-independent: the one number here no camera position can distort.",
+      "methodology": "Backswing duration divided by downswing duration. Unitless, so unaffected by camera position, subject size and frame rate alike -- though the durations it divides are each located only to within a frame, and the downswing is the shorter, so it sets the precision. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    }
+  ],
+  "refused": [
+    {
+      "name": "spine_tilt",
+      "label": "Spine tilt at address",
+      "event": null,
+      "refusal": "camera_moved",
+      "reason": "Spine tilt at address depends on where the camera stood, and these two recordings disagree about that: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other, which puts them up to 45.3 degrees apart round the player. Film both from one position, or compare only the timings.",
+      "reference_value": null,
+      "target_value": null,
+      "bracket": null
+    },
+    {
+      "name": "backswing_duration",
+      "label": "Backswing duration",
+      "event": null,
+      "refusal": "unresolved",
+      "reason": "The two values differ by 0 seconds, and these recordings cannot resolve a difference below 0.0167. Not a finding that the swings agree: a finding that this pair of recordings cannot tell them apart. Most of that comes from the reference clip.",
+      "reference_value": 0.7499999999999999,
+      "target_value": 0.7499999999999999,
+      "bracket": 0.01666666666666667
+    }
+  ],
+  "trajectories": [
+    {
+      "channel": "hand_speed",
+      "label": "Hand speed",
+      "unit": "torso_lengths_per_s",
+      "basis": "image_plane",
+      "samples": [],
+      "resolved_fraction": 0.0,
+      "largest_difference": null,
+      "largest_at": null,
+      "refusal": "camera_moved",
+      "reason": "These two recordings disagree about where the camera stood: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other. Nothing here can separate a camera that moved from a player built differently, and either explains a difference between the curves without the swing having changed."
+    },
+    {
+      "channel": "hand_height",
+      "label": "Hand height above address",
+      "unit": "torso_lengths",
+      "basis": "image_plane",
+      "samples": [],
+      "resolved_fraction": 0.0,
+      "largest_difference": null,
+      "largest_at": null,
+      "refusal": "camera_moved",
+      "reason": "These two recordings disagree about where the camera stood: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other. Nothing here can separate a camera that moved from a player built differently, and either explains a difference between the curves without the swing having changed."
+    },
+    {
+      "channel": "shoulder_angle",
+      "label": "Shoulder line tilt",
+      "unit": "degrees",
+      "basis": "projected_angle",
+      "samples": [],
+      "resolved_fraction": 0.0,
+      "largest_difference": null,
+      "largest_at": null,
+      "refusal": "camera_moved",
+      "reason": "These two recordings disagree about where the camera stood: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other. Nothing here can separate a camera that moved from a player built differently, and either explains a difference between the curves without the swing having changed."
+    },
+    {
+      "channel": "hip_angle",
+      "label": "Hip line tilt",
+      "unit": "degrees",
+      "basis": "projected_angle",
+      "samples": [],
+      "resolved_fraction": 0.0,
+      "largest_difference": null,
+      "largest_at": null,
+      "refusal": "camera_moved",
+      "reason": "These two recordings disagree about where the camera stood: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other. Nothing here can separate a camera that moved from a player built differently, and either explains a difference between the curves without the swing having changed."
+    }
+  ],
+  "hand_path": {
+    "samples": [],
+    "unit": "torso_lengths",
+    "comparable": false,
+    "reason": "These two recordings disagree about where the camera stood: the shoulders span 1.05 torso lengths at address in one and 0.83 in the other. Nothing here can separate a camera that moved from a player built differently, and either explains a difference between the curves without the swing having changed."
+  },
+  "metrics_considered": 38,
+  "config": {
+    "samples": 25,
+    "min_confidence": 0.25,
+    "max_span_disagreement": 0.1
+  },
+  "warnings": [
+    "This camera is not calibrated, so the landmarks these metrics are measured from still carry the lens's distortion -- tens of pixels near the frame edge on an ordinary phone, and nothing in the numbers shows it. Calibrating the camera removes it and makes every angle and distance below a cleaner statement about the image plane.",
+    "This camera is not calibrated, so the landmarks these metrics are measured from still carry the lens's distortion -- tens of pixels near the frame edge on an ordinary phone, and nothing in the numbers shows it. Calibrating the camera removes it and makes every angle and distance below a cleaner statement about the image plane."
+  ]
+}
