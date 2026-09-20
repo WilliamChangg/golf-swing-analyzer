@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-17 complete (18 / 21).**
+**Progress: Phases 0-18 complete (19 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -26,7 +26,7 @@ advance past a broken phase.
 | 15  | 3D visualisation      | ✅ **Done** | Scrub stays in sync; the viewpoint reports what it hides       |
 | 16  | Swing comparison      | ✅ **Done** | Differences shown, no score; the camera is gated first         |
 | 17  | Performance           | ✅ **Done** | Before/after numbers recorded                                  |
-| 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                         |
+| 18  | Model management      | ✅ **Done** | Backends reported; CPU fallback proven                         |
 | 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                         |
 | 20  | Documentation         | ⬜          | Docs match reality                                             |
 
@@ -2784,13 +2784,13 @@ configuration, Git revision, platform, frame count and all raw samples.
 **Measured** (`scripts/benchmark.py data/amateur/face-on/PW_face-on.mp4 --repeats 5`,
 Apple M1 Pro / macOS 26.4.1; 68-frame face-on clip; median of 5):
 
-| Desktop analysis operation | Baseline | Warm repeat | Change |
-| -------------------------- | -------: | ----------: | -----: |
-| pose extraction            | 2.285 s  | 14 ms       | 163× faster |
-| phase detection            | 36 ms    | 34 ms       | no cache warranted |
-| metrics                    | 37 ms    | 14 ms       | 2.6× faster |
-| coaching                   | 37 ms    | 14 ms       | 2.6× faster |
-| pose overlay               | 49 ms    | 45 ms       | no cache warranted |
+| Desktop analysis operation | Baseline | Warm repeat |             Change |
+| -------------------------- | -------: | ----------: | -----------------: |
+| pose extraction            |  2.285 s |       14 ms |        163× faster |
+| phase detection            |    36 ms |       34 ms | no cache warranted |
+| metrics                    |    37 ms |       14 ms |        2.6× faster |
+| coaching                   |    37 ms |       14 ms |        2.6× faster |
+| pose overlay               |    49 ms |       45 ms | no cache warranted |
 
 The benchmark identifies pose extraction as the only seconds-scale repeat. A
 valid cached Parquet is now reused only when its video content key, model name
@@ -2800,13 +2800,70 @@ are intentionally not result-cached: calibration and sync state can change
 without changing the video or a request field, and serving a stale spatial
 measurement would be worse than rerunning a few milliseconds of filtering.
 
-## Phase 18 — Local model management ⬜
+## Phase 18 — Local model management ✅
 
-- [ ] 18.1 `Model{name, version, backend, device, input_requirements}` registry
-- [ ] 18.2 Runtime device selection (no hard-coded GPU)
-- [ ] 18.3 CPU fallback proven by a forced-fallback test
-- [ ] 18.4 Download/verify/update flow in the UI
-- [ ] 18.5 Commit
+- [x] 18.1 Typed registry with name, artifact version, backend, device and input requirements
+- [x] 18.2 Runtime device selection shared with training; explicit MediaPipe CPU delegate
+- [x] 18.3 Forced-CPU real pose extraction and temporal training/inference tests
+- [x] 18.4 Download, verify, reinstall and update to the pinned version in Environment
+- [x] 18.5 Measure, verify and commit
+
+**Environment → Manage models** lists the three manifest-pinned pose models,
+including their installed and expected SHA-256, backend, selected device, size
+and input requirements. Verification hashes the actual files. Its “verified”
+state means the bytes match; the existing **Re-check** runtime probe separately
+runs inference. The version is the artifact digest, since an upstream URL ending
+in `latest` is not a version.
+
+The UI and download script share a streaming installer. It downloads into a
+unique temporary file next to the destination, checks size and SHA-256, and
+only then atomically replaces the installed model. A truncated transfer, timeout,
+excess-size response or mismatched hash leaves the previous model intact and
+removes the partial file. Progress reports bytes downloaded and verification.
+UI requests accept a manifest name, never a supplied URL or filesystem path.
+
+**Update means the version pinned by this application build.** The UI does not
+adopt whatever the upstream `latest` endpoint serves. Deliberate re-pinning
+remains the developer-only `--update-hashes` operation, and still requires new
+benchmarks. Locally trained temporal checkpoints retain Phase 12's model-card
+registry and CLI; they are not downloadable pose models.
+
+`select_torch_device` resolves `auto`, `cpu`, `cuda` or `mps` at runtime and
+checks an accelerator with an allocation and matrix operation before using it.
+An unavailable device or failed probe falls back to CPU with a recorded reason.
+`GSA_FORCE_CPU=1` wins over an explicit accelerator request. Training keeps its
+reproducible CPU default and reports the actual selected device; evaluation
+moves both model and inputs to the resolved device. Kernel errors during a
+training run still surface instead of silently restarting a partially trained
+model. MediaPipe retains the verified CPU policy, independent of torch's device.
+
+Model updates exposed a cache defect: downstream reports were keyed by request
+configuration alone, so a new pose extraction could still receive old metrics
+or coaching. Those keys now include the pose model information and extraction
+time. Pose reuse compares its recorded hash with the installed bytes.
+
+**Measured** (`scripts/benchmark_models.py data/amateur/face-on/PW_face-on.mp4`,
+Apple M1 Pro / macOS 26.4.1, Python 3.12.14; one fresh forced-CPU run):
+
+| Check                                      | Result                  |
+| ------------------------------------------ | ----------------------- |
+| Hash and verify all three installed models | 29.8 ms                 |
+| Full pose model, CPU, real swing           | 68 / 68 frames detected |
+| Decode and pose extraction                 | 1.327 s; 19.51 ms/frame |
+| Temporal network, forced CPU               | Finite output on CPU    |
+
+These are execution and timing checks, not landmark-accuracy measurements.
+MediaPipe also initializes macOS graphics services with its CPU delegate; the
+sandboxed run aborted there, while the same tests and benchmark passed with
+normal macOS runtime access. CPU inference does not imply this build can run
+without access to those platform services.
+
+**Verified:** 1,413 pytest, 253 Vitest, 64 Playwright and 12 Rust tests passed.
+Ruff, mypy, ESLint, TypeScript, Rust formatting/clippy, generated-contract drift
+and the production web build passed. Browser tests use the stubbed Tauri
+transport; the new panel was additionally rendered and visually inspected with
+inventory data from the real engine. Download failure tests use controlled
+responses rather than depending on upstream availability.
 
 ## Phase 19 — Testing hardening ⬜
 

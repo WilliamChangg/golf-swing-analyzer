@@ -27,6 +27,8 @@ from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, SQUARE_FRAME, requires_ff
 # hand on purpose: the table is what makes a newly-registered method visible.
 _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "doctor": {},
+    "list_models": {},
+    "install_model": {"name": "pose_landmarker_full"},
     "probe_video": {"path": str(CFR_30FPS)},
     "extract_poses": {"path": str(CFR_30FPS)},
     "filter_poses": {"path": "poses.parquet"},
@@ -80,6 +82,7 @@ _FAST_METHODS = {
     "probe_video",
     "create_project",
     "list_projects",
+    "list_models",
     "seek_index",
 }
 

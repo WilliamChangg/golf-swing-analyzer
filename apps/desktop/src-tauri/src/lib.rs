@@ -28,6 +28,8 @@ pub fn run() {
         .manage(Engine::new())
         .invoke_handler(tauri::generate_handler![
             commands::doctor,
+            commands::list_models,
+            commands::install_model,
             commands::probe_video,
             commands::extract_poses,
             commands::detect_phases,

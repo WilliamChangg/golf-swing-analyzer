@@ -1111,6 +1111,36 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
+### Local model management (Phase 18)
+
+Open **Environment → Manage models** to inspect the installed pose models and
+verify their SHA-256 against the manifest. Use **Download** for a missing model,
+**Update to pinned version** for mismatched weights, or **Reinstall** to fetch the
+same pinned artifact again. Downloads report progress and replace the installed
+file only after size and hash verification succeed. **Re-check** separately
+verifies that pose inference runs.
+
+Updates follow the manifest shipped with this build. Upstream changes are
+refused until deliberately re-pinned; `python scripts/download_models.py
+--update-hashes` remains a developer operation requiring new measurements.
+Temporal models trained locally remain in the CLI's model-card registry.
+
+Training accepts `--device auto`, `cpu`, `cuda` or `mps` (CPU remains the default).
+Unavailable accelerators or failed initialization probes fall back to CPU and
+record why. Set `GSA_FORCE_CPU=1` to force CPU even with an accelerator requested.
+MediaPipe uses its separate, explicitly selected CPU delegate. On macOS it still
+initializes graphics services, so a sandbox blocking those services can prevent
+its CPU graph from starting.
+
+To verify model files and measure fresh forced-CPU inference:
+
+```sh
+uv run --project python python scripts/benchmark_models.py data/amateur/face-on/PW_face-on.mp4
+```
+
+See [Phase 18](docs/ROADMAP.md#phase-18--local-model-management-)
+for the recorded measurements and cache invalidation behavior.
+
 ## 15. Testing
 
 ```bash
@@ -1780,13 +1810,13 @@ The measurements that matter for this phase are not timings; they are in
 `scripts/benchmark.py data/amateur/face-on/PW_face-on.mp4 --repeats 5`,
 68-frame face-on clip, median of 5):
 
-| Operation | Fresh analysis | Warm repeat |
-| --------- | -------------: | ----------: |
-| Pose extraction | 2.285 s | 14 ms |
-| Phase detection | 36 ms | 34 ms |
-| Metrics | 37 ms | 14 ms |
-| Coaching | 37 ms | 14 ms |
-| Pose overlay | 49 ms | 45 ms |
+| Operation       | Fresh analysis | Warm repeat |
+| --------------- | -------------: | ----------: |
+| Pose extraction |        2.285 s |       14 ms |
+| Phase detection |          36 ms |       34 ms |
+| Metrics         |          37 ms |       14 ms |
+| Coaching        |          37 ms |       14 ms |
+| Pose overlay    |          49 ms |       45 ms |
 
 The benchmark writes no cache-clearing command: its baseline extracts into a
 temporary directory and disables only the compact Phase 17 result cache. A warm
@@ -2178,7 +2208,7 @@ and sync state can change independently of video content.
 
 ## 18. Future work
 
-Phases 17-20: performance work, model management, test hardening and
+Phases 19-20: test hardening and
 documentation. Sequencing, deliverables, and exit criteria per phase are in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 

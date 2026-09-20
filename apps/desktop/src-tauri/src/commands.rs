@@ -627,3 +627,27 @@ pub async fn reconstruct_scene(
         }
     })
 }
+
+/// Verify the local inventory against the manifest shipped with this build.
+#[tauri::command]
+pub async fn list_models(engine: State<'_, Engine>) -> Result<Value, EngineError> {
+    engine.request("list_models", json!({}))
+}
+
+/// Install the pinned artifact, forwarding byte and verification progress.
+#[tauri::command]
+pub async fn install_model(
+    app: AppHandle,
+    engine: State<'_, Engine>,
+    name: String,
+) -> Result<Value, EngineError> {
+    engine.request_with_notifications(
+        "install_model",
+        json!({ "name": name }),
+        &|method, params| {
+            if method == PROGRESS_NOTIFICATION {
+                let _ = app.emit(PROGRESS_EVENT, params.clone());
+            }
+        },
+    )
+}

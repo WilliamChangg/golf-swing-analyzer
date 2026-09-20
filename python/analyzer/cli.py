@@ -3019,7 +3019,11 @@ def train(
         int | None, typer.Option("--epochs", help="Maximum passes over the set.")
     ] = None,
     device: Annotated[
-        str, typer.Option("--device", help="torch device. cpu is the default.")
+        str,
+        typer.Option(
+            "--device",
+            help="torch device: cpu (default), auto, cuda or mps. GSA_FORCE_CPU overrides.",
+        ),
     ] = "cpu",
     search: Annotated[
         list[Path] | None,
@@ -3095,7 +3099,7 @@ def train(
         trained,
         split.test,
         model_id=identifier,
-        device=device,
+        device=report.device,
         label_digest=built.summary.label_digest,
     )
     _render_evaluation(comparison.rule, "Rule-based detector, held-out clips")

@@ -34,6 +34,7 @@ SCHEMA_DIR = OUT_DIR / "schema"
 # Only root models are listed; nested models are inlined by the generator.
 EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.health", "EnvironmentReport"),
+    ("analyzer.contracts.models", "ModelInventory"),
     ("analyzer.contracts.video", "VideoMetadata"),
     ("analyzer.contracts.pose", "PoseExtractionResult"),
     ("analyzer.contracts.progress", "ProgressUpdate"),

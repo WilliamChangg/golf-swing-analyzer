@@ -18,21 +18,18 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "python"))
 
-from analyzer.environment.models import (  # noqa: E402
+from analyzer.environment.model_manager import ModelInstallError
+from analyzer.environment.models import (
     ModelEntry,
     load_manifest,
     sha256_file,
 )
-from analyzer.paths import model_manifest_path, models_dir  # noqa: E402
-
-_CHUNK = 1024 * 256
+from analyzer.paths import model_manifest_path, models_dir
 
 
 def _human(n: int) -> str:
@@ -40,30 +37,21 @@ def _human(n: int) -> str:
     return f"{mb:.1f} MB"
 
 
-def _download(entry: ModelEntry, target: Path) -> None:
+def _download(entry: ModelEntry, target: Path, *, verify: bool = True) -> None:
     """Stream to a temporary file, then move into place.
 
     Downloading to `.part` first means an interrupted transfer cannot leave a
     truncated file where a valid model is expected.
     """
-    partial = target.with_suffix(target.suffix + ".part")
+    from analyzer.environment.model_manager import download_artifact
+
     print(f"  downloading {entry.filename} ({_human(entry.size_bytes)})...")
-
-    try:
-        with (
-            urllib.request.urlopen(entry.url) as response,  # noqa: S310 - manifest-pinned https URL
-            partial.open("wb") as handle,
-        ):
-            while chunk := response.read(_CHUNK):
-                handle.write(chunk)
-    except urllib.error.URLError as exc:
-        partial.unlink(missing_ok=True)
-        raise SystemExit(f"  failed to download {entry.name}: {exc}") from exc
-
-    partial.replace(target)
+    download_artifact(entry, target, verify=verify)
 
 
-def _verify(entry: ModelEntry, target: Path, *, update_hashes: bool) -> tuple[bool, str]:
+def _verify(
+    entry: ModelEntry, target: Path, *, update_hashes: bool
+) -> tuple[bool, str]:
     """Return (ok, message) for a downloaded file."""
     actual_size = target.stat().st_size
     actual_hash = sha256_file(target)
@@ -87,9 +75,15 @@ def _verify(entry: ModelEntry, target: Path, *, update_hashes: bool) -> tuple[bo
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--all", action="store_true", help="Download optional models too.")
-    parser.add_argument("--only", metavar="NAME", help="Download a single model by name.")
-    parser.add_argument("--force", action="store_true", help="Re-download even if present.")
+    parser.add_argument(
+        "--all", action="store_true", help="Download optional models too."
+    )
+    parser.add_argument(
+        "--only", metavar="NAME", help="Download a single model by name."
+    )
+    parser.add_argument(
+        "--force", action="store_true", help="Re-download even if present."
+    )
     parser.add_argument(
         "--update-hashes",
         action="store_true",
@@ -126,7 +120,12 @@ def main() -> int:
                 failures += 1
             continue
 
-        _download(entry, target)
+        try:
+            _download(entry, target, verify=not args.update_hashes)
+        except (ModelInstallError, OSError) as exc:
+            print(f"  failed: {exc}", file=sys.stderr)
+            failures += 1
+            continue
         ok, message = _verify(entry, target, update_hashes=args.update_hashes)
         print(f"  {message}")
         if not ok:

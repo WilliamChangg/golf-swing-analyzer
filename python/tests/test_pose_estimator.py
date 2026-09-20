@@ -239,3 +239,23 @@ class TestDeterminism:
 
     def test_two_runs_agree_exactly(self) -> None:
         assert self._run(CFR_30FPS) == self._run(CFR_30FPS)
+
+
+@requires_pose_model
+@requires_ffmpeg
+@pytest.mark.slow
+def test_forced_cpu_extracts_real_swing(monkeypatch, tmp_path) -> None:
+    """Exercise the fallback with a person, bypassing the extraction cache."""
+    from analyzer.paths import repo_root
+    from analyzer.pose.extract import extract_and_store
+    from analyzer.pose.store import read_sequence
+
+    monkeypatch.setenv("GSA_FORCE_CPU", "1")
+    clip = repo_root() / "data/amateur/face-on/PW_face-on.mp4"
+    if not clip.is_file():
+        pytest.skip("Reference swing not present")
+    with MediaPipePoseEstimator() as estimator:
+        result = extract_and_store(clip, estimator, output=tmp_path / "poses.parquet")
+    stored = read_sequence(Path(result.output_path))
+    assert stored.model.delegate == "cpu"
+    assert any(frame.detected for frame in stored.frames)

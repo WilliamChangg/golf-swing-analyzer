@@ -13,6 +13,7 @@ import type {
   EngineResult,
   EnvironmentReport,
   MetricSet,
+  ModelInventory,
   PoseExtractionResult,
   PoseOverlay,
   ProgressUpdate,
@@ -627,4 +628,16 @@ export function onProgress(
 export function progressFraction(update: ProgressUpdate): number | null {
   if (update.total == null || update.total <= 0) return null;
   return Math.min(update.current / update.total, 1);
+}
+
+/** Read and hash every model from the bundled manifest. */
+export function listModels(): Promise<EngineResult<ModelInventory>> {
+  return call<ModelInventory>("list_models", {});
+}
+
+/** Install the manifest-pinned version; never adopts upstream bytes silently. */
+export function installModel(
+  name: string,
+): Promise<EngineResult<ModelInventory>> {
+  return call<ModelInventory>("install_model", { name });
 }

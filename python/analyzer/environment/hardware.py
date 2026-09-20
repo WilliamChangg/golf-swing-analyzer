@@ -155,3 +155,33 @@ def probe_python() -> ComponentStatus:
         detail=f"Python {version} at {sys.executable}",
         version=version,
     )
+
+
+def select_torch_device(requested: str = "auto") -> tuple[str, str | None]:
+    """Resolve a training device at runtime, proving allocation before selecting it.
+
+    CPU override wins even over an explicit accelerator. Later kernel failures
+    still propagate: silently restarting a partially trained run is not fallback.
+    """
+    if requested not in {"auto", "cpu", "cuda", "mps"}:
+        raise ValueError(f"Unknown device '{requested}'; use auto, cpu, cuda or mps.")
+    if os.environ.get(ENV_FORCE_CPU, "").strip().lower() in {"1", "true", "yes"}:
+        return DEVICE_CPU, "CPU forced by GSA_FORCE_CPU."
+    if requested == DEVICE_CPU:
+        return DEVICE_CPU, None
+    info = compute_info()
+    selected = info.selected_device if requested == "auto" else requested
+    if selected == DEVICE_CPU:
+        return DEVICE_CPU, "No accelerator available; using CPU."
+    available = info.cuda_available if selected == DEVICE_CUDA else info.mps_available
+    if not available:
+        return DEVICE_CPU, f"Requested {selected} is unavailable; using CPU."
+    import torch
+
+    try:
+        # Copying back synchronises the operation; allocation alone is not proof.
+        probe = torch.ones((2, 2), device=selected)
+        (probe @ probe).cpu()
+    except (RuntimeError, NotImplementedError) as exc:
+        return DEVICE_CPU, f"{selected} runtime probe failed; using CPU: {exc}"
+    return selected, None

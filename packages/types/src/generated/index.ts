@@ -8,6 +8,7 @@
 
 
 export type { HealthStatus, EnvironmentReport, PlatformInfo, ComponentStatus, ComputeInfo } from "./EnvironmentReport";
+export type { ModelInventory, ManagedModel } from "./ModelInventory";
 export type { HashAlgorithm, TimestampSource, VideoMetadata, ContentKey, VideoStreamInfo, VideoTiming, IntervalStats } from "./VideoMetadata";
 export type { PoseExtractionResult, PoseModelInfo, PoseExtractionStats } from "./PoseExtractionResult";
 export type { ProgressUpdate } from "./ProgressUpdate";

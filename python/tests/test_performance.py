@@ -37,3 +37,24 @@ def test_nested_stage_is_collected_only_while_a_recorder_is_active() -> None:
     assert [entry.name for entry in recorder.stages] == ["inner", "outer"]
     assert all(entry.elapsed_s >= 0 for entry in recorder.stages)
     assert recorder.as_dict()["operation"] == "test"
+
+
+def test_model_update_invalidates_downstream_reports(tmp_path) -> None:
+    """A changed pose artifact must not keep old metrics/coaching alive."""
+    from datetime import timedelta
+
+    from analyzer.dispatch import ComputeMetricsParams, _cache_config
+    from analyzer.pose.store import read_sequence
+    from tests.test_dispatch import TestFilterPoses
+
+    sequence = read_sequence(TestFilterPoses._write_poses(tmp_path))
+    params = ComputeMetricsParams(path=sequence.video_path)
+    original = _cache_config(params, sequence)
+    new_weights = sequence.model_copy(
+        update={"model": sequence.model.model_copy(update={"sha256": "b" * 64})}
+    )
+    rerun = sequence.model_copy(
+        update={"extracted_at": sequence.extracted_at + timedelta(seconds=1)}
+    )
+    assert config_digest(original) != config_digest(_cache_config(params, new_weights))
+    assert config_digest(original) != config_digest(_cache_config(params, rerun))

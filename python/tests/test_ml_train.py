@@ -173,3 +173,15 @@ def test_the_model_can_learn_the_classes_it_was_shown(split) -> None:  # type: i
     with torch.no_grad():
         predicted = model(torch.from_numpy(values).unsqueeze(0)).argmax(dim=1)[0].numpy()
     assert set(np.unique(predicted)) - {CLASS_INDEX[FrameClass.NONE]}
+
+
+def test_forced_cpu_is_used_by_training_and_evaluation(split, monkeypatch) -> None:
+    from analyzer.ml.evaluate import predict_classes
+
+    monkeypatch.setenv("GSA_FORCE_CPU", "true")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    model, report = train(split.train, split.val, config=FAST, device="cuda")
+    assert report.device == "cpu"
+    assert any("CPU forced" in note for note in report.warnings)
+    prediction = predict_classes(model, split.test[0], device=report.device)
+    assert len(prediction) == len(split.test[0].features)

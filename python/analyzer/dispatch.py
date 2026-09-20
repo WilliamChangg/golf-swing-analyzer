@@ -109,6 +109,7 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # Imported here rather than at module scope: pulling in MediaPipe costs
     # about a second, and the worker should not pay that at spawn for a session
     # that may only ever call `doctor`.
+    from analyzer.hashing import sha256_file
     from analyzer.ingestion import probe_video
     from analyzer.pose.estimator import PoseEstimationError, resolve_model
     from analyzer.pose.extract import extract_and_store
@@ -122,7 +123,7 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     try:
         with stage("pose_cache_lookup"):
             metadata = probe_video(Path(parsed.path))
-            entry, _ = resolve_model(parsed.model)
+            entry, model_path = resolve_model(parsed.model)
             destination = (
                 Path(parsed.output)
                 if parsed.output
@@ -133,7 +134,7 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
                 if (
                     cached.video_content_key == metadata.content_key
                     and cached.model.name == entry.name
-                    and cached.model.sha256 == entry.sha256
+                    and cached.model.sha256 == sha256_file(model_path)
                 ):
                     from analyzer.pose.extract import _collect_warnings
 
@@ -480,10 +481,12 @@ def _metrics_chain(
     return sequence, filtered, detected, result
 
 
-def _cache_config(parsed: BaseModel) -> dict[str, Any]:
+def _cache_config(parsed: BaseModel, sequence: Any) -> dict[str, Any]:
     """Analysis choices excluding the path, which the content key represents."""
     config = parsed.model_dump(mode="json")
     config.pop("path", None)
+    config["pose_model"] = sequence.model.model_dump(mode="json")
+    config["pose_extracted_at"] = sequence.extracted_at.isoformat()
     return config
 
 
@@ -517,7 +520,7 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
 
     parsed = ComputeMetricsParams.model_validate(params)
     sequence = _cached_sequence(parsed)
-    config = _cache_config(parsed)
+    config = _cache_config(parsed, sequence)
     cache = AnalysisCache()
     if _can_cache_analysis(parsed):
         with stage("metrics_cache_lookup"):
@@ -565,7 +568,7 @@ def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     from analyzer.contracts.coaching import CoachingReport, PhrasingReport
 
     sequence = _cached_sequence(parsed)
-    config = _cache_config(parsed)
+    config = _cache_config(parsed, sequence)
     cache = AnalysisCache()
     if _can_cache_analysis(parsed):
         with stage("coaching_cache_lookup"):
@@ -2499,8 +2502,34 @@ def _clear_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> B
         raise _project_error(exc) from exc
 
 
+class InstallModelParams(BaseModel, extra="forbid"):
+    name: str
+
+
+def _list_models(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    from analyzer.environment.model_manager import inventory
+
+    if params:
+        raise EngineError("list_models takes no parameters", code=ErrorCode.INVALID_PARAMS)
+    return inventory()
+
+
+def _install_model(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    from analyzer.environment.model_manager import ModelInstallError, install_model
+
+    parsed = InstallModelParams.model_validate(params)
+    try:
+        return install_model(parsed.name, reporter)
+    except (ModelInstallError, OSError) as exc:
+        raise _unsupported_input(
+            exc, "Check the connection and model manifest, then retry."
+        ) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
+    "list_models": _list_models,
+    "install_model": _install_model,
     "probe_video": _probe_video,
     "extract_poses": _extract_poses,
     "filter_poses": _filter_poses,
