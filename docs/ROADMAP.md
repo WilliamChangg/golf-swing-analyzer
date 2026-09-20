@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-16 complete (17 / 21).**
+**Progress: Phases 0-17 complete (18 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -25,7 +25,7 @@ advance past a broken phase.
 | 14  | Desktop UI            | ✅ **Done** | Full workflow end-to-end; seek verified in a real browser      |
 | 15  | 3D visualisation      | ✅ **Done** | Scrub stays in sync; the viewpoint reports what it hides       |
 | 16  | Swing comparison      | ✅ **Done** | Differences shown, no score; the camera is gated first         |
-| 17  | Performance           | ⬜ Next     | Before/after numbers recorded                                  |
+| 17  | Performance           | ✅ **Done** | Before/after numbers recorded                                  |
 | 18  | Model management      | ⬜          | Backends reported; CPU fallback proven                         |
 | 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                         |
 | 20  | Documentation         | ⬜          | Docs match reality                                             |
@@ -2760,14 +2760,45 @@ reading "the largest −1.73 at impact".
   rather than an estimator's structured error. A real estimator loses the
   shoulders to motion blur exactly where this fixture is perfect.
 
-## Phase 17 — Performance engineering ⬜
+## Phase 17 — Performance engineering ✅
 
-- [ ] 17.1 Per-stage timing and memory instrumentation
-- [ ] 17.2 `scripts/benchmark.py` with reproducible inputs
-- [ ] 17.3 Baseline recorded **before** any optimisation
-- [ ] 17.4 Optimise measured bottlenecks only
-- [ ] 17.5 Incremental/cached re-analysis via content + config hashes
-- [ ] 17.6 Before/after table; commit
+- [x] 17.1 Per-stage wall-time and process-RSS instrumentation
+- [x] 17.2 `scripts/benchmark.py` records content key, config, revision and platform
+- [x] 17.3 Baseline recorded **before** cache reuse
+- [x] 17.4 Optimised the measured extraction bottleneck only
+- [x] 17.5 Incremental re-analysis via content + configuration hashes
+- [x] 17.6 Before/after table; commit
+
+`PerformanceRecorder` measures the RPC boundary and its nested stages. It uses
+OS RSS rather than `tracemalloc`, because OpenCV, Arrow, NumPy and MediaPipe
+allocate outside Python's allocator. On macOS the available value is peak RSS,
+not per-stage allocation attribution; the source accompanies every JSON sample.
+
+`scripts/benchmark.py` runs the exact serial workflow behind the desktop's
+**Analyse** button. Its baseline disables only the new small JSON result caches
+and extracts into a temporary directory, so it does not delete or alter a
+user's existing cache. Its warm run first primes then measures the same
+content/configuration pair. It records the content key, full filter
+configuration, Git revision, platform, frame count and all raw samples.
+
+**Measured** (`scripts/benchmark.py data/amateur/face-on/PW_face-on.mp4 --repeats 5`,
+Apple M1 Pro / macOS 26.4.1; 68-frame face-on clip; median of 5):
+
+| Desktop analysis operation | Baseline | Warm repeat | Change |
+| -------------------------- | -------: | ----------: | -----: |
+| pose extraction            | 2.285 s  | 14 ms       | 163× faster |
+| phase detection            | 36 ms    | 34 ms       | no cache warranted |
+| metrics                    | 37 ms    | 14 ms       | 2.6× faster |
+| coaching                   | 37 ms    | 14 ms       | 2.6× faster |
+| pose overlay               | 49 ms    | 45 ms       | no cache warranted |
+
+The benchmark identifies pose extraction as the only seconds-scale repeat. A
+valid cached Parquet is now reused only when its video content key, model name
+and model sha256 all agree. Compact metrics and coaching reports are cached by
+content key plus canonical complete request configuration. Project-backed calls
+are intentionally not result-cached: calibration and sync state can change
+without changing the video or a request field, and serving a stale spatial
+measurement would be worse than rerunning a few milliseconds of filtering.
 
 ## Phase 18 — Local model management ⬜
 

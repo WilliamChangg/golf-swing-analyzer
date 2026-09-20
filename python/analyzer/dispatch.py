@@ -26,12 +26,13 @@ from analyzer.contracts.comparison import ComparisonConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
-from analyzer.contracts.pose import LandmarkSpace
+from analyzer.contracts.pose import LandmarkSpace, PoseExtractionResult
 from analyzer.contracts.reconstruction import ReconstructionConfig
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
+from analyzer.performance import AnalysisCache, PerformanceRecorder, recording, stage
 from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
@@ -108,22 +109,65 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # Imported here rather than at module scope: pulling in MediaPipe costs
     # about a second, and the worker should not pay that at spawn for a session
     # that may only ever call `doctor`.
-    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.ingestion import probe_video
+    from analyzer.pose.estimator import PoseEstimationError, resolve_model
     from analyzer.pose.extract import extract_and_store
     from analyzer.pose.mediapipe_estimator import MediaPipePoseEstimator
+    from analyzer.pose.store import PoseStoreError, cached_sequence_path, read_sequence
+
+    # The desktop deliberately calls this for every Analyse click. A valid
+    # content-and-model keyed Parquet is therefore the fast path; starting
+    # MediaPipe only to overwrite the same artifact would make changing a
+    # downstream filter option needlessly re-decode the whole clip.
+    try:
+        with stage("pose_cache_lookup"):
+            metadata = probe_video(Path(parsed.path))
+            entry, _ = resolve_model(parsed.model)
+            destination = (
+                Path(parsed.output)
+                if parsed.output
+                else cached_sequence_path(metadata.content_key, entry.name)
+            )
+            if destination.exists():
+                cached = read_sequence(destination)
+                if (
+                    cached.video_content_key == metadata.content_key
+                    and cached.model.name == entry.name
+                    and cached.model.sha256 == entry.sha256
+                ):
+                    from analyzer.pose.extract import _collect_warnings
+
+                    return PoseExtractionResult(
+                        video_path=cached.video_path,
+                        output_path=str(destination),
+                        model=cached.model,
+                        extracted_at=cached.extracted_at,
+                        stats=cached.stats,
+                        warnings=_collect_warnings(cached.stats, 0),
+                    )
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError:
+        # A partial or obsolete artifact is a cache miss. The extraction below
+        # atomically replaces it, so it is neither fatal nor silently trusted.
+        pass
 
     try:
-        estimator = MediaPipePoseEstimator(parsed.model)
+        with stage("load_pose_model"):
+            estimator = MediaPipePoseEstimator(parsed.model)
     except PoseEstimationError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
 
     try:
-        return extract_and_store(
-            Path(parsed.path),
-            estimator,
-            output=Path(parsed.output) if parsed.output else None,
-            reporter=reporter,
-        )
+        with stage("decode_and_estimate_poses"):
+            return extract_and_store(
+                Path(parsed.path),
+                estimator,
+                output=Path(parsed.output) if parsed.output else None,
+                reporter=reporter,
+            )
     except ProbeError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
     except PoseEstimationError as exc:
@@ -217,13 +261,14 @@ def _filter_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMod
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    result = filter_sequence(
-        sequence,
-        parsed.config,
-        space=parsed.space,
-        slow_motion_factor=parsed.slow_motion_factor,
-        reporter=reporter,
-    )
+    with stage("filter_landmarks"):
+        result = filter_sequence(
+            sequence,
+            parsed.config,
+            space=parsed.space,
+            slow_motion_factor=parsed.slow_motion_factor,
+            reporter=reporter,
+        )
     return result.report
 
 
@@ -285,15 +330,17 @@ def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # Detection always reads FRAME_WIDTHS: it is the only frame here that is
     # isotropic and upward-positive, and both matter to rules about how far and
     # how high the hands went.
-    filtered = filter_sequence(
-        sequence,
-        parsed.filter,
-        space=LandmarkSpace.FRAME_WIDTHS,
-        slow_motion_factor=parsed.slow_motion_factor,
-        reporter=reporter,
-    )
+    with stage("filter_landmarks"):
+        filtered = filter_sequence(
+            sequence,
+            parsed.filter,
+            space=LandmarkSpace.FRAME_WIDTHS,
+            slow_motion_factor=parsed.slow_motion_factor,
+            reporter=reporter,
+        )
     try:
-        return detect_phases(filtered, parsed.phases)
+        with stage("detect_phases"):
+            return detect_phases(filtered, parsed.phases)
     except SignalError as exc:
         raise _unsupported_input(exc, None) from exc
 
@@ -368,7 +415,7 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
 
 
 def _metrics_chain(
-    parsed: ComputeMetricsParams, reporter: ProgressReporter
+    parsed: ComputeMetricsParams, reporter: ProgressReporter, *, sequence: Any | None = None
 ) -> tuple[Any, Any, Any, Any]:
     """Landmarks to filtered trajectories to phases to metrics, for one clip.
 
@@ -393,32 +440,39 @@ def _metrics_chain(
     from analyzer.pose.estimator import PoseEstimationError
     from analyzer.pose.store import PoseStoreError, read_sequence
 
-    try:
-        poses = _resolve_pose_file(
-            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+    if sequence is None:
+        try:
+            poses = _resolve_pose_file(
+                FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+            )
+            with stage("read_pose_parquet"):
+                sequence = read_sequence(poses)
+        except ProbeError as exc:
+            raise _unsupported_input(exc, exc.remediation) from exc
+        except PoseEstimationError as exc:
+            raise _unsupported_input(exc, exc.remediation) from exc
+        except PoseStoreError as exc:
+            raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    with stage("resolve_calibration"):
+        intrinsics, status = _calibration_for(parsed.project_id, sequence)
+
+    with stage("filter_landmarks"):
+        filtered = filter_sequence(
+            sequence,
+            parsed.filter,
+            space=LandmarkSpace.FRAME_WIDTHS,
+            slow_motion_factor=parsed.slow_motion_factor,
+            intrinsics=intrinsics,
+            reporter=reporter,
         )
-        sequence = read_sequence(poses)
-    except ProbeError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseEstimationError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseStoreError as exc:
-        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
-
-    intrinsics, status = _calibration_for(parsed.project_id, sequence)
-
-    filtered = filter_sequence(
-        sequence,
-        parsed.filter,
-        space=LandmarkSpace.FRAME_WIDTHS,
-        slow_motion_factor=parsed.slow_motion_factor,
-        intrinsics=intrinsics,
-        reporter=reporter,
-    )
-    reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
+    with stage("reconstruct_for_metrics"):
+        reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
     try:
-        detected = detect_phases(filtered, parsed.phases)
-        result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
+        with stage("detect_phases"):
+            detected = detect_phases(filtered, parsed.phases)
+        with stage("compute_metrics"):
+            result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
     except (SignalError, BodyError) as exc:
         raise _unsupported_input(exc, None) from exc
 
@@ -426,9 +480,55 @@ def _metrics_chain(
     return sequence, filtered, detected, result
 
 
+def _cache_config(parsed: BaseModel) -> dict[str, Any]:
+    """Analysis choices excluding the path, which the content key represents."""
+    config = parsed.model_dump(mode="json")
+    config.pop("path", None)
+    return config
+
+
+def _cached_sequence(parsed: ComputeMetricsParams) -> Any:
+    """Read the compact pose artifact before a result-cache lookup."""
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        with stage("read_pose_parquet"):
+            return read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+
+def _can_cache_analysis(parsed: ComputeMetricsParams) -> bool:
+    """Project state can change without a content/config change, so do not cache it."""
+    return parsed.project_id is None
+
+
 def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
     """Measure the biomechanics metrics for a clip's stored landmarks."""
-    _, _, _, result = _metrics_chain(ComputeMetricsParams.model_validate(params), reporter)
+    from analyzer.contracts.metrics import MetricSet
+
+    parsed = ComputeMetricsParams.model_validate(params)
+    sequence = _cached_sequence(parsed)
+    config = _cache_config(parsed)
+    cache = AnalysisCache()
+    if _can_cache_analysis(parsed):
+        with stage("metrics_cache_lookup"):
+            cached = cache.load(sequence.video_content_key, "metrics", config, MetricSet)
+        if cached is not None:
+            return cached
+
+    _, _, _, result = _metrics_chain(parsed, reporter, sequence=sequence)
+    if _can_cache_analysis(parsed):
+        with stage("metrics_cache_store"):
+            cache.store(sequence.video_content_key, "metrics", config, result)
     return result
 
 
@@ -462,13 +562,24 @@ def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
 
     from analyzer.coaching.engine import coach
     from analyzer.coaching.phrasing import PhrasingError, phrase
-    from analyzer.contracts.coaching import PhrasingReport
+    from analyzer.contracts.coaching import CoachingReport, PhrasingReport
 
-    _, filtered, detected, metrics = _metrics_chain(parsed, reporter)
-    report = coach(metrics, detected, parsed.coaching, times=filtered.t.tolist())
+    sequence = _cached_sequence(parsed)
+    config = _cache_config(parsed)
+    cache = AnalysisCache()
+    if _can_cache_analysis(parsed):
+        with stage("coaching_cache_lookup"):
+            cached = cache.load(sequence.video_content_key, "coaching", config, CoachingReport)
+        if cached is not None:
+            return cached
+
+    _, filtered, detected, metrics = _metrics_chain(parsed, reporter, sequence=sequence)
+    with stage("evaluate_coaching_rules"):
+        report = coach(metrics, detected, parsed.coaching, times=filtered.t.tolist())
 
     try:
-        report.phrasing = phrase(report.findings, parsed.coaching)
+        with stage("phrase_findings"):
+            report.phrasing = phrase(report.findings, parsed.coaching)
     except PhrasingError as exc:
         # Not an error for the call: every finding already carries its own
         # sentence, and a phrasing layer that could fail the analysis would make
@@ -482,6 +593,9 @@ def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     # Carried through so a reader of the findings sees what the measurements
     # warned about, without having to fetch the metric set separately.
     report.warnings.extend(metrics.warnings)
+    if _can_cache_analysis(parsed):
+        with stage("coaching_cache_store"):
+            cache.store(sequence.video_content_key, "coaching", config, report)
     return report
 
 
@@ -2421,6 +2535,7 @@ def call(
     method: str,
     params: dict[str, Any] | None = None,
     reporter: ProgressReporter | None = None,
+    performance: PerformanceRecorder | None = None,
 ) -> BaseModel:
     """Invoke a registered method, normalising failures into EngineError.
 
@@ -2436,7 +2551,8 @@ def call(
         )
 
     try:
-        return handler(params or {}, reporter or NullReporter())
+        with recording(performance), stage(f"rpc:{method}"):
+            return handler(params or {}, reporter or NullReporter())
     except EngineError:
         raise
     except ValidationError as exc:

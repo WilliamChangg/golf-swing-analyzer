@@ -6,7 +6,7 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-15 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-17 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
 > explicit coordinate frames with measured camera-view tagging, two-camera time
@@ -14,7 +14,8 @@ never leaves it.
 > tracking, ball detection, the temporal-ML apparatus, the coaching engine, the
 > desktop workflow — a frame-accurate player, a pose overlay, and the metrics and
 > findings panels — and the 3D viewport, which reports how much of a
-> reconstruction's uncertainty the reader's own viewpoint is hiding, are built
+> reconstruction's uncertainty the reader's own viewpoint is hiding, swing
+> comparison, and measured content/configuration-cached re-analysis are built
 > and verified. **Nothing has been reconstructed, calibrated or
 > club-tracked from real footage** — no board capture and no simultaneous
 > two-camera recording exists in this repository, and the club figures come from
@@ -1775,7 +1776,24 @@ fortieth of a phase, which is finer than the frame rate of any clip here.
 The measurements that matter for this phase are not timings; they are in
 [section 13b](#13b-comparing-two-swings-and-the-camera-that-ruins-it).
 
-A general benchmark harness arrives in Phase 17.
+**End-to-end analysis** (2026-09-19,
+`scripts/benchmark.py data/amateur/face-on/PW_face-on.mp4 --repeats 5`,
+68-frame face-on clip, median of 5):
+
+| Operation | Fresh analysis | Warm repeat |
+| --------- | -------------: | ----------: |
+| Pose extraction | 2.285 s | 14 ms |
+| Phase detection | 36 ms | 34 ms |
+| Metrics | 37 ms | 14 ms |
+| Coaching | 37 ms | 14 ms |
+| Pose overlay | 49 ms | 45 ms |
+
+The benchmark writes no cache-clearing command: its baseline extracts into a
+temporary directory and disables only the compact Phase 17 result cache. A warm
+repeat reuses pose Parquet only after the content key, model name and model hash
+agree; metrics and coaching also require an exact canonical configuration hash.
+Project-backed spatial results are intentionally not cached because calibration
+and sync state can change independently of video content.
 
 ## 17. Limitations
 
