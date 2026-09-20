@@ -13,7 +13,11 @@ from __future__ import annotations
 import numpy as np
 
 from analyzer.contracts.filtering import SmoothingConfig, StageReport
-from analyzer.filtering.localpoly import local_polynomial_fit
+from analyzer.filtering.localpoly import (
+    local_polynomial_fit,
+    narrowest_window_s,
+    sampling_interval_s,
+)
 from analyzer.filtering.signal import Signal
 
 
@@ -40,13 +44,13 @@ class LocalPolynomialStage:
         if len(signal) < 2:
             return "The clip is too short to fit anything over."
 
-        interval = float(np.median(np.diff(signal.t)))
-        if interval <= 0:
+        interval = sampling_interval_s(signal.t)
+        if not np.isfinite(interval):
             return "The clip's timestamps do not advance."
 
-        # Half an interval of headroom, so the window's boundary does not land
-        # on a sample and decide the count by floating-point luck.
-        needed = (required - 0.5) * interval
+        # The same arithmetic `filter_sequence` widens by, so the width advised
+        # here and the width actually used cannot drift apart.
+        needed = narrowest_window_s(interval, required)
         return (
             f"Sampling is about {1.0 / interval:.0f} fps, so this order needs a window of at "
             f"least {needed:.3f} s. Either widen it, which averages over more of the swing, "

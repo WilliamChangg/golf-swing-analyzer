@@ -64,11 +64,16 @@ from tests.synthetic_coaching import tempo_metrics  # noqa: E402
 class Clip:
     """A reference recording, and what it takes to get a swing out of it.
 
-    The window and the factor are part of the fixture rather than defaults: a
-    30 fps clip cannot be filtered with the shipped 0.10 s window -- three
-    samples will not support a degree-4 fit -- and a slow-motion clip has no
-    record of its own playback factor. Both were found by running this on real
-    footage, and both are stated here rather than hidden in a helper.
+    The factor is part of the fixture because a slow-motion clip carries no
+    record of its own playback rate, so nothing can measure it.
+
+    The window used to be too. A 30 fps clip could not be filtered with the
+    shipped 0.10 s window -- three samples will not support a degree-4 fit -- so
+    every clip here carried a hand-picked 0.17 s, and that workaround is why the
+    defect stayed invisible for as long as it did: the benchmark routed around it
+    and the shipped path did not. `filter_sequence` now resolves the window
+    against the clip's own frame rate, so `window_s` is an override for studying
+    the effect of a width, not a prerequisite for getting an answer.
     """
 
     label: str
@@ -78,8 +83,8 @@ class Clip:
 
 
 CLIPS: tuple[Clip, ...] = (
-    Clip("amateur, face-on, 30 fps", "data/amateur/face-on/PW_face-on.mp4", window_s=0.17),
-    Clip("amateur, down the line, 30 fps", "data/amateur/dtl/iron_dtl.mp4", window_s=0.17),
+    Clip("amateur, face-on, 30 fps", "data/amateur/face-on/PW_face-on.mp4"),
+    Clip("amateur, down the line, 30 fps", "data/amateur/dtl/iron_dtl.mp4"),
     Clip("tour, face-on, 7x slow", "data/rory/face-on/rory_face_on.mp4", slow_motion=7.0),
     Clip("tour, down the line, 7x slow", "data/rory/dtl/rory_dtl.mp4", slow_motion=7.0),
 )

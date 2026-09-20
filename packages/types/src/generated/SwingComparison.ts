@@ -44,7 +44,7 @@ export type HashAlgorithm = "sha256" | "sha256-sampled-v1";
  *     both; what it costs is the sign of anything measured along the frame's
  *     horizontal axis, so those quantities are reported as image directions
  *     rather than as "towards the player" or "away from them". The reference
- *     clip `data/dtl/iron_dtl.mp4` is filmed from in front, despite its name.
+ *     clip `data/amateur/dtl/iron_dtl.mp4` is filmed from in front, despite its name.
  * UNKNOWN
  *     Oblique, or too little of the body tracked at address to tell. Not a
  *     failure: an oblique camera genuinely supports some measurements and not

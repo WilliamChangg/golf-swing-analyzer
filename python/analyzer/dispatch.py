@@ -36,6 +36,7 @@ from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
     from analyzer.contracts.calibration import CalibrationStatus
+    from analyzer.contracts.pose import PoseSequence
     from analyzer.contracts.projects import Project, ProjectClip
     from analyzer.sync import SyncInput
 
@@ -792,8 +793,27 @@ class SyncClipsParams(BaseModel, extra="forbid"):
     )
 
 
+def _sync_sequence(clip: SyncClipParams, filter_config: FilterConfig) -> PoseSequence:
+    """Read one clip's stored landmarks, extracting them first if needed."""
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=clip.path, model=clip.model, config=filter_config)
+        )
+        return read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+
 def _sync_input(
     clip: SyncClipParams,
+    sequence: PoseSequence,
     filter_config: FilterConfig,
     phase_config: PhaseConfig,
     reporter: ProgressReporter,
@@ -805,25 +825,16 @@ def _sync_input(
     would allow two clips to be aligned whose events were found under different
     filter settings -- which is a difference that would surface as a sync error
     with no way to attribute it.
+
+    `filter_config` arrives already resolved for the pair, so this never widens a
+    window on its own: a window resolved per clip would give the 30 fps half of a
+    120/30 pair a wider one, which is the bias `SyncClipsParams.filter` exists to
+    prevent.
     """
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.phases import SignalError, detect_phases
     from analyzer.phases.signals import swing_signals
-    from analyzer.pose.estimator import PoseEstimationError
-    from analyzer.pose.store import PoseStoreError, read_sequence
     from analyzer.sync import SyncInput
-
-    try:
-        poses = _resolve_pose_file(
-            FilterPosesParams(path=clip.path, model=clip.model, config=filter_config)
-        )
-        sequence = read_sequence(poses)
-    except ProbeError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseEstimationError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseStoreError as exc:
-        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
     filtered = filter_sequence(
         sequence,
@@ -850,11 +861,25 @@ def _sync_clips(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel
     """Relate two clips' clocks, reporting how well the relation is determined."""
     parsed = SyncClipsParams.model_validate(params)
 
+    from analyzer.filtering.landmarks import resolve_window, sequence_clock
     from analyzer.sync import ManualPick, align
     from analyzer.sync.anchors import AnchorError
 
-    reference = _sync_input(parsed.reference, parsed.filter, parsed.phases, reporter)
-    target = _sync_input(parsed.target, parsed.filter, parsed.phases, reporter)
+    # Both clips are read before either is filtered, so the smoothing window can
+    # be resolved once across the pair. The coarser clip sets it for both, which
+    # is what keeps the two speed signals comparable -- see `SyncClipsParams.filter`.
+    reference_sequence = _sync_sequence(parsed.reference, parsed.filter)
+    target_sequence = _sync_sequence(parsed.target, parsed.filter)
+    shared_filter, _ = resolve_window(
+        parsed.filter,
+        sequence_clock(reference_sequence, parsed.reference.slow_motion_factor),
+        sequence_clock(target_sequence, parsed.target.slow_motion_factor),
+    )
+
+    reference = _sync_input(
+        parsed.reference, reference_sequence, shared_filter, parsed.phases, reporter
+    )
+    target = _sync_input(parsed.target, target_sequence, shared_filter, parsed.phases, reporter)
 
     picks = [
         ManualPick(

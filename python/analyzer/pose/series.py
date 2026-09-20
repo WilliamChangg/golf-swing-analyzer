@@ -58,6 +58,22 @@ class LandmarkSeries:
         return float(np.count_nonzero(self.observed) / len(self))
 
 
+def require_slow_motion_factor(factor: float) -> None:
+    """Raise unless `factor` is a number timestamps can be divided by.
+
+    Shared rather than repeated, because every caller that divides by it must
+    reject the same values, and `filter_sequence` now divides by it before this
+    module is reached -- a zero there was a ZeroDivisionError where this says
+    what the argument means.
+    """
+    if not np.isfinite(factor) or factor <= 0.0:
+        raise ValueError(
+            f"slow_motion_factor must be a positive number, got {factor!r}. "
+            "It is how many times slower than real time the clip plays: 1 for an "
+            "ordinary recording, 8 for eight-times slow motion."
+        )
+
+
 def _points_for(sequence: PoseSequence, space: LandmarkSpace) -> list[list[LandmarkPoint]]:
     """The stored points a space is read from.
 
@@ -102,12 +118,7 @@ def landmark_series(
     absent.
     """
     require_reachable(space)
-    if not np.isfinite(slow_motion_factor) or slow_motion_factor <= 0.0:
-        raise ValueError(
-            f"slow_motion_factor must be a positive number, got {slow_motion_factor!r}. "
-            "It is how many times slower than real time the clip plays: 1 for an "
-            "ordinary recording, 8 for eight-times slow motion."
-        )
+    require_slow_motion_factor(slow_motion_factor)
     count = len(sequence.frames)
     timestamps = np.empty(count, dtype=np.float64)
     values = {

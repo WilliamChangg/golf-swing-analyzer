@@ -203,7 +203,7 @@ slow-motion clip, once its clock is corrected, is not.
 
 ### Impact is estimated worse than its own corroboration
 
-`data/face-on/rory_face_on.mp4` carries the only observed impact in the project:
+`data/rory/face-on/rory_face_on.mp4` carries the only observed impact in the project:
 the ball is on the tee at frame 360 and gone at frame 361. Measured against it,
 across assumed slow-motion factors from 4 to 10:
 

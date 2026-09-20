@@ -1434,7 +1434,7 @@ single-camera user:
 | mild (k1 −0.10)       | 34.0 px           | 41 px  | 56.1° |
 | long lens (k1 −0.02)  | 2.5 px            | 3.0 px | 35.5° |
 
-On the reference swing `data/face-on/PW_face-on.mp4`, undistorting with a
+On the reference swing `data/amateur/face-on/PW_face-on.mp4`, undistorting with a
 plausible phone lens moves the trail arm angle at the top by +1.19°, shoulder
 turn at impact by +0.87°, and peak hand speed by 3.0% — and moves **no swing
 event**, because phase detection reads the shape of a speed curve and a smooth
@@ -1598,7 +1598,7 @@ picture; it only matters when the covering starts _before_ contact:
 The instant runs early by about half the covering. Reported rather than fixed.
 
 **The first observed impact in this project, and the only figure here that is
-not synthetic.** `data/face-on/rory_face_on.mp4` at a factor of 7 — the ball is
+not synthetic.** `data/rory/face-on/rory_face_on.mp4` at a factor of 7 — the ball is
 bracketed between frames 360 and 361, with no warnings:
 
 | source           | frame | delta vs the observation | uncertainty    |
@@ -1892,9 +1892,10 @@ A general benchmark harness arrives in Phase 17.
   synthetically, which is a weaker claim and is labelled as one.
 - **Two clips share one smoothing window, so the coarser sets it.** Smoothing
   them differently would shift the features an alignment keys on by an amount
-  nothing measures. A 30 fps camera therefore cannot support the 0.10 s default
-  for either clip; the engine refuses and names the window that rate would
-  support.
+  nothing measures. `sync` therefore reads both clips before filtering either
+  and resolves one window across the pair, so a 30 fps camera widens the window
+  for its 120 fps partner too — and the pair is measured at a width neither
+  asked for, which the report names.
 - **No packaging story yet.** `npm run dev` runs from the repository and
   resolves the Python project by walking up from the working directory. A
   bundled app needs the engine shipped as a sidecar; that is not built.
@@ -1912,13 +1913,13 @@ A general benchmark harness arrives in Phase 17.
   were found are in the right place. That needs a labelled set. Phase 12 built
   the apparatus for one — a labelling tool, a schema, player-grouped splits — and
   no such set exists.
-- **Filtering needs about 60 fps or better at its default settings.** A 0.10 s
-  window with a degree-4 fit needs five samples, and 30 fps supplies three. Such
-  a clip gets no values at all, plus a message naming the minimum window its
-  measured rate would support — the alternative, widening the window silently,
-  produces numbers that are worse in a way nothing reports. Both reference clips
-  used during development are 24–30 fps, so this is the ordinary case rather than
-  an edge one, and it is the first quantitative backing for the ≥120 fps the
+- **Below about 45 fps the shipped window cannot be used, and is widened.** A
+  0.10 s window with a degree-4 fit needs five samples, and 30 fps supplies
+  three. Such a clip used to get no values at all; it is now filtered at the
+  narrowest window its measured rate supports, with both widths and the cost
+  named in the report. Most footage is 30 fps, so this is the ordinary case
+  rather than an edge one — and the cost is real: impact on a 30 fps clip lands
+  near half confidence, which remains quantitative backing for the ≥120 fps the
   capture protocol asks for.
 - **`analyzer phases` reports impact from the hands, and that has not changed.**
   It is a kinematic estimate and its contract says so. `analyzer impact` is where

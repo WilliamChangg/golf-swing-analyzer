@@ -27,7 +27,7 @@ which on a vertical phone clip is a disc covering the whole picture -- sky, tree
 and all.
 
 That is not a cost in work, it is a cost in **correctness**, and on
-`data/face-on/rory_face_on.mp4` it decided the clip. The identification looks for
+`data/rory/face-on/rory_face_on.mp4` it decided the clip. The identification looks for
 a small round thing that sits perfectly still for hundreds of frames and then
 stops being there, and a hands-anchored region offers it the sky: a patch of
 cloud between two branches is rounder, better resolved and stiller than a golf

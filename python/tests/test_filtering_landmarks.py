@@ -34,6 +34,7 @@ from analyzer.contracts.pose import (
     PoseSequence,
 )
 from analyzer.filtering.landmarks import filter_landmark, filter_sequence, signals_from_series
+from analyzer.filtering.localpoly import narrowest_window_s
 from analyzer.pose.series import landmark_series
 from analyzer.progress import RecordingReporter
 from tests.conftest import SQUARE_FRAME
@@ -262,20 +263,71 @@ class TestFilterSequence:
 
 
 class TestLowFrameRate:
-    def test_refuses_and_explains_when_the_frame_rate_cannot_support_the_window(self) -> None:
-        """The measured cliff, stated rather than silently degraded.
+    """The measured cliff, and what the filter does when a clip falls off it.
 
-        At 24 fps a 0.10 s window holds three samples, which cannot determine a
-        degree-4 polynomial. The right answer is no values plus a reason, not a
-        quietly lowered order.
-        """
+    At 24 fps a 0.10 s window holds three samples, which cannot determine a
+    degree-4 polynomial -- so *nothing* is fitted, at any sample, for any
+    landmark. That was the shipped default's behaviour at every frame rate below
+    about 45, which is where most phone footage is, and it reached the caller as
+    "the hands were never tracked". The order is never quietly lowered; the
+    window is widened to the narrowest width that fits, and the widening is
+    reported.
+    """
+
+    def test_widens_the_window_rather_than_producing_nothing(self) -> None:
         result = filter_sequence(_sequence(count=120, fps=24.0))
+
+        assert result.report.landmarks[0].valid_samples > 0
+        assert result.report.requested_window_s == pytest.approx(0.10)
+        assert result.report.config.smoothing.window_s > 0.10
+
+    def test_the_widened_window_is_the_narrowest_that_fits(self) -> None:
+        """Not a comfortable width. Every extra sample costs velocity peak."""
+        result = filter_sequence(_sequence(count=120, fps=24.0))
+
+        window_s = result.report.config.smoothing.window_s
+        assert window_s == pytest.approx(narrowest_window_s(1.0 / 24.0, 5))
+        # One sample narrower would not have fitted.
+        assert window_s < narrowest_window_s(1.0 / 24.0, 6)
+
+    def test_the_widening_is_reported_with_both_widths(self) -> None:
+        """A measurement made at a width the caller did not ask for has to say so."""
+        result = filter_sequence(_sequence(count=120, fps=24.0))
+
+        warning = next(w for w in result.report.warnings if "widened" in w)
+        assert "0.1 s" in warning
+        assert "24 fps" in warning
+
+    def test_a_frame_rate_that_supports_the_window_is_left_alone(self) -> None:
+        """The benchmarked default stands wherever the clip can hold it."""
+        result = filter_sequence(_sequence(count=120, fps=120.0))
+
+        assert result.report.config.smoothing.window_s == pytest.approx(0.10)
+        assert result.report.requested_window_s is None
+        assert not any("widened" in w for w in result.report.warnings)
+
+    def test_auto_widen_off_refuses_and_explains_instead(self) -> None:
+        """The strict behaviour is still reachable, for a caller who would rather recapture."""
+        config = FilterConfig(smoothing=SmoothingConfig(auto_widen=False))
+        result = filter_sequence(_sequence(count=120, fps=24.0), config)
 
         report = result.report.landmarks[0]
         assert report.valid_samples == 0
         assert report.unsupported == report.samples
         assert any("frame rate" in note for note in report.notes)
         assert any("frame rate" in warning for warning in result.report.warnings)
+
+    def test_the_width_advised_when_refusing_is_the_width_widening_would_use(self) -> None:
+        """One arithmetic, so the advice and the action cannot drift apart."""
+        strict = filter_sequence(
+            _sequence(count=120, fps=24.0),
+            FilterConfig(smoothing=SmoothingConfig(auto_widen=False)),
+        )
+        widened = filter_sequence(_sequence(count=120, fps=24.0))
+
+        note = next(n for n in strict.report.landmarks[0].notes if "at least" in n)
+        advised = float(note.split("at least ")[1].split(" ")[0])
+        assert advised == pytest.approx(widened.report.config.smoothing.window_s, abs=5e-4)
 
     def test_a_wider_window_makes_the_same_clip_usable(self) -> None:
         config = FilterConfig(smoothing=SmoothingConfig(window_s=0.30, polyorder=4))

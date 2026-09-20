@@ -388,11 +388,25 @@ frame count and the count of frames carrying a usable position is always
 attributable: gated detections, refused gaps, or windows with too little
 support, each counted separately.
 
-**Where it declines entirely.** The defaults need five samples per window, which
-30 fps footage cannot supply over 0.10 s. Such a clip gets nothing, and the
-report names the minimum window its measured rate would support. That is the
-same rule as everywhere else in this system — report what was measured, refuse
-what was not — applied to a case where the honest answer is unhelpful.
+**Where the window will not fit.** The defaults need five samples per window,
+which 30 fps footage cannot supply over 0.10 s — three is all it has. The window
+is resolved against the clip's own measured sampling interval and widened to the
+narrowest width that fits, because the alternative is not a coarser measurement
+but no measurement at all: no value, at any sample, for any landmark.
+
+The widening is reported rather than done quietly, which is the whole of what
+makes it acceptable. `SequenceFilterReport.config` carries the window **as
+applied** and `requested_window_s` what was asked for, the warnings name both
+widths and what the wider one costs, and the resolution confidence factor already
+prices it — a window approaching the length of an event scores toward zero, so a
+30 fps clip reports its impact at about half confidence rather than confidently.
+`SmoothingConfig.auto_widen=False` restores the refusal.
+
+Resolved once for everything that will be compared, never per landmark and never
+per clip of a pair: two signals smoothed at different widths are not comparable
+and nothing downstream could tell, because each report would look internally
+consistent. `sync_clips` therefore reads both clips before filtering either.
+[ADR-0021](decisions/ADR-0021-resolving-the-smoothing-window.md).
 
 ## Swing phase detection
 

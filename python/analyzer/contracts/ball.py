@@ -753,7 +753,7 @@ class BallConfig(BaseModel, extra="forbid"):
             "On the synthetic fixture a ball scores 0.89 and everything else falls "
             "below 0.4, which invites a bound around 0.65 and a belief that shape "
             "identifies a golf ball. It does not, at the size a golf ball actually "
-            "occupies. Measured on `data/face-on/rory_face_on.mp4`, where the ball "
+            "occupies. Measured on `data/rory/face-on/rory_face_on.mp4`, where the ball "
             "is 4.4 px in radius on a 576-wide phone clip: the ball scores **0.59** "
             "-- a compressed, slightly blocky disc has a ragged boundary, and "
             "circularity divides by the square of a perimeter that rasterisation "

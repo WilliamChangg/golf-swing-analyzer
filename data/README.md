@@ -48,13 +48,34 @@ recording. On the reference footage every event scores a resolution factor of
 Not committed, and not ground truth — no one has motion-captured any of these.
 They are a stress test, and they earn their keep by disagreeing with the engine.
 
-| Clip                          | View          | Notes                                    |
-| ----------------------------- | ------------- | ---------------------------------------- |
-| `face-on/PW_face-on.mp4`      | face-on       | 68 frames, 30 fps, real time             |
-| `dtl/iron_dtl.mp4`            | down the line | 96 frames, 30 fps; filmed from the front |
-| `dtl/driver_swing_aug19_2026` | down the line | 24 fps; refused, motion blur             |
-| `face-on/rory_face_on.mp4`    | face-on       | tour pro, ~7x slow motion, from behind   |
-| `dtl/rory_dtl.mp4`            | down the line | tour pro, ~5x slow motion                |
+Paths are relative to the player directory: `amateur/`, `rory/` or
+`tommy_fleetwood/`. **The `--slow-motion` column is not optional.** Nothing in a
+conformed file records the factor, so a clip that needs one and is run without it
+is refused — and a row missing from this table is how three of these came to be
+run without theirs.
+
+| Clip                                        | View          | Rate      | `--slow-motion` | Notes                                                                             |
+| ------------------------------------------- | ------------- | --------- | --------------- | --------------------------------------------------------------------------------- |
+| `amateur/face-on/PW_face-on.mp4`            | face-on       | 30 fps    | —               | 68 frames, real time                                                              |
+| `amateur/dtl/iron_dtl.mp4`                  | down the line | 30 fps    | —               | 96 frames; filmed from the front                                                  |
+| `amateur/dtl/driver_swing_aug19_2026`       | down the line | 24 fps    | —               | refused, motion blur                                                              |
+| `rory/face-on/rory_face_on.mp4`             | face-on       | 30 fps    | **7**           | tour pro, from behind; the observed impact                                        |
+| `rory/dtl/rory_dtl.mp4`                     | down the line | 30 fps    | **5**           | tour pro                                                                          |
+| `rory/face-on/rory_faceon_3.mp4`            | face-on       | 60 fps    | —               | 104 frames; the one clip trimmed to a swing                                       |
+| `rory/dtl/rory_dtl_2.mp4`                   | down the line | 60 fps    | **3**           | begins at the takeaway, so no address phase                                       |
+| `tommy_fleetwood/dtl/…_dtl.mp4`             | down the line | 29.97 fps | —               | 150 frames                                                                        |
+| `tommy_fleetwood/face-on/tommy_face-on.mp4` | face-on       | 60 fps    | —               | 37.8 s, untrimmed: thirteen swing-like motions, subject a tenth of the frame wide |
+
+`rory_dtl.mp4` is listed at 5x here and at 7x in `scripts/benchmark_coaching.py`.
+Neither was measured — the factor cannot be — and both detect the swing; the
+difference moves the reported durations, which is exactly the sensitivity the
+slow-motion section above warns about.
+
+`tommy_face-on.mp4` is the clip to reach for when testing what happens to
+untrimmed footage. It detects, and should not be trusted: the engine reports the
+fastest motion in 38 seconds and warns that twelve others are present. Peak hand
+speed on it is 7.7 torso-lengths per second, against 16–17 on the clips that are
+trimmed to one swing.
 
 The tour-pro clips found two defects the amateur footage could not, because they
 contain a full turn and a slow-motion clock. Both are recorded in

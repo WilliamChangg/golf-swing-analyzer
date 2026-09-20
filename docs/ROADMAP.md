@@ -52,7 +52,7 @@ advance past a broken phase.
 **Measured:** worker spawn → ready 163 ms · first `doctor` 1373 ms · warm
 `doctor` 127 ms median · 12 components probed.
 
-`data/dtl/iron_dtl.mp4` (96 frames, 30 fps, added after the first pass) detects
+`data/amateur/dtl/iron_dtl.mp4` (96 frames, 30 fps, added after the first pass) detects
 just as cleanly — takeaway frame 7, top 27, impact 38, finish 49, confidences
 0.94 / 0.79 / 0.81 / 0.00 — but only after a fix it forced. See the hand-source
 deviation below.
@@ -336,7 +336,7 @@ meaningful because a readable baseline exists first.
       swings with known event times, truncated clip, no swing, double swing
 - [x] **4.7 Validated on recorded swings; commit**
 
-**Measured** on `data/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
+**Measured** on `data/amateur/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
 window). Every event matches a hand reading of the signal:
 
 | Event    | Frame | Time    | Confidence | margin | visibility | resolution |
@@ -441,7 +441,7 @@ in the type rather than in a disclaimer. See
       deliberately non-square frame
 - [x] **5.8 Verified on recorded swings; commit**
 
-**Measured** on `data/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
+**Measured** on `data/amateur/face-on/PW_face-on.mp4` (68 frames, 30 fps, 0.15 s
 window), at the top of the backswing. Every value was checked against the frame
 it came from using `scripts/overlay_metrics.py`:
 
@@ -458,7 +458,7 @@ it came from using `scripts/overlay_metrics.py`:
 which the overlay confirms: the player sets up with the left hand above the
 right and takes the club over their right shoulder.
 
-`data/dtl/iron_dtl.mp4` produces 33 metrics and **refuses 3**. Its shoulders
+`data/amateur/dtl/iron_dtl.mp4` produces 33 metrics and **refuses 3**. Its shoulders
 project 0.10 torso lengths at address and 7.2× that mid-swing, so shoulder
 turn, pelvis turn and X-factor are refused as not measurable from that view —
 which is correct, because a down-the-line camera does not contain the
@@ -615,7 +615,7 @@ and left alone**: the worst margin across the reference clips is 2.14 against
   naming a symptom.
 - **`DOWN_THE_LINE` means _along_ the target line, not _behind_ the player.**
   Shoulder foreshortening is identical from both ends and nothing else here
-  separates them. The overlay showed this: `data/dtl/iron_dtl.mp4` is filmed
+  separates them. The overlay showed this: `data/amateur/dtl/iron_dtl.mp4` is filmed
   from in _front_ of the player despite its name, and the classification is
   still right. The cost is the sign of anything measured along the frame's
   horizontal axis, so hand depth is reported as an image direction rather than
@@ -654,7 +654,7 @@ width across 27 frames of near-static pose — an implied turn of 47 to 74 degre
 No confidence the estimator supplies can catch that, which is why stability is
 now measured from the geometry.
 
-`data/face-on/rory_face_on.mp4` at a factor of 7:
+`data/rory/face-on/rory_face_on.mp4` at a factor of 7:
 
 | Metric              | Value       | Note                                  |
 | ------------------- | ----------- | ------------------------------------- |
@@ -907,7 +907,7 @@ shows it. This is the one thing a calibration does for a single camera — and i
 is still not depth.
 
 **What it changes on real footage, and what it does not.** Undistorting
-`data/face-on/PW_face-on.mp4` with a plausible phone lens (fx = 0.73 x frame
+`data/amateur/face-on/PW_face-on.mp4` with a plausible phone lens (fx = 0.73 x frame
 width, k1 = -0.28) moves the metrics by:
 
 | metric                 | uncalibrated | undistorted | delta     |
@@ -1615,7 +1615,7 @@ instant runs early by about half the covering — reported rather than fixed.
 
 ### The first observed impact, and the number it settles
 
-`data/face-on/rory_face_on.mp4` at a factor of 7. The ball is bracketed between
+`data/rory/face-on/rory_face_on.mp4` at a factor of 7. The ball is bracketed between
 frames 360 and 361 — which is exactly what the Post-Phase-6 section recorded by
 eye, now measured, with no warnings and every factor clean:
 

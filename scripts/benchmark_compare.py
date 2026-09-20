@@ -105,8 +105,8 @@ PAIRS: tuple[tuple[Clip, Clip], ...] = (
         Clip("tour, DTL, 7x slow, second swing", "data/rory/dtl/rory_dtl_2.mp4", slow_motion=7.0),
     ),
     (
-        Clip("amateur, face-on, 30 fps", "data/amateur/face-on/PW_face-on.mp4", window_s=0.17),
-        Clip("amateur, DTL, 30 fps", "data/amateur/dtl/iron_dtl.mp4", window_s=0.17),
+        Clip("amateur, face-on, 30 fps", "data/amateur/face-on/PW_face-on.mp4"),
+        Clip("amateur, DTL, 30 fps", "data/amateur/dtl/iron_dtl.mp4"),
     ),
     (
         Clip("tour, face-on, 7x slow", "data/rory/face-on/rory_face_on.mp4", slow_motion=7.0),
@@ -422,10 +422,12 @@ def sweep_resolution(_args: argparse.Namespace) -> None:
         "how much of it a pair of recordings can attribute to them."
     )
     print(
-        "The 30 fps row is filmed at a 0.20 s smoothing window rather than the "
-        "engine's 0.10 s default, which that rate cannot support at all. That is "
-        "Phase 3's frame-rate floor arriving one layer higher, and it is why the "
-        "row exists rather than being absent."
+        "The window is set per row rather than left to the engine, so that the "
+        "only thing varying down the table is the frame rate. The engine would now "
+        "resolve one itself -- the 0.10 s default holds three samples at 30 fps "
+        "where a degree-4 fit needs five, and `filter_sequence` widens to the "
+        "narrowest width that fits rather than emitting nothing. Pinning it here "
+        "keeps that resolution from becoming a second variable."
     )
 
 
