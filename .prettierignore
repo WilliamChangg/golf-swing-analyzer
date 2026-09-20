@@ -3,6 +3,9 @@ dist-types/
 target/
 node_modules/
 .venv/
+coverage/
+test-results/
+playwright-report/
 uv.lock
 package-lock.json
 apps/desktop/src-tauri/gen/

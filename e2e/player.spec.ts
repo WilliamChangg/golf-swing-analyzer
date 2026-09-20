@@ -335,6 +335,59 @@ test.describe("transport", () => {
 });
 
 test.describe("the full workflow", () => {
+  for (const method of [
+    "detect_phases",
+    "compute_metrics",
+    "coach_swing",
+    "pose_overlay",
+  ]) {
+    test(`keeps a ${method} failure visible and allows retry`, async ({
+      page,
+    }) => {
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      const responses = analysed();
+      await loadClip(page, {
+        [method]: {
+          sequence: [
+            { error: { kind: "engine", message: `Failed at ${method}` } },
+            responses[method as keyof typeof responses],
+          ],
+        },
+      });
+      await page.getByRole("button", { name: /Analyse/ }).click();
+      await expect(page.getByText(`Failed at ${method}`)).toBeVisible();
+      await expect(page.getByRole("button", { name: /Analyse/ })).toBeEnabled();
+      await page.getByRole("button", { name: /Analyse/ }).click();
+      await expect(
+        page.getByText("Measurements", { exact: true }),
+      ).toBeVisible();
+      await expect(page.getByText(`Failed at ${method}`)).toHaveCount(0);
+      expect(errors).toEqual([]);
+    });
+  }
+
+  test("a failed re-extraction clears the previous measurements", async ({
+    page,
+  }) => {
+    await loadClip(page, {
+      extract_poses: {
+        sequence: [
+          analysed().extract_poses,
+          { error: { kind: "engine", message: "Pose extraction failed" } },
+        ],
+      },
+    });
+    await page.getByRole("button", { name: /Analyse/ }).click();
+    await expect(page.getByText("Measurements", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Analyse/ })).toBeEnabled();
+    await page.getByRole("button", { name: /Analyse/ }).click();
+    await expect(page.getByText("Pose extraction failed")).toBeVisible();
+    await expect(page.getByText("Measurements", { exact: true })).toHaveCount(
+      0,
+    );
+  });
+
   test("jumps to a swing event and shows the phase that frame is in", async ({
     page,
   }) => {

@@ -159,6 +159,8 @@ export const POSE_RESULT = {
 export interface CommandStub {
   result?: unknown;
   error?: unknown;
+  /** Consecutive responses; exhausting a sequence is a test failure. */
+  sequence?: { result?: unknown; error?: unknown }[];
 }
 
 /**
@@ -187,9 +189,13 @@ export async function stubEngine(
   };
 
   await page.addInitScript((stubs) => {
+    const calls: { command: string; args: unknown }[] = [];
+    (window as unknown as Record<string, unknown>).__GSA_CALLS__ = calls;
     (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {
-      invoke: (cmd: string) => {
-        const stub = stubs[cmd];
+      invoke: (cmd: string, args: unknown) => {
+        calls.push({ command: cmd, args });
+        const handler = stubs[cmd];
+        const stub = handler?.sequence ? handler.sequence.shift() : handler;
         if (stub === undefined) {
           // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- Tauri rejects an unknown command with a plain string, not an Error.
           return Promise.reject(`command ${cmd} not found`);

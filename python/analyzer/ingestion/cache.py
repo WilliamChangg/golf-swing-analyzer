@@ -153,7 +153,7 @@ class VideoMetadataCache:
         path = self._path_for(key)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (ValueError, OSError):
             return None
 
         if not isinstance(raw, dict) or raw.get("schema_version") != VIDEO_SCHEMA_VERSION:

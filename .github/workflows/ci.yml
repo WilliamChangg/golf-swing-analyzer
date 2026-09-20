@@ -63,7 +63,16 @@ jobs:
         env:
           GSA_REQUIRE_FFMPEG: "1"
           GSA_REQUIRE_MODELS: "1"
-        run: uv run --project python pytest python/tests
+        run: uv run --project python pytest python/tests --cov --cov-config=python/pyproject.toml --cov-report=term-missing:skip-covered --cov-report=xml:coverage/python/coverage.xml --cov-report=html:coverage/python/html
+
+      - name: Python coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-python
+          path: coverage/python/
+          if-no-files-found: error
+          retention-days: 14
 
   typescript:
     name: TypeScript (lint, types, tests)
@@ -88,7 +97,16 @@ jobs:
         run: npm run typecheck
 
       - name: Vitest
-        run: npm test
+        run: npm run test:coverage
+
+      - name: TypeScript coverage report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-typescript
+          path: coverage/typescript/
+          if-no-files-found: error
+          retention-days: 14
 
   contracts:
     name: Generated types are current
@@ -161,5 +179,7 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7

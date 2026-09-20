@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-18 complete (19 / 21).**
+**Progress: Phases 0-19 complete (20 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -27,7 +27,7 @@ advance past a broken phase.
 | 16  | Swing comparison      | ✅ **Done** | Differences shown, no score; the camera is gated first         |
 | 17  | Performance           | ✅ **Done** | Before/after numbers recorded                                  |
 | 18  | Model management      | ✅ **Done** | Backends reported; CPU fallback proven                         |
-| 19  | Test hardening        | ⬜          | Numerical + pipeline + UI suites green                         |
+| 19  | Test hardening        | ✅ **Done** | Numerical + pipeline + UI suites green                         |
 | 20  | Documentation         | ⬜          | Docs match reality                                             |
 
 ---
@@ -2865,14 +2865,69 @@ transport; the new panel was additionally rendered and visually inspected with
 inventory data from the real engine. Download failure tests use controlled
 responses rather than depending on upstream availability.
 
-## Phase 19 — Testing hardening ⬜
+## Phase 19 — Testing hardening ✅
 
-- [ ] 19.1 Numerical: angles, vectors, derivatives, filtering, transforms, triangulation, alignment
-- [ ] 19.2 Pipeline: metadata, pose, missing/low-confidence landmarks, phases, cache invalidation
-- [ ] 19.3 UI: project creation, import, analysis, timeline, metric rendering
-- [ ] 19.4 Synthetic fixture library
-- [ ] 19.5 Coverage reporting in CI
-- [ ] 19.6 Commit
+- [x] 19.1 Numerical: angles, vectors, derivatives, filtering, transforms, triangulation, alignment
+- [x] 19.2 Pipeline: metadata, pose, missing/low-confidence landmarks, phases, cache invalidation
+- [x] 19.3 UI: project creation, import, analysis, timeline, metric rendering
+- [x] 19.4 Synthetic fixture library
+- [x] 19.5 Coverage reporting in CI
+- [x] 19.6 Commit
+
+Added **27 numerical invariants, 31 pipeline regressions and 8 browser tests**.
+The numerical cases use independently constructed answers: a 3–4–5 triangle
+under similarity transforms, cubic derivatives on an irregular clock with a
+rate change, stereo depth from analytical disparity, and affine alignment with
+reversed camera clocks. The shared clock and motion builders join the existing
+synthetic body, board, club, ball and labelled-swing fixtures; their truth and
+limits are catalogued in [Testing and fixtures](testing.md).
+
+Pipeline tests follow real committed video metadata through decoding, fake pose
+extraction, Parquet and phase detection. Separate persisted-swing cases check
+that missing poses, low visibility and low presence produce no measurements or
+findings; warm reports reuse work; filter, extraction-time and model-hash changes
+invalidate it; and project-backed analysis bypasses the result cache. Browser
+tests add session creation, attachment with a declared camera role, removal,
+cancellation, failure and retry to the existing real-decoder timeline and metric
+navigation checks.
+
+**The regressions exposed and fixed five failures:**
+
+- Non-object JSON in an analysis cache crashed instead of recomputing.
+- Non-UTF-8 metadata cache bytes escaped the cache-miss handling.
+- Renaming a video reused its metadata with the obsolete path.
+- Later analysis stages cleared an earlier stage's error. Analysis now stops at
+  the failed stage so the error remains visible and retry is possible.
+- Failed re-analysis left previous measurements displayed. Starting an analysis
+  now clears the previous result.
+
+CI now publishes Python HTML/XML and TypeScript HTML/LCOV coverage artifacts,
+with regression floors of 76% combined Python statement/branch coverage and
+80% statements / 66% branches / 74% functions / 83% lines for TypeScript.
+Reports include unreached production modules; tests and frontend fixture data
+are excluded. Generated reports are ignored by lint/format checks, and browser
+failure artifacts now include the directory containing retry traces.
+
+**Measured verification** (2026-09-20, Apple M1 Pro / macOS 26.4.1):
+
+| Command                                           | Result                                                                         |
+| ------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `npm run py:coverage` with required FFmpeg/models | 1,471 passed; 76.97% combined statement/branch coverage                        |
+| `npm run test:coverage`                           | 253 passed; 80.44% statements, 66.61% branches, 74.93% functions, 83.10% lines |
+| `npm run test:e2e`                                | 72 passed                                                                      |
+| `npm run rs:test`                                 | 12 passed                                                                      |
+
+**1,808 tests passed.** Ruff, mypy, ESLint, TypeScript, Rust formatting/clippy,
+generated-contract drift, video-fixture verification and repository formatting
+passed. The production frontend and native executable built; the executable
+was launched for a startup smoke check. A pre-existing formatting failure in
+the tracked editor settings was corrected without changing its values.
+
+These are correctness and execution checks, not golfer landmark-accuracy
+measurements. Playwright still stubs the Tauri transport and uses a real video
+decoder; there is no automated packaged-WebView integration suite. Coverage
+shows remaining CLI/runtime and frontend unit-test gaps rather than claiming
+that passing the floors exercises every path.
 
 ## Phase 20 — Documentation ⬜
 

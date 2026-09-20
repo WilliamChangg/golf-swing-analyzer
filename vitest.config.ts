@@ -9,5 +9,19 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     projects: ["apps/desktop"],
+    coverage: {
+      provider: "v8",
+      include: ["apps/desktop/src/**/*.{ts,tsx}"],
+      exclude: [
+        "**/*.{test,spec}.{ts,tsx}",
+        "**/*.fixture.ts",
+        "**/test-setup.ts",
+        "**/main.tsx",
+      ],
+      reporter: ["text", "json-summary", "lcov", "html"],
+      reportsDirectory: "coverage/typescript",
+      reportOnFailure: true,
+      thresholds: { statements: 80, branches: 66, functions: 74, lines: 83 },
+    },
   },
 });
