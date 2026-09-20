@@ -1,0 +1,86 @@
+{
+  "$defs": {
+    "ManagedModel": {
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "description": "Artifact identity: sha256 of the manifest-pinned weights.",
+          "type": "string"
+        },
+        "backend": {
+          "type": "string"
+        },
+        "device": {
+          "description": "Device selected by this backend's runtime policy.",
+          "type": "string"
+        },
+        "input_requirements": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "missing",
+            "verified",
+            "mismatch"
+          ],
+          "type": "string"
+        },
+        "installed_sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "backend",
+        "device",
+        "input_requirements",
+        "size_bytes",
+        "required",
+        "state",
+        "detail"
+      ],
+      "title": "ManagedModel",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "default_pose_model": {
+      "type": "string"
+    },
+    "models": {
+      "items": {
+        "$ref": "#/$defs/ManagedModel"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "default_pose_model",
+    "models"
+  ],
+  "title": "ModelInventory",
+  "type": "object"
+}

@@ -1,0 +1,911 @@
+{
+  "schema_version": 1,
+  "computed": true,
+  "reference": {
+    "path": "/clips/before.mov",
+    "content_key": {
+      "algorithm": "sha256-sampled-v1",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size_bytes": 1
+    },
+    "frames": 300,
+    "view": "face_on",
+    "lead_side": "left",
+    "calibration": "none",
+    "slow_motion_factor": 1.0,
+    "torso_length": 0.2500000000000018,
+    "clock": {
+      "knots": [
+        {
+          "event": "takeaway",
+          "position": 0.0,
+          "frame_index": 64,
+          "timestamp_s": 0.5333333333333333,
+          "confidence": 0.9499999999999997,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "top",
+          "position": 1.0,
+          "frame_index": 156,
+          "timestamp_s": 1.3,
+          "confidence": 0.928338019278084,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "impact",
+          "position": 2.0,
+          "frame_index": 204,
+          "timestamp_s": 1.7,
+          "confidence": 0.9499999999999977,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "finish",
+          "position": 3.0,
+          "frame_index": 251,
+          "timestamp_s": 2.091666666666667,
+          "confidence": 0.9499999999999997,
+          "ambiguity_s": 0.008333333333333335,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        }
+      ],
+      "usable": true,
+      "frame_interval_s": 0.008333333333333335,
+      "slow_motion_factor": 1.0,
+      "methodology": "Piecewise-linear in real seconds between the four detected events, which are the only instants two recordings of a swing are known to share. Position 0 is the takeaway, 1 the top, 2 impact and 3 the finish. Every difference in timing between two clips normalised this way has been divided out by the map itself; the knots above are what it divided out."
+    }
+  },
+  "target": {
+    "path": "/clips/after.mov",
+    "content_key": {
+      "algorithm": "sha256-sampled-v1",
+      "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size_bytes": 1
+    },
+    "frames": 270,
+    "view": "face_on",
+    "lead_side": "left",
+    "calibration": "none",
+    "slow_motion_factor": 1.0,
+    "torso_length": 0.25000000000000155,
+    "clock": {
+      "knots": [
+        {
+          "event": "takeaway",
+          "position": 0.0,
+          "frame_index": 62,
+          "timestamp_s": 0.5166666666666666,
+          "confidence": 0.9499999999999997,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "top",
+          "position": 1.0,
+          "frame_index": 126,
+          "timestamp_s": 1.05,
+          "confidence": 0.948481881337404,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "impact",
+          "position": 2.0,
+          "frame_index": 174,
+          "timestamp_s": 1.45,
+          "confidence": 0.9499999999999987,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        },
+        {
+          "event": "finish",
+          "position": 3.0,
+          "frame_index": 221,
+          "timestamp_s": 1.8416666666666666,
+          "confidence": 0.9499999999999997,
+          "ambiguity_s": 0.008333333333333333,
+          "ambiguity_source": "One frame interval: the instant is located to a frame and lies inside it."
+        }
+      ],
+      "usable": true,
+      "frame_interval_s": 0.008333333333333333,
+      "slow_motion_factor": 1.0,
+      "methodology": "Piecewise-linear in real seconds between the four detected events, which are the only instants two recordings of a swing are known to share. Position 0 is the takeaway, 1 the top, 2 impact and 3 the finish. Every difference in timing between two clips normalised this way has been divided out by the map itself; the knots above are what it divided out."
+    }
+  },
+  "camera": {
+    "reference_span": 0.7999999999999975,
+    "target_span": 0.7999999999999982,
+    "span_disagreement": 8.326672684688697e-16,
+    "reference_openness": 0.9999999999999587,
+    "target_openness": 0.9999999999999587,
+    "reference_azimuth_deg": 1.6466989746779883e-5,
+    "target_azimuth_deg": 1.6466989746779883e-5,
+    "azimuth_separation_deg": 3.2933979493559765e-5,
+    "consistent": true,
+    "methodology": "Projected shoulder span at address, in torso lengths, from each clip's own view estimate; the azimuth is the arccosine of that span divided by the widest the line was seen in the same clip. The verdict is on the spans, which are measured; the azimuths are reported and used to widen a bracket, because the arccosine is flat near broadside and would turn a percent of landmark noise into eight degrees. It assumes both recordings show the same body, since a broader player projects a broader line from the same place, and it depends on each clip containing a frame where the shoulders come square."
+  },
+  "differences": [
+    {
+      "name": "backswing_duration",
+      "label": "Backswing duration",
+      "group": "timing",
+      "unit": "seconds",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 0.7583333333333334,
+      "target_value": 0.5250000000000001,
+      "difference": -0.23333333333333328,
+      "direction": "lower",
+      "bracket": 0.01666666666666667,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.008333333333333335,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        },
+        {
+          "source": "target clip",
+          "value": 0.008333333333333333,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        }
+      ],
+      "margin": 0.21666666666666662,
+      "confidence": 0.9181365025827205,
+      "reference_frames": [64, 155],
+      "target_frames": [62, 125],
+      "interpretation": "Time from the takeaway to the top. A clock reading; the camera position does not enter it.",
+      "methodology": "Elapsed time from the takeaway to the top, from the clip's presentation timestamps. Located to within a frame at each end, so it carries about 8 ms of uncertainty. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    },
+    {
+      "name": "takeaway_to_impact",
+      "label": "Takeaway to impact",
+      "group": "timing",
+      "unit": "seconds",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 1.1666666666666665,
+      "target_value": 0.9333333333333333,
+      "difference": -0.23333333333333317,
+      "direction": "lower",
+      "bracket": 0.01666666666666667,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.008333333333333335,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        },
+        {
+          "source": "target clip",
+          "value": 0.008333333333333333,
+          "reason": "One frame interval: this duration runs between two events, each located to a frame, and the true instants lie somewhere inside them."
+        }
+      ],
+      "margin": 0.2166666666666665,
+      "confidence": 0.941517857142856,
+      "reference_frames": [64, 204],
+      "target_frames": [62, 174],
+      "interpretation": "Time for the whole swing. A clock reading; the camera position does not enter it.",
+      "methodology": "Elapsed time from the takeaway to the estimated impact, from the clip's presentation timestamps. Located to within a frame at each end, so it carries about 8 ms of uncertainty. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    },
+    {
+      "name": "tempo_ratio",
+      "label": "Tempo ratio",
+      "group": "timing",
+      "unit": "ratio",
+      "basis": "temporal",
+      "event": null,
+      "reference_value": 1.936170212765958,
+      "target_value": 1.340425531914894,
+      "difference": -0.5957446808510638,
+      "direction": "lower",
+      "bracket": 0.11470860314523601,
+      "terms": [
+        {
+          "source": "reference clip",
+          "value": 0.06382978723404253,
+          "reason": "One frame of ambiguity at the top, which lengthens the backswing and shortens the downswing at the same time."
+        },
+        {
+          "source": "target clip",
+          "value": 0.050878815911193476,
+          "reason": "One frame of ambiguity at the top, which lengthens the backswing and shortens the downswing at the same time."
+        }
+      ],
+      "margin": 0.4810360777058278,
+      "confidence": 0.9085861465274866,
+      "reference_frames": [64, 156, 204],
+      "target_frames": [62, 126, 174],
+      "interpretation": "Backswing against downswing. Unitless and view-independent: the one number here no camera position can distort.",
+      "methodology": "Backswing duration divided by downswing duration. Unitless, so unaffected by camera position, subject size and frame rate alike -- though the durations it divides are each located only to within a frame, and the downswing is the shorter, so it sets the precision. Both clips were measured that way; the difference is the target's value minus the reference's, and it had to clear the sum of what each recording can resolve."
+    }
+  ],
+  "refused": [
+    {
+      "name": "spine_tilt",
+      "label": "Spine tilt at address",
+      "event": null,
+      "refusal": "no_bracket",
+      "reason": "No distance this difference could be required to clear. On the reference clip: Spine tilt at address carries no measured uncertainty. Nothing quantified how finely this method pins the value down, so there is no distance a comparison could be required to clear, and one invented here would decide the finding.",
+      "reference_value": -2.544443745170807e-14,
+      "target_value": -2.5444437451708077e-14,
+      "bracket": null
+    },
+    {
+      "name": "shoulder_turn",
+      "label": "Shoulder turn at the top",
+      "event": "top",
+      "refusal": "low_confidence",
+      "reason": "The weaker of the two measurements scores 0.00, below 0.25. A difference of two numbers is supported by less than either of them, not more.",
+      "reference_value": 0.0,
+      "target_value": 0.0,
+      "bracket": null
+    },
+    {
+      "name": "downswing_duration",
+      "label": "Downswing duration",
+      "event": null,
+      "refusal": "unresolved",
+      "reason": "The two values differ by 0 seconds, and these recordings cannot resolve a difference below 0.0167. Not a finding that the swings agree: a finding that this pair of recordings cannot tell them apart. Most of that comes from the reference clip.",
+      "reference_value": 0.3916666666666666,
+      "target_value": 0.3916666666666666,
+      "bracket": 0.01666666666666667
+    }
+  ],
+  "trajectories": [
+    {
+      "channel": "hand_speed",
+      "label": "Hand speed",
+      "unit": "torso_lengths_per_s",
+      "basis": "image_plane",
+      "samples": [
+        {
+          "position": 0.0,
+          "reference": 0.4802975949981314,
+          "target": 0.39482684076494107,
+          "difference": -0.08547075423319034,
+          "bracket": 0.5357693537655076,
+          "resolved": false
+        },
+        {
+          "position": 0.125,
+          "reference": 1.8464171436259882,
+          "target": 1.9581332880932332,
+          "difference": 0.11171614446724498,
+          "bracket": 0.5348639001034619,
+          "resolved": false
+        },
+        {
+          "position": 0.25,
+          "reference": 2.9384352266119214,
+          "target": 3.2289153919601046,
+          "difference": 0.2904801653481832,
+          "bracket": 0.444400297028654,
+          "resolved": false
+        },
+        {
+          "position": 0.375,
+          "reference": 3.618343169422151,
+          "target": 4.036787845898298,
+          "difference": 0.4184446764761476,
+          "bracket": 0.21185364341550272,
+          "resolved": true
+        },
+        {
+          "position": 0.5,
+          "reference": 3.7928280204448903,
+          "target": 4.266649693874092,
+          "difference": 0.47382167342920134,
+          "bracket": 0.06296756995350927,
+          "resolved": true
+        },
+        {
+          "position": 0.625,
+          "reference": 3.43570418429222,
+          "target": 3.885839133038953,
+          "difference": 0.450134948746733,
+          "bracket": 0.2695231834211498,
+          "resolved": true
+        },
+        {
+          "position": 0.75,
+          "reference": 2.598601677560513,
+          "target": 2.9484893007212563,
+          "difference": 0.3498876231607433,
+          "bracket": 0.4941517500236263,
+          "resolved": false
+        },
+        {
+          "position": 0.875,
+          "reference": 1.3969797671091402,
+          "target": 1.5882803746880108,
+          "difference": 0.19130060757887057,
+          "bracket": 0.5594596437225909,
+          "resolved": false
+        },
+        {
+          "position": 1.0,
+          "reference": 0.0720681099902912,
+          "target": 0.006756509193866084,
+          "difference": -0.06531160079642512,
+          "bracket": 0.817342954401549,
+          "resolved": false
+        },
+        {
+          "position": 1.125,
+          "reference": 1.4814497090644485,
+          "target": 1.1466234017154209,
+          "difference": -0.33482630734902763,
+          "bracket": 0.8613276607597695,
+          "resolved": false
+        },
+        {
+          "position": 1.25,
+          "reference": 2.9104154461375997,
+          "target": 2.248641885771185,
+          "difference": -0.6617735603664148,
+          "bracket": 0.825516074451526,
+          "resolved": false
+        },
+        {
+          "position": 1.375,
+          "reference": 4.224667467972032,
+          "target": 3.2642551587796573,
+          "difference": -0.9604123091923746,
+          "bracket": 0.7487844037231746,
+          "resolved": true
+        },
+        {
+          "position": 1.5,
+          "reference": 5.376036293602399,
+          "target": 4.154196097823621,
+          "difference": -1.2218401957787783,
+          "bracket": 0.6432737588586832,
+          "resolved": true
+        },
+        {
+          "position": 1.625,
+          "reference": 6.320383089934043,
+          "target": 4.884317348061953,
+          "difference": -1.4360657418720901,
+          "bracket": 0.5131241860469329,
+          "resolved": true
+        },
+        {
+          "position": 1.75,
+          "reference": 7.021686506152536,
+          "target": 5.426677954511151,
+          "difference": -1.595008551641385,
+          "bracket": 0.31012981779840043,
+          "resolved": true
+        },
+        {
+          "position": 1.875,
+          "reference": 7.453343220135965,
+          "target": 5.760579592839577,
+          "difference": -1.6927636272963875,
+          "bracket": 0.19988299451713054,
+          "resolved": true
+        },
+        {
+          "position": 2.0,
+          "reference": 7.599057302569033,
+          "target": 5.8733089607470506,
+          "difference": -1.7257483418219826,
+          "bracket": 0.02879668917178968,
+          "resolved": true
+        },
+        {
+          "position": 2.125,
+          "reference": 7.458896525505344,
+          "target": 5.764875718518901,
+          "difference": -1.694020806986443,
+          "bracket": 0.13352845655641232,
+          "resolved": true
+        },
+        {
+          "position": 2.25,
+          "reference": 7.044496393640361,
+          "target": 5.444320927879702,
+          "difference": -1.6001754657606586,
+          "bracket": 0.2696769569421118,
+          "resolved": true
+        },
+        {
+          "position": 2.375,
+          "reference": 6.370859121516842,
+          "target": 4.923349501669909,
+          "difference": -1.447509619846933,
+          "bracket": 0.37561099595521963,
+          "resolved": true
+        },
+        {
+          "position": 2.5,
+          "reference": 5.462460768913957,
+          "target": 4.2210076681451465,
+          "difference": -1.24145310076881,
+          "bracket": 0.4699306179446534,
+          "resolved": true
+        },
+        {
+          "position": 2.625,
+          "reference": 4.352472283929038,
+          "target": 3.3630309273911587,
+          "difference": -0.9894413565378795,
+          "bracket": 0.5971506248729281,
+          "resolved": true
+        },
+        {
+          "position": 2.75,
+          "reference": 3.081620537217823,
+          "target": 2.380933896367856,
+          "difference": -0.700686640849967,
+          "bracket": 0.7137034937665545,
+          "resolved": false
+        },
+        {
+          "position": 2.875,
+          "reference": 1.6961087893369138,
+          "target": 1.310400855326208,
+          "difference": -0.3857079340107057,
+          "bracket": 0.8416609641435877,
+          "resolved": false
+        },
+        {
+          "position": 3.0,
+          "reference": 0.29180989421016046,
+          "target": 0.22543917187718654,
+          "difference": -0.06637072233297392,
+          "bracket": 0.7419145203276494,
+          "resolved": false
+        }
+      ],
+      "resolved_fraction": 0.56,
+      "largest_difference": -1.7257483418219826,
+      "largest_at": 2.0,
+      "refusal": null,
+      "reason": ""
+    },
+    {
+      "channel": "hand_height",
+      "label": "Hand height above address",
+      "unit": "torso_lengths",
+      "basis": "image_plane",
+      "samples": [
+        {
+          "position": 0.0,
+          "reference": 3.8461341451023485e-5,
+          "target": 2.7944685940805946e-6,
+          "difference": -3.566687285694289e-5,
+          "bracket": 0.00018526250161454577,
+          "resolved": false
+        },
+        {
+          "position": 0.125,
+          "reference": 0.008475649126318869,
+          "target": 0.003925131439766541,
+          "difference": -0.004550517686552328,
+          "bracket": 0.005898218147773526,
+          "resolved": false
+        },
+        {
+          "position": 0.25,
+          "reference": 0.07021103836998582,
+          "target": 0.03759799835057065,
+          "difference": -0.032613040019415174,
+          "bracket": 0.03442590527350908,
+          "resolved": false
+        },
+        {
+          "position": 0.375,
+          "reference": 0.2443951208868638,
+          "target": 0.14007562985746994,
+          "difference": -0.10431949102939386,
+          "bracket": 0.07139372015913614,
+          "resolved": true
+        },
+        {
+          "position": 0.5,
+          "reference": 0.538241916630037,
+          "target": 0.3264220578318852,
+          "difference": -0.21181985879815174,
+          "bracket": 0.1157350248236454,
+          "resolved": true
+        },
+        {
+          "position": 0.625,
+          "reference": 0.8795170300359372,
+          "target": 0.5636710423985831,
+          "difference": -0.31584598763735405,
+          "bracket": 0.10407906977095616,
+          "resolved": true
+        },
+        {
+          "position": 0.75,
+          "reference": 1.1668672543982073,
+          "target": 0.7872243706591743,
+          "difference": -0.379642883739033,
+          "bracket": 0.08916108948157753,
+          "resolved": true
+        },
+        {
+          "position": 0.875,
+          "reference": 1.3415184416622252,
+          "target": 0.940071742672046,
+          "difference": -0.40144669899017926,
+          "bracket": 0.038979030402077175,
+          "resolved": true
+        },
+        {
+          "position": 1.0,
+          "reference": 1.3978814616171835,
+          "target": 0.9933835557364674,
+          "difference": -0.4044979058807161,
+          "bracket": 0.006870976363200998,
+          "resolved": true
+        },
+        {
+          "position": 1.125,
+          "reference": 1.3673716976164123,
+          "target": 0.9648202656538651,
+          "difference": -0.40255143196254717,
+          "bracket": 0.046377988514415436,
+          "resolved": true
+        },
+        {
+          "position": 1.25,
+          "reference": 1.2720450629014453,
+          "target": 0.8798230187459902,
+          "difference": -0.39222204415545503,
+          "bracket": 0.08786221611718736,
+          "resolved": true
+        },
+        {
+          "position": 1.375,
+          "reference": 1.104900650271777,
+          "target": 0.7421474887593846,
+          "difference": -0.36275316151239245,
+          "bracket": 0.12803896153664773,
+          "resolved": true
+        },
+        {
+          "position": 1.5,
+          "reference": 0.8666567112544347,
+          "target": 0.5628324009264227,
+          "difference": -0.30382431032801194,
+          "bracket": 0.15774152017332355,
+          "resolved": true
+        },
+        {
+          "position": 1.625,
+          "reference": 0.5794536095226902,
+          "target": 0.36416725078776574,
+          "difference": -0.21528635873492447,
+          "bracket": 0.16511020470784593,
+          "resolved": true
+        },
+        {
+          "position": 1.75,
+          "reference": 0.2938805785414643,
+          "target": 0.17974554633851425,
+          "difference": -0.11413503220295007,
+          "bracket": 0.13445761962510525,
+          "resolved": false
+        },
+        {
+          "position": 1.875,
+          "reference": 0.07981833498659029,
+          "target": 0.047956159214899964,
+          "difference": -0.03186217577169032,
+          "bracket": 0.09488603780853722,
+          "resolved": false
+        },
+        {
+          "position": 2.0,
+          "reference": 3.1213853990408325e-6,
+          "target": 1.1317881845052113e-6,
+          "difference": -1.989597214535621e-6,
+          "bracket": 0.014527368354112627,
+          "resolved": false
+        },
+        {
+          "position": 2.125,
+          "reference": 0.07682964807529508,
+          "target": 0.04615259123616092,
+          "difference": -0.03067705683913416,
+          "bracket": 0.06536957511036781,
+          "resolved": false
+        },
+        {
+          "position": 2.25,
+          "reference": 0.28323008205160094,
+          "target": 0.17308952506392292,
+          "difference": -0.11014055698767802,
+          "bracket": 0.11715110186064742,
+          "resolved": false
+        },
+        {
+          "position": 2.375,
+          "reference": 0.5609051730330985,
+          "target": 0.35188298454521766,
+          "difference": -0.20902218848788084,
+          "bracket": 0.13274015916959342,
+          "resolved": true
+        },
+        {
+          "position": 2.5,
+          "reference": 0.8439163136238924,
+          "target": 0.5465567394594085,
+          "difference": -0.2973595741644839,
+          "bracket": 0.11872546107576532,
+          "resolved": true
+        },
+        {
+          "position": 2.625,
+          "reference": 1.0830032503535678,
+          "target": 0.7249960266165403,
+          "difference": -0.35800722373702754,
+          "bracket": 0.09831883514380102,
+          "resolved": true
+        },
+        {
+          "position": 2.75,
+          "reference": 1.2550070389811285,
+          "target": 0.8652205727251125,
+          "difference": -0.389786466256016,
+          "bracket": 0.07033612997838112,
+          "resolved": true
+        },
+        {
+          "position": 2.875,
+          "reference": 1.3575640347177178,
+          "target": 0.955821206891212,
+          "difference": -0.40174282782650583,
+          "bracket": 0.03711270752452733,
+          "resolved": true
+        },
+        {
+          "position": 3.0,
+          "reference": 1.396677762423817,
+          "target": 0.9922408736639856,
+          "difference": -0.4044368887598313,
+          "bracket": 0.01248300754720122,
+          "resolved": true
+        }
+      ],
+      "resolved_fraction": 0.68,
+      "largest_difference": -0.4044979058807161,
+      "largest_at": 1.0,
+      "refusal": null,
+      "reason": ""
+    },
+    {
+      "channel": "shoulder_angle",
+      "label": "Shoulder line tilt",
+      "unit": "degrees",
+      "basis": "projected_angle",
+      "samples": [
+        {
+          "position": 0.0,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.125,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.25,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.375,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.5,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.625,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.75,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 0.875,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.0,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.125,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.25,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.375,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.5,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.625,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.75,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 1.875,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.0,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.125,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.25,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.375,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.5,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.625,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.75,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 2.875,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        },
+        {
+          "position": 3.0,
+          "reference": 0.0,
+          "target": 0.0,
+          "difference": 0.0,
+          "bracket": 0.0,
+          "resolved": false
+        }
+      ],
+      "resolved_fraction": 0.0,
+      "largest_difference": null,
+      "largest_at": null,
+      "refusal": null,
+      "reason": ""
+    }
+  ],
+  "hand_path": null,
+  "metrics_considered": 38,
+  "config": {
+    "samples": 25,
+    "min_confidence": 0.25,
+    "max_span_disagreement": 0.1
+  },
+  "warnings": [
+    "This camera is not calibrated, so the landmarks these metrics are measured from still carry the lens's distortion -- tens of pixels near the frame edge on an ordinary phone, and nothing in the numbers shows it. Calibrating the camera removes it and makes every angle and distance below a cleaner statement about the image plane.",
+    "This camera is not calibrated, so the landmarks these metrics are measured from still carry the lens's distortion -- tens of pixels near the frame edge on an ordinary phone, and nothing in the numbers shows it. Calibrating the camera removes it and makes every angle and distance below a cleaner statement about the image plane."
+  ]
+}

@@ -21,19 +21,23 @@ from analyzer.contracts.ball import BallConfig
 from analyzer.contracts.calibration import BoardFamily, BoardSpec, CalibrationConfig
 from analyzer.contracts.camera import CameraRole
 from analyzer.contracts.club import ClubConfig
+from analyzer.contracts.coaching import CoachingConfig
+from analyzer.contracts.comparison import ComparisonConfig
 from analyzer.contracts.filtering import FilterConfig
 from analyzer.contracts.metrics import MetricConfig
 from analyzer.contracts.phases import PhaseConfig
-from analyzer.contracts.pose import LandmarkSpace
+from analyzer.contracts.pose import LandmarkSpace, PoseExtractionResult
 from analyzer.contracts.reconstruction import ReconstructionConfig
 from analyzer.contracts.rpc import EngineError, ErrorCode
 from analyzer.contracts.sync import SyncConfig
 from analyzer.environment.doctor import run_doctor
 from analyzer.ingestion import ProbeError, probe_video
+from analyzer.performance import AnalysisCache, PerformanceRecorder, recording, stage
 from analyzer.progress import NullReporter, ProgressReporter
 
 if TYPE_CHECKING:  # imports that would pull numpy and scipy in at worker spawn
     from analyzer.contracts.calibration import CalibrationStatus
+    from analyzer.contracts.pose import PoseSequence
     from analyzer.contracts.projects import Project, ProjectClip
     from analyzer.sync import SyncInput
 
@@ -105,22 +109,66 @@ def _extract_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # Imported here rather than at module scope: pulling in MediaPipe costs
     # about a second, and the worker should not pay that at spawn for a session
     # that may only ever call `doctor`.
-    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.hashing import sha256_file
+    from analyzer.ingestion import probe_video
+    from analyzer.pose.estimator import PoseEstimationError, resolve_model
     from analyzer.pose.extract import extract_and_store
     from analyzer.pose.mediapipe_estimator import MediaPipePoseEstimator
+    from analyzer.pose.store import PoseStoreError, cached_sequence_path, read_sequence
+
+    # The desktop deliberately calls this for every Analyse click. A valid
+    # content-and-model keyed Parquet is therefore the fast path; starting
+    # MediaPipe only to overwrite the same artifact would make changing a
+    # downstream filter option needlessly re-decode the whole clip.
+    try:
+        with stage("pose_cache_lookup"):
+            metadata = probe_video(Path(parsed.path))
+            entry, model_path = resolve_model(parsed.model)
+            destination = (
+                Path(parsed.output)
+                if parsed.output
+                else cached_sequence_path(metadata.content_key, entry.name)
+            )
+            if destination.exists():
+                cached = read_sequence(destination)
+                if (
+                    cached.video_content_key == metadata.content_key
+                    and cached.model.name == entry.name
+                    and cached.model.sha256 == sha256_file(model_path)
+                ):
+                    from analyzer.pose.extract import _collect_warnings
+
+                    return PoseExtractionResult(
+                        video_path=cached.video_path,
+                        output_path=str(destination),
+                        model=cached.model,
+                        extracted_at=cached.extracted_at,
+                        stats=cached.stats,
+                        warnings=_collect_warnings(cached.stats, 0),
+                    )
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError:
+        # A partial or obsolete artifact is a cache miss. The extraction below
+        # atomically replaces it, so it is neither fatal nor silently trusted.
+        pass
 
     try:
-        estimator = MediaPipePoseEstimator(parsed.model)
+        with stage("load_pose_model"):
+            estimator = MediaPipePoseEstimator(parsed.model)
     except PoseEstimationError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
 
     try:
-        return extract_and_store(
-            Path(parsed.path),
-            estimator,
-            output=Path(parsed.output) if parsed.output else None,
-            reporter=reporter,
-        )
+        with stage("decode_and_estimate_poses"):
+            return extract_and_store(
+                Path(parsed.path),
+                estimator,
+                output=Path(parsed.output) if parsed.output else None,
+                reporter=reporter,
+            )
     except ProbeError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
     except PoseEstimationError as exc:
@@ -214,13 +262,14 @@ def _filter_poses(params: dict[str, Any], reporter: ProgressReporter) -> BaseMod
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    result = filter_sequence(
-        sequence,
-        parsed.config,
-        space=parsed.space,
-        slow_motion_factor=parsed.slow_motion_factor,
-        reporter=reporter,
-    )
+    with stage("filter_landmarks"):
+        result = filter_sequence(
+            sequence,
+            parsed.config,
+            space=parsed.space,
+            slow_motion_factor=parsed.slow_motion_factor,
+            reporter=reporter,
+        )
     return result.report
 
 
@@ -282,15 +331,17 @@ def _detect_phases(params: dict[str, Any], reporter: ProgressReporter) -> BaseMo
     # Detection always reads FRAME_WIDTHS: it is the only frame here that is
     # isotropic and upward-positive, and both matter to rules about how far and
     # how high the hands went.
-    filtered = filter_sequence(
-        sequence,
-        parsed.filter,
-        space=LandmarkSpace.FRAME_WIDTHS,
-        slow_motion_factor=parsed.slow_motion_factor,
-        reporter=reporter,
-    )
+    with stage("filter_landmarks"):
+        filtered = filter_sequence(
+            sequence,
+            parsed.filter,
+            space=LandmarkSpace.FRAME_WIDTHS,
+            slow_motion_factor=parsed.slow_motion_factor,
+            reporter=reporter,
+        )
     try:
-        return detect_phases(filtered, parsed.phases)
+        with stage("detect_phases"):
+            return detect_phases(filtered, parsed.phases)
     except SignalError as exc:
         raise _unsupported_input(exc, None) from exc
 
@@ -364,19 +415,83 @@ class ComputeMetricsParams(BaseModel, extra="forbid"):
     )
 
 
-def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
-    """Measure the biomechanics metrics for a clip's stored landmarks.
+def _metrics_chain(
+    parsed: ComputeMetricsParams, reporter: ProgressReporter, *, sequence: Any | None = None
+) -> tuple[Any, Any, Any, Any]:
+    """Landmarks to filtered trajectories to phases to metrics, for one clip.
+
+    Returns the stored pose sequence alongside the three results, because Phase
+    16 identifies a clip by content rather than by path and the content key lives
+    on the sequence. Nothing else in the chain carries it.
 
     Runs the whole chain rather than taking a detection as input: filtering is
     milliseconds and detection is cheaper still, so recomputing them here costs
     nothing measurable and removes the possibility of metrics being measured
     against a detection produced under a different filter configuration.
-    """
-    parsed = ComputeMetricsParams.model_validate(params)
 
+    Shared by `compute_metrics` and `coach_swing` so that the two can never
+    disagree about a swing. A coaching report derived from a different filter
+    configuration than the metrics panel beside it would be the worst kind of
+    bug: both halves defensible, and the numbers in one not the numbers in the
+    other.
+    """
     from analyzer.biomechanics import BodyError, compute_metrics
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.phases import SignalError, detect_phases
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    if sequence is None:
+        try:
+            poses = _resolve_pose_file(
+                FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+            )
+            with stage("read_pose_parquet"):
+                sequence = read_sequence(poses)
+        except ProbeError as exc:
+            raise _unsupported_input(exc, exc.remediation) from exc
+        except PoseEstimationError as exc:
+            raise _unsupported_input(exc, exc.remediation) from exc
+        except PoseStoreError as exc:
+            raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    with stage("resolve_calibration"):
+        intrinsics, status = _calibration_for(parsed.project_id, sequence)
+
+    with stage("filter_landmarks"):
+        filtered = filter_sequence(
+            sequence,
+            parsed.filter,
+            space=LandmarkSpace.FRAME_WIDTHS,
+            slow_motion_factor=parsed.slow_motion_factor,
+            intrinsics=intrinsics,
+            reporter=reporter,
+        )
+    with stage("reconstruct_for_metrics"):
+        reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
+    try:
+        with stage("detect_phases"):
+            detected = detect_phases(filtered, parsed.phases)
+        with stage("compute_metrics"):
+            result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
+    except (SignalError, BodyError) as exc:
+        raise _unsupported_input(exc, None) from exc
+
+    result.warnings = [*result.warnings, *notes]
+    return sequence, filtered, detected, result
+
+
+def _cache_config(parsed: BaseModel, sequence: Any) -> dict[str, Any]:
+    """Analysis choices excluding the path, which the content key represents."""
+    config = parsed.model_dump(mode="json")
+    config.pop("path", None)
+    config["pose_model"] = sequence.model.model_dump(mode="json")
+    config["pose_extracted_at"] = sequence.extracted_at.isoformat()
+    return config
+
+
+def _cached_sequence(parsed: ComputeMetricsParams) -> Any:
+    """Read the compact pose artifact before a result-cache lookup."""
     from analyzer.pose.estimator import PoseEstimationError
     from analyzer.pose.store import PoseStoreError, read_sequence
 
@@ -384,7 +499,8 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
         poses = _resolve_pose_file(
             FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
         )
-        sequence = read_sequence(poses)
+        with stage("read_pose_parquet"):
+            return read_sequence(poses)
     except ProbeError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
     except PoseEstimationError as exc:
@@ -392,25 +508,190 @@ def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> Base
     except PoseStoreError as exc:
         raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
-    intrinsics, status = _calibration_for(parsed.project_id, sequence)
 
-    filtered = filter_sequence(
-        sequence,
-        parsed.filter,
-        space=LandmarkSpace.FRAME_WIDTHS,
-        slow_motion_factor=parsed.slow_motion_factor,
-        intrinsics=intrinsics,
-        reporter=reporter,
-    )
-    reconstruction, notes = _reconstruction_for_metrics(parsed, sequence, filtered, reporter)
-    try:
-        detected = detect_phases(filtered, parsed.phases)
-        result = compute_metrics(filtered, detected, parsed.metrics, status, reconstruction)
-    except (SignalError, BodyError) as exc:
-        raise _unsupported_input(exc, None) from exc
+def _can_cache_analysis(parsed: ComputeMetricsParams) -> bool:
+    """Project state can change without a content/config change, so do not cache it."""
+    return parsed.project_id is None
 
-    result.warnings = [*result.warnings, *notes]
+
+def _compute_metrics(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Measure the biomechanics metrics for a clip's stored landmarks."""
+    from analyzer.contracts.metrics import MetricSet
+
+    parsed = ComputeMetricsParams.model_validate(params)
+    sequence = _cached_sequence(parsed)
+    config = _cache_config(parsed, sequence)
+    cache = AnalysisCache()
+    if _can_cache_analysis(parsed):
+        with stage("metrics_cache_lookup"):
+            cached = cache.load(sequence.video_content_key, "metrics", config, MetricSet)
+        if cached is not None:
+            return cached
+
+    _, _, _, result = _metrics_chain(parsed, reporter, sequence=sequence)
+    if _can_cache_analysis(parsed):
+        with stage("metrics_cache_store"):
+            cache.store(sequence.video_content_key, "metrics", config, result)
     return result
+
+
+class CoachSwingParams(ComputeMetricsParams):
+    """Parameters for `coach_swing`.
+
+    Everything `compute_metrics` takes, because coaching is a layer on top of
+    measuring and re-measures rather than accepting a `MetricSet` from a caller.
+    A report reached from numbers this process did not produce would cite frames
+    it had never read.
+    """
+
+    coaching: CoachingConfig = Field(
+        default_factory=CoachingConfig,
+        description=(
+            "When a measurement supports a conclusion, and whether a local "
+            "language model is asked to reword the findings. Phrasing is off by "
+            "default and off is a complete configuration."
+        ),
+    )
+
+
+def _coach_swing(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Reach every conclusion this clip's measurements support, and refuse the rest.
+
+    The findings are produced first and phrased second, in that order and never
+    the other way around. A phrasing pass that could change which findings exist
+    would be a language model deciding what was measured.
+    """
+    parsed = CoachSwingParams.model_validate(params)
+
+    from analyzer.coaching.engine import coach
+    from analyzer.coaching.phrasing import PhrasingError, phrase
+    from analyzer.contracts.coaching import CoachingReport, PhrasingReport
+
+    sequence = _cached_sequence(parsed)
+    config = _cache_config(parsed, sequence)
+    cache = AnalysisCache()
+    if _can_cache_analysis(parsed):
+        with stage("coaching_cache_lookup"):
+            cached = cache.load(sequence.video_content_key, "coaching", config, CoachingReport)
+        if cached is not None:
+            return cached
+
+    _, filtered, detected, metrics = _metrics_chain(parsed, reporter, sequence=sequence)
+    with stage("evaluate_coaching_rules"):
+        report = coach(metrics, detected, parsed.coaching, times=filtered.t.tolist())
+
+    try:
+        with stage("phrase_findings"):
+            report.phrasing = phrase(report.findings, parsed.coaching)
+    except PhrasingError as exc:
+        # Not an error for the call: every finding already carries its own
+        # sentence, and a phrasing layer that could fail the analysis would make
+        # an optional component load-bearing. The mode is recorded anyway, so
+        # that a report which asked for a model and did not get one cannot be
+        # read as one that never asked.
+        report.phrasing = PhrasingReport(mode=parsed.coaching.phrasing, unavailable=str(exc))
+        if exc.remediation:
+            report.warnings.append(exc.remediation)
+
+    # Carried through so a reader of the findings sees what the measurements
+    # warned about, without having to fetch the metric set separately.
+    report.warnings.extend(metrics.warnings)
+    if _can_cache_analysis(parsed):
+        with stage("coaching_cache_store"):
+            cache.store(sequence.video_content_key, "coaching", config, report)
+    return report
+
+
+class CompareSwingsParams(BaseModel):
+    """Parameters for `compare_swings`.
+
+    Two clips and one set of analysis inputs, and the sharing is deliberate.
+    Smoothing both clips differently would move the very features the comparison
+    keys on -- the same argument Phase 7 makes for giving a pair one window --
+    and a difference between two filter configurations would arrive looking
+    exactly like a difference between two swings.
+
+    The **slow-motion factors are per clip**, because two recordings of one
+    player are routinely not both slowed, and a single shared factor would be
+    wrong for one of them in a way nothing could detect afterwards.
+    """
+
+    reference_path: str = Field(
+        description="The clip the differences are measured *from*. Order decides their sign only."
+    )
+    target_path: str = Field(description="The clip the differences are measured *to*.")
+    model: str | None = Field(
+        default=None, description="Which extraction to use, when given videos."
+    )
+    filter: FilterConfig = Field(
+        default_factory=FilterConfig,
+        description=(
+            "Smoothing policy, applied to **both** clips. One configuration for "
+            "the pair, so a difference between the curves cannot be a difference "
+            "between two filters."
+        ),
+    )
+    phases: PhaseConfig = Field(default_factory=PhaseConfig)
+    metrics: MetricConfig = Field(default_factory=MetricConfig)
+    comparison: ComparisonConfig = Field(
+        default_factory=ComparisonConfig,
+        description="When two recordings are close enough together to be compared at all.",
+    )
+    reference_slow_motion: float = Field(default=1.0, gt=0.0)
+    target_slow_motion: float = Field(default=1.0, gt=0.0)
+    project_id: int | None = Field(
+        default=None,
+        description=(
+            "Apply this project's camera calibration to whichever clips belong to "
+            "it. A calibration applied to one clip and not the other is refused by "
+            "the comparison itself rather than hidden, because undistortion moves "
+            "an image-plane measurement on its own."
+        ),
+    )
+
+
+def _compare_swings(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Lay two recordings of a swing over each other, and refuse what cannot be compared.
+
+    Both clips go through the identical chain the metrics panel runs -- landmarks,
+    filter, detection, metrics -- and the comparison layer never sees a pixel or a
+    path afterwards. That is what makes the report testable against metric sets
+    built by hand, and it is the same boundary Phase 13 drew around coaching.
+    """
+    parsed = CompareSwingsParams.model_validate(params)
+
+    from analyzer.comparison import SwingInput, compare
+    from analyzer.comparison.compare import ComparisonError
+
+    sides = []
+    for path, factor in (
+        (parsed.reference_path, parsed.reference_slow_motion),
+        (parsed.target_path, parsed.target_slow_motion),
+    ):
+        chain = ComputeMetricsParams(
+            path=path,
+            model=parsed.model,
+            filter=parsed.filter,
+            phases=parsed.phases,
+            metrics=parsed.metrics,
+            project_id=parsed.project_id,
+            slow_motion_factor=factor,
+        )
+        sequence, filtered, detected, metrics = _metrics_chain(chain, reporter)
+        sides.append(
+            SwingInput(
+                path=path,
+                content_key=sequence.video_content_key,
+                filtered=filtered,
+                phases=detected,
+                metrics=metrics,
+            )
+        )
+
+    try:
+        return compare(sides[0], sides[1], parsed.comparison)
+    except ComparisonError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
 
 
 def _reconstruction_for_metrics(
@@ -469,7 +750,7 @@ def _reconstruction_for_metrics(
         return (
             reconstruct_pair(
                 filtered,
-                _filtered_for_clip(project, other, reconstruct_params, reporter),
+                _filtered_for_clip(project, other, reconstruct_params, reporter)[0],
                 project.rig,
                 time_map,
                 reference_role=this.role,
@@ -629,8 +910,27 @@ class SyncClipsParams(BaseModel, extra="forbid"):
     )
 
 
+def _sync_sequence(clip: SyncClipParams, filter_config: FilterConfig) -> PoseSequence:
+    """Read one clip's stored landmarks, extracting them first if needed."""
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=clip.path, model=clip.model, config=filter_config)
+        )
+        return read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+
 def _sync_input(
     clip: SyncClipParams,
+    sequence: PoseSequence,
     filter_config: FilterConfig,
     phase_config: PhaseConfig,
     reporter: ProgressReporter,
@@ -642,25 +942,16 @@ def _sync_input(
     would allow two clips to be aligned whose events were found under different
     filter settings -- which is a difference that would surface as a sync error
     with no way to attribute it.
+
+    `filter_config` arrives already resolved for the pair, so this never widens a
+    window on its own: a window resolved per clip would give the 30 fps half of a
+    120/30 pair a wider one, which is the bias `SyncClipsParams.filter` exists to
+    prevent.
     """
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.phases import SignalError, detect_phases
     from analyzer.phases.signals import swing_signals
-    from analyzer.pose.estimator import PoseEstimationError
-    from analyzer.pose.store import PoseStoreError, read_sequence
     from analyzer.sync import SyncInput
-
-    try:
-        poses = _resolve_pose_file(
-            FilterPosesParams(path=clip.path, model=clip.model, config=filter_config)
-        )
-        sequence = read_sequence(poses)
-    except ProbeError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseEstimationError as exc:
-        raise _unsupported_input(exc, exc.remediation) from exc
-    except PoseStoreError as exc:
-        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
 
     filtered = filter_sequence(
         sequence,
@@ -687,11 +978,25 @@ def _sync_clips(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel
     """Relate two clips' clocks, reporting how well the relation is determined."""
     parsed = SyncClipsParams.model_validate(params)
 
+    from analyzer.filtering.landmarks import resolve_window, sequence_clock
     from analyzer.sync import ManualPick, align
     from analyzer.sync.anchors import AnchorError
 
-    reference = _sync_input(parsed.reference, parsed.filter, parsed.phases, reporter)
-    target = _sync_input(parsed.target, parsed.filter, parsed.phases, reporter)
+    # Both clips are read before either is filtered, so the smoothing window can
+    # be resolved once across the pair. The coarser clip sets it for both, which
+    # is what keeps the two speed signals comparable -- see `SyncClipsParams.filter`.
+    reference_sequence = _sync_sequence(parsed.reference, parsed.filter)
+    target_sequence = _sync_sequence(parsed.target, parsed.filter)
+    shared_filter, _ = resolve_window(
+        parsed.filter,
+        sequence_clock(reference_sequence, parsed.reference.slow_motion_factor),
+        sequence_clock(target_sequence, parsed.target.slow_motion_factor),
+    )
+
+    reference = _sync_input(
+        parsed.reference, reference_sequence, shared_filter, parsed.phases, reporter
+    )
+    target = _sync_input(parsed.target, target_sequence, shared_filter, parsed.phases, reporter)
 
     picks = [
         ManualPick(
@@ -1381,6 +1686,194 @@ def _median_interval_s(filtered: Any) -> float | None:
     return float(np.median(finite)) if finite.size else None
 
 
+# --- the desktop player (Phase 14) ----------------------------------------
+#
+# Two methods that exist because a video element is a different kind of consumer
+# from everything above. Every other method here answers a question about a
+# swing; these two answer questions about a *file* and a *canvas*, which the
+# engine is nonetheless the only component entitled to answer.
+#
+# `seek_index` because a player seeks by time and every panel reports frames,
+# and `frame / fps` is not the conversion -- the same fact Phase 1 is built on.
+# `pose_overlay` because the landmarks worth drawing are the filtered ones, and
+# converting them back into drawing coordinates needs the aspect ratio, the
+# filter's own validity mask and, where there is one, the lens. A UI that did
+# that arithmetic itself would be a second opinion about all three.
+
+
+class SeekIndexParams(BaseModel, extra="forbid"):
+    """Parameters for `seek_index`."""
+
+    path: str = Field(description="Absolute path to the video file.")
+
+
+def _seek_index(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    """Every frame's presentation time, and the time to seek to to display it."""
+    parsed = SeekIndexParams.model_validate(params)
+
+    from analyzer.ingestion import seek_index
+
+    try:
+        return seek_index(Path(parsed.path))
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+
+class PoseOverlayParams(BaseModel, extra="forbid"):
+    """Parameters for `pose_overlay`.
+
+    Takes the same filtering and slow-motion inputs as `compute_metrics` and for
+    the same reason: the overlay is checked against the metrics panel beside it,
+    and a skeleton drawn under a different smoothing window than the numbers
+    would disagree with them in a way that looks like a measurement error.
+    """
+
+    path: str = Field(
+        description=(
+            "A pose Parquet file, or the video it was extracted from -- in which "
+            "case the content-keyed cache is consulted for its landmarks. A video "
+            "is required when `club` is true, since a shaft is found in the pixels."
+        )
+    )
+    model: str | None = Field(default=None, description="Which model's extraction to draw.")
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(
+        default=None,
+        description=(
+            "Exclusive end of the range. None draws to the end of the clip, which "
+            "is refused for a clip longer than the range limit rather than "
+            "silently truncated."
+        ),
+    )
+    filter: FilterConfig = Field(default_factory=FilterConfig)
+    phases: PhaseConfig = Field(
+        default_factory=PhaseConfig,
+        description="Only read when `club` is true, to report the tracker's per-phase coverage.",
+    )
+    club: ClubConfig = Field(default_factory=ClubConfig)
+    with_club: bool = Field(
+        default=False,
+        description=(
+            "Also track the club and include its shaft on each frame. Off by "
+            "default because it costs a full decode of the clip, against "
+            "milliseconds for the landmarks -- so the skeleton appears while the "
+            "club is still being looked for, rather than neither appearing until "
+            "both are ready."
+        ),
+    )
+    project_id: int | None = Field(
+        default=None,
+        description=(
+            "Apply this project's calibration to the landmarks, matching "
+            "`compute_metrics`. The drawn skeleton then will not sit exactly on "
+            "the frame underneath, which is what the correction *is*; "
+            "`PoseOverlay.undistorted` says so."
+        ),
+    )
+    slow_motion_factor: float = Field(default=1.0, gt=0.0)
+
+
+def _pose_overlay(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """Filtered landmarks over a frame range, in the coordinates they are drawn in."""
+    parsed = PoseOverlayParams.model_validate(params)
+
+    from analyzer.filtering.landmarks import filter_sequence
+    from analyzer.overlay import OverlayError, build_overlay
+    from analyzer.pose.estimator import PoseEstimationError
+    from analyzer.pose.store import PoseStoreError, read_sequence
+
+    source = Path(parsed.path)
+    if parsed.with_club and source.suffix == ".parquet":
+        raise _unsupported_input(
+            ValueError(
+                "Drawing the club reads the video, not a pose file: a shaft is found in "
+                "the pixels and a stored pose sequence does not contain any."
+            ),
+            "Pass the clip itself, or ask for the skeleton alone with `with_club` false.",
+        )
+
+    try:
+        poses = _resolve_pose_file(
+            FilterPosesParams(path=parsed.path, model=parsed.model, config=parsed.filter)
+        )
+        sequence = read_sequence(poses)
+    except ProbeError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseEstimationError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+    except PoseStoreError as exc:
+        raise _unsupported_input(exc, "Re-run the extraction for this clip.") from exc
+
+    intrinsics, _ = _calibration_for(parsed.project_id, sequence)
+    filtered = filter_sequence(
+        sequence,
+        parsed.filter,
+        space=LandmarkSpace.FRAME_WIDTHS,
+        slow_motion_factor=parsed.slow_motion_factor,
+        intrinsics=intrinsics,
+        reporter=reporter,
+    )
+
+    # The default end is the clip, not the range limit: a long clip asked for
+    # whole is refused by name rather than silently truncated to its first
+    # `MAX_OVERLAY_FRAMES` frames, which would put a skeleton over the first
+    # eight seconds and nothing after it with no indication why.
+    end = parsed.end_frame if parsed.end_frame is not None else int(filtered.t.size)
+    club = _club_for_overlay(parsed, filtered, reporter) if parsed.with_club else None
+
+    try:
+        overlay = build_overlay(
+            filtered,
+            video_path=sequence.video_path,
+            content_key=sequence.video_content_key,
+            start_frame=parsed.start_frame,
+            end_frame=end,
+            club=club,
+            club_requested=parsed.with_club,
+        )
+    except OverlayError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
+
+    if parsed.with_club and club is None:
+        overlay.warnings.append(
+            "The club was asked for and could not be tracked in this clip, so every frame "
+            "below carries a skeleton and no shaft. The landmarks are unaffected: they are "
+            "measured from a stored pose sequence and the club is measured from the pixels."
+        )
+    overlay.warnings.extend(filtered.report.warnings)
+    return overlay
+
+
+def _club_for_overlay(parsed: PoseOverlayParams, filtered: Any, reporter: ProgressReporter) -> Any:
+    """Track the club for drawing, returning None rather than failing the overlay.
+
+    A club that cannot be found is not a reason to draw no skeleton. The two are
+    independent evidence and the overlay reports `club_tracked` either way, so a
+    reader can tell "nothing looked" from "looked and found nothing" -- which is
+    the same distinction `ClubTrack` itself is built around.
+    """
+    from analyzer.club import HoughShaftDetector, track_club
+    from analyzer.club.detector import ClubDetectionError
+    from analyzer.phases import SignalError, detect_phases
+
+    try:
+        detected = detect_phases(filtered, parsed.phases)
+    except SignalError:
+        detected = None
+
+    try:
+        return track_club(
+            Path(parsed.path),
+            filtered,
+            HoughShaftDetector(parsed.club),
+            phases=detected,
+            config=parsed.club,
+            reporter=reporter,
+        )
+    except (ClubDetectionError, ProbeError):
+        return None
+
+
 # --- calibration (Phase 8) ------------------------------------------------
 
 
@@ -1730,7 +2223,25 @@ class ReconstructParams(BaseModel, extra="forbid"):
 
 
 def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
-    """Triangulate a project's pair of clips into 3D positions.
+    """Triangulate a project's pair of clips into 3D positions."""
+    reconstruction, _ = _reconstructed_pair(ReconstructParams.model_validate(params), reporter)
+    return reconstruction.report
+
+
+def _reconstructed_pair(parsed: ReconstructParams, reporter: ProgressReporter) -> tuple[Any, Any]:
+    """Run one project pair all the way to metres, with the reference clip's identity.
+
+    Split out of `_reconstruct` because `reconstruct_scene` needs the points and
+    `reconstruct` needs only the report, and the twenty lines of gating in
+    between -- the rig, the stored alignment, the overlap -- must be one
+    implementation. Two copies would eventually disagree about which clip is the
+    reference, which is the one disagreement that silently swaps the coordinate
+    frame every number is expressed in.
+
+    Returns the `ReconstructedSequence` and the reference clip's `ContentKey`.
+    The key is carried out because the scene is scrubbed against a video element,
+    and the only way to be sure the pixels and the frame numbers belong together
+    is to compare identities.
 
     Filtering and phase detection are recomputed rather than taken as input, for
     the reason `compute_metrics` gives: they cost milliseconds, and accepting
@@ -1738,8 +2249,6 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     were fitted under different settings -- a difference that would surface as
     reconstruction error with no way to attribute it.
     """
-    parsed = ReconstructParams.model_validate(params)
-
     from analyzer.contracts.sync import SyncModel
     from analyzer.projects import ProjectError, ProjectStore
     from analyzer.reconstruction import (
@@ -1824,8 +2333,8 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
 
     try:
         reconstruction = reconstruct_pair(
-            filtered["reference"],
-            filtered["target"],
+            filtered["reference"][0],
+            filtered["target"][0],
             project.rig,
             alignment.time_map,
             reference_role=reference.role,
@@ -1837,14 +2346,13 @@ def _reconstruct(params: dict[str, Any], reporter: ProgressReporter) -> BaseMode
     except ReconstructionError as exc:
         raise _unsupported_input(exc, exc.remediation) from exc
 
-    report = reconstruction.report
-    report.warnings = [*warnings, *report.warnings]
-    return report
+    reconstruction.report.warnings = [*warnings, *reconstruction.report.warnings]
+    return reconstruction, filtered["reference"][1]
 
 
 def _filtered_for_clip(
     project: Project, clip: ProjectClip, parsed: ReconstructParams, reporter: ProgressReporter
-) -> Any:
+) -> tuple[Any, Any]:
     """Load, undistort and filter one clip of a pair, ready to be triangulated.
 
     The undistortion is not optional here, which is the difference from
@@ -1856,6 +2364,10 @@ def _filtered_for_clip(
     this engine's history and the same reason -- a lens displaces a landmark by
     tens of pixels near the frame edge, and correcting after fitting would leave
     the fit describing the distorted trajectory.
+
+    Returns the filtered sequence and the clip's `ContentKey`, which is read off
+    the stored poses rather than re-probed. It travels with a scene so a viewport
+    can prove the video it is scrubbing is the video that was reconstructed.
     """
     from analyzer.filtering.landmarks import filter_sequence
     from analyzer.pose.estimator import PoseEstimationError
@@ -1880,7 +2392,7 @@ def _filtered_for_clip(
     ):
         intrinsics = None
 
-    return filter_sequence(
+    filtered = filter_sequence(
         sequence,
         parsed.filter,
         space=LandmarkSpace.FRAME_WIDTHS,
@@ -1888,6 +2400,74 @@ def _filtered_for_clip(
         intrinsics=intrinsics,
         reporter=reporter,
     )
+    return filtered, sequence.video_content_key
+
+
+class ReconstructSceneParams(ReconstructParams, extra="forbid"):
+    """Parameters for `reconstruct_scene`.
+
+    Everything `reconstruct` takes, plus the range. Inheriting rather than
+    repeating so a reconstruction and the picture of it cannot be produced under
+    different smoothing, a different alignment or a different gate -- a viewport
+    showing a body fitted differently from the report beside it would be two
+    measurements presented as one.
+    """
+
+    start_frame: int = Field(default=0, ge=0)
+    end_frame: int | None = Field(
+        default=None,
+        description=(
+            "Exclusive end of the range, in **reference clip** frames. None takes "
+            "the reconstruction whole, which is refused past the range limit "
+            "rather than silently truncated -- a viewport that could scrub past "
+            "the end of what it was sent would show an empty scene and no reason."
+        ),
+    )
+    trajectories: list[int] | None = Field(
+        default=None,
+        description=(
+            "`Landmark` values whose paths are stroked through the scene. None "
+            "takes the wrists, which is where every metric in this engine is "
+            "anchored. An empty list asks for none."
+        ),
+    )
+
+
+def _reconstruct_scene(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    """A project's reconstruction, shaped for a viewport: metres, cameras, ellipsoids.
+
+    Runs the same reconstruction `reconstruct` does and then arranges it. The
+    report is embedded in the result rather than left to a second call, because
+    the numbers qualifying a picture belong beside the picture -- and two calls
+    could return two different reconstructions.
+    """
+    parsed = ReconstructSceneParams.model_validate(params)
+
+    from analyzer.contracts.pose import Landmark
+    from analyzer.scene import SceneError, build_scene
+
+    reconstruction, content_key = _reconstructed_pair(parsed, reporter)
+
+    trajectories: tuple[Landmark, ...] | None = None
+    if parsed.trajectories is not None:
+        try:
+            trajectories = tuple(Landmark(value) for value in parsed.trajectories)
+        except ValueError as exc:
+            raise _unsupported_input(
+                ValueError(f"{exc}. Trajectories are `Landmark` values, 0 to 32."),
+                "Use the landmark indices the pose contracts define.",
+            ) from exc
+
+    try:
+        return build_scene(
+            reconstruction,
+            reference_content_key=content_key,
+            start_frame=parsed.start_frame,
+            end_frame=parsed.end_frame,
+            trajectories=trajectories,
+        )
+    except SceneError as exc:
+        raise _unsupported_input(exc, exc.remediation) from exc
 
 
 def _get_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
@@ -1922,13 +2502,41 @@ def _clear_calibration(params: dict[str, Any], _reporter: ProgressReporter) -> B
         raise _project_error(exc) from exc
 
 
+class InstallModelParams(BaseModel, extra="forbid"):
+    name: str
+
+
+def _list_models(params: dict[str, Any], _reporter: ProgressReporter) -> BaseModel:
+    from analyzer.environment.model_manager import inventory
+
+    if params:
+        raise EngineError("list_models takes no parameters", code=ErrorCode.INVALID_PARAMS)
+    return inventory()
+
+
+def _install_model(params: dict[str, Any], reporter: ProgressReporter) -> BaseModel:
+    from analyzer.environment.model_manager import ModelInstallError, install_model
+
+    parsed = InstallModelParams.model_validate(params)
+    try:
+        return install_model(parsed.name, reporter)
+    except (ModelInstallError, OSError) as exc:
+        raise _unsupported_input(
+            exc, "Check the connection and model manifest, then retry."
+        ) from exc
+
+
 METHODS: dict[str, Method] = {
     "doctor": _doctor,
+    "list_models": _list_models,
+    "install_model": _install_model,
     "probe_video": _probe_video,
     "extract_poses": _extract_poses,
     "filter_poses": _filter_poses,
     "detect_phases": _detect_phases,
     "compute_metrics": _compute_metrics,
+    "coach_swing": _coach_swing,
+    "compare_swings": _compare_swings,
     "sync_clips": _sync_clips,
     "create_project": _create_project,
     "list_projects": _list_projects,
@@ -1943,9 +2551,12 @@ METHODS: dict[str, Method] = {
     "get_calibration": _get_calibration,
     "clear_calibration": _clear_calibration,
     "reconstruct": _reconstruct,
+    "reconstruct_scene": _reconstruct_scene,
     "track_club": _track_club,
     "detect_ball": _detect_ball,
     "locate_impact": _locate_impact,
+    "seek_index": _seek_index,
+    "pose_overlay": _pose_overlay,
 }
 
 
@@ -1953,6 +2564,7 @@ def call(
     method: str,
     params: dict[str, Any] | None = None,
     reporter: ProgressReporter | None = None,
+    performance: PerformanceRecorder | None = None,
 ) -> BaseModel:
     """Invoke a registered method, normalising failures into EngineError.
 
@@ -1968,7 +2580,8 @@ def call(
         )
 
     try:
-        return handler(params or {}, reporter or NullReporter())
+        with recording(performance), stage(f"rpc:{method}"):
+            return handler(params or {}, reporter or NullReporter())
     except EngineError:
         raise
     except ValidationError as exc:

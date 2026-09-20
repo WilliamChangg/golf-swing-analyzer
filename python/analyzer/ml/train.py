@@ -203,7 +203,10 @@ def train(
 
     resolved = config or TCNConfig()
     deterministic = seed_everything(seed)
-    torch_device = torch.device(device)
+    from analyzer.environment.hardware import select_torch_device
+
+    selected_device, device_note = select_torch_device(device)
+    torch_device = torch.device(selected_device)
 
     channels = train_examples[0].features.values.shape[1]
     model = SwingTCN(channels, resolved).to(torch_device)
@@ -214,6 +217,8 @@ def train(
     )
 
     warnings: list[str] = []
+    if device_note:
+        warnings.append(device_note)
     if not deterministic:
         warnings.append(
             "torch could not be put into a deterministic mode on this build, so a "

@@ -36,6 +36,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { PhaseTimeline } from "@/features/player/PhaseTimeline";
+import { PHASE_STYLE, phaseAt } from "@/features/player/phases";
 import { detectPhases, onProgress, progressFraction } from "@/lib/ipc";
 
 /** Engine method name, used to filter progress off the shared channel. */
@@ -46,35 +48,6 @@ type State =
   | { phase: "running"; update: ProgressUpdate | null }
   | { phase: "done"; result: SwingPhases }
   | { phase: "failed"; error: EngineError };
-
-/**
- * Phase colours, as an exhaustive record.
- *
- * Exhaustive so that adding a phase to the Python contract is a TypeScript
- * error here until it is given a presentation, rather than rendering as an
- * unlabelled grey block nobody notices.
- */
-const PHASE_STYLE: Record<
-  SwingPhases["phases"] extends (infer P)[] | undefined
-    ? P extends { phase: infer K }
-      ? K
-      : never
-    : never,
-  { bar: string; text: string; label: string }
-> = {
-  address: { bar: "bg-slate-300", text: "text-slate-600", label: "Address" },
-  backswing: { bar: "bg-sky-400", text: "text-sky-700", label: "Backswing" },
-  downswing: {
-    bar: "bg-orange-400",
-    text: "text-orange-700",
-    label: "Downswing",
-  },
-  follow_through: {
-    bar: "bg-emerald-400",
-    text: "text-emerald-700",
-    label: "Follow-through",
-  },
-};
 
 const EVENT_LABEL: Record<string, string> = {
   takeaway: "Takeaway",
@@ -129,89 +102,6 @@ function ProgressBar({ update }: { update: ProgressUpdate | null }) {
 }
 
 /**
- * The phase timeline, with event ticks.
- *
- * Widths come from frame counts rather than from durations, because the
- * scrubber underneath is indexed by frame and the two must line up. On a
- * variable-rate clip those differ, and a timeline that disagreed with its own
- * scrubber would be worse than no timeline.
- */
-function Timeline({
-  result,
-  frame,
-  onSeek,
-}: {
-  result: SwingPhases;
-  frame: number;
-  onSeek: (frame: number) => void;
-}) {
-  const total = Math.max(result.frames, 1);
-  const phases = result.phases ?? [];
-  const events = result.events ?? [];
-
-  return (
-    <div className="space-y-2">
-      <div className="relative">
-        <div className="flex h-7 w-full overflow-hidden rounded">
-          {phases.map((interval) => {
-            const style = PHASE_STYLE[interval.phase];
-            const width =
-              ((interval.end_frame - interval.start_frame) / total) * 100;
-            return (
-              <button
-                key={interval.phase}
-                type="button"
-                title={`${style.label} — ${interval.duration_s.toFixed(3)} s, confidence ${interval.confidence.toFixed(2)}`}
-                aria-label={`Jump to ${style.label}`}
-                onClick={() => {
-                  onSeek(interval.start_frame);
-                }}
-                className={`${style.bar} h-full cursor-pointer`}
-                style={{ width: `${String(width)}%` }}
-              />
-            );
-          })}
-        </div>
-
-        {/* Event ticks, drawn over the phases they divide. */}
-        {events.map((entry) => (
-          <div
-            key={entry.event}
-            className="bg-foreground pointer-events-none absolute top-0 h-7 w-px"
-            style={{ left: `${String((entry.frame_index / total) * 100)}%` }}
-            aria-hidden="true"
-          />
-        ))}
-
-        {/* Where the scrubber currently is. */}
-        <div
-          className="bg-primary pointer-events-none absolute -top-1 h-9 w-0.5"
-          style={{ left: `${String((frame / total) * 100)}%` }}
-          aria-hidden="true"
-        />
-      </div>
-
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
-        {phases.map((interval) => {
-          const style = PHASE_STYLE[interval.phase];
-          return (
-            <span key={interval.phase} className="flex items-center gap-1.5">
-              <span
-                className={`${style.bar} inline-block size-2 rounded-sm`}
-                aria-hidden="true"
-              />
-              <span className="text-muted-foreground">
-                {style.label} {interval.duration_s.toFixed(2)}s
-              </span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/**
  * Frame-by-frame inspector.
  *
  * The phase of the current frame comes from the reported intervals rather than
@@ -232,9 +122,7 @@ function Inspector({ result }: { result: SwingPhases }) {
     [last],
   );
 
-  const interval = (result.phases ?? []).find(
-    (entry) => frame >= entry.start_frame && frame < entry.end_frame,
-  );
+  const interval = phaseAt(result, frame);
   const style = interval ? PHASE_STYLE[interval.phase] : null;
   const atFrame = (result.events ?? []).find(
     (entry) => entry.frame_index === frame,
@@ -242,7 +130,7 @@ function Inspector({ result }: { result: SwingPhases }) {
 
   return (
     <div className="space-y-4">
-      <Timeline result={result} frame={frame} onSeek={setFrame} />
+      <PhaseTimeline result={result} frame={frame} onSeek={setFrame} />
 
       <div className="flex flex-wrap items-center gap-2">
         <Button

@@ -73,6 +73,10 @@ _PHASE_CLASS: dict[SwingPhase, FrameClass] = {
 
 def predict_classes(model: SwingTCN, example: Example, device: str = "cpu") -> NDArray[np.int64]:
     """The model's class for every grid sample of one clip."""
+    from analyzer.environment.hardware import select_torch_device
+
+    device, _ = select_torch_device(device)
+    model.to(torch.device(device))
     model.eval()
     values = np.ascontiguousarray(example.features.values.T)
     tensor = torch.from_numpy(values).unsqueeze(0).to(device=torch.device(device))

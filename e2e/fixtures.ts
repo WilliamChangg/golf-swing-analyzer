@@ -200,9 +200,24 @@ export async function stubEngine(
           : Promise.resolve(stub.result);
       },
       transformCallback: (cb: unknown) => cb,
-      // Called by the unlisten function Tauri's `listen` returns. Absent, it
-      // throws an unhandled rejection inside the page — which passes the test
-      // while leaving the app's teardown path untested.
+      // The asset protocol, which is how a `<video>` reaches a local file. In
+      // the real app this returns an `asset:` URL that Rust serves, and only
+      // for a path already admitted to the scope. Here it points at a route
+      // Playwright fulfils with the real fixture bytes, so Chromium genuinely
+      // decodes a real clip — which is what makes the seek assertions evidence
+      // about a player rather than about the arithmetic.
+      convertFileSrc: () => "/e2e-asset/vfr_30_to_15fps.mp4",
+    };
+
+    // The event plugin keeps its own global, and the unlisten function Tauri's
+    // `listen` returns reaches for it by name. Without this, tearing down a
+    // progress subscription throws an unhandled rejection inside the page --
+    // which passes the test while leaving the app's teardown path untested,
+    // and that is exactly what it was doing before Phase 14 put four
+    // subscribe/unsubscribe cycles in one click.
+    (
+      window as unknown as Record<string, unknown>
+    ).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
       unregisterListener: () => undefined,
     };
   }, commands);
@@ -626,4 +641,412 @@ export const DEGENERATE_CALIBRATION = {
       scale_range: 1.09,
     },
   },
+};
+
+// --- the player (Phase 14) -------------------------------------------------
+
+/** Where the real fixture bytes are served from in these tests. */
+export const CLIP_URL = "/e2e-asset/vfr_30_to_15fps.mp4";
+
+/** The fixture on disk, relative to the repo root. */
+export const CLIP_FIXTURE = "python/tests/fixtures/video/vfr_30_to_15fps.mp4";
+
+/**
+ * The seek index the engine really produces for that fixture.
+ *
+ * Copied from `analyzer.ingestion.seek_index`, not invented, because the whole
+ * point of the player spec is that a browser lands on the frame these numbers
+ * ask for. Made-up timestamps would test the arithmetic against itself.
+ *
+ * At full precision, deliberately. Rounding them to six decimals -- which is
+ * what ffprobe prints, and what looks tidy here -- pushes each value a few
+ * hundred nanoseconds off the presentation time it names, and that is enough to
+ * land a seek on the wrong side of a frame boundary. Phase 1 made the same
+ * decision one layer down by reading integer time-base ticks instead of
+ * ffprobe's printed `pts_time`.
+ *
+ * The clip changes rate from 30 fps to 15 fps half-way through, and its
+ * container declares an average of 23.684 — so `frame / declared fps` misses on
+ * 39 of its 45 frames. That is what makes it the right fixture for a player.
+ */
+export const VFR_SEEK_INDEX = {
+  schema_version: 1,
+  path: "/Users/example/data/vfr_30_to_15fps.mp4",
+  content_key: {
+    algorithm: "sha256-sampled-v1",
+    digest: "93c22821d3c1b69428e681001d0546cf8e34641d7f61fa3f423ef219641784a8",
+    size_bytes: 41175,
+  },
+  source: "decoded_frames",
+  frame_count: 45,
+  timestamps_s: [
+    0.0, 0.03333333333333333, 0.06666666666666667, 0.1, 0.13333333333333333,
+    0.16666666666666666, 0.2, 0.23333333333333334, 0.26666666666666666, 0.3,
+    0.3333333333333333, 0.36666666666666664, 0.4, 0.43333333333333335,
+    0.4666666666666667, 0.5, 0.5333333333333333, 0.5666666666666667, 0.6,
+    0.6333333333333333, 0.6666666666666666, 0.7, 0.7333333333333333,
+    0.7666666666666667, 0.8, 0.8333333333333334, 0.8666666666666667, 0.9,
+    0.9333333333333333, 0.9666666666666667, 1.0, 1.0666666666666667,
+    1.1333333333333333, 1.2, 1.2666666666666666, 1.3333333333333333, 1.4,
+    1.4666666666666666, 1.5333333333333334, 1.6, 1.6666666666666667,
+    1.7333333333333334, 1.8, 1.8666666666666667, 1.9333333333333333,
+  ],
+
+  seek_targets_s: [
+    0.016666666666666666, 0.05, 0.08333333333333334, 0.11666666666666667, 0.15,
+    0.18333333333333335, 0.21666666666666667, 0.25, 0.2833333333333333,
+    0.31666666666666665, 0.35, 0.3833333333333333, 0.4166666666666667, 0.45,
+    0.48333333333333334, 0.5166666666666666, 0.55, 0.5833333333333333,
+    0.6166666666666667, 0.6499999999999999, 0.6833333333333333,
+    0.7166666666666666, 0.75, 0.7833333333333334, 0.8166666666666667,
+    0.8500000000000001, 0.8833333333333333, 0.9166666666666667, 0.95,
+    0.9833333333333334, 1.0333333333333332, 1.1, 1.1666666666666665,
+    1.2333333333333334, 1.2999999999999998, 1.3666666666666667,
+    1.4333333333333331, 1.5, 1.5666666666666669, 1.6333333333333333,
+    1.7000000000000002, 1.7666666666666666, 1.8333333333333335, 1.9,
+    1.9666666666666668,
+  ],
+
+  last_interval_s: 0.06666666666666665,
+  warnings: [],
+};
+
+/** The container's declared average rate, which is what a naive player would use. */
+export const VFR_DECLARED_FPS = 23.68421052631579;
+
+/** Metadata for the same fixture, so the player can size its frame. */
+export const VFR_CLIP_METADATA = {
+  ...VFR_ROTATED_METADATA,
+  path: VFR_SEEK_INDEX.path,
+  content_key: VFR_SEEK_INDEX.content_key,
+  stream: {
+    ...VFR_ROTATED_METADATA.stream,
+    coded_width: 320,
+    coded_height: 240,
+    display_width: 320,
+    display_height: 240,
+    rotation_ccw_degrees: 0,
+    rotation_source: null,
+  },
+  timing: {
+    ...VFR_ROTATED_METADATA.timing,
+    frame_count: 45,
+    nominal_fps: VFR_DECLARED_FPS,
+    measured_fps: 22.758620689655171,
+    is_vfr: true,
+  },
+};
+
+/**
+ * A metric set with one measurement and one refusal.
+ *
+ * Small on purpose: the panel's behaviour under a refusal is what these tests
+ * are for, and forty metrics would only make the assertions harder to read.
+ */
+export const METRIC_SET = {
+  schema_version: 1,
+  computed: true,
+  metrics: [
+    {
+      name: "timing.tempo_ratio",
+      group: "timing",
+      label: "Tempo ratio",
+      value: 2.67,
+      unit: "ratio",
+      basis: "temporal",
+      event: null,
+      phase: null,
+      source_frames: [13, 38, 46],
+      view: "face_on",
+      interpretation: "Backswing duration divided by downswing duration.",
+      uncertainty: null,
+      confidence: {
+        overall: 0.57,
+        observation: 1.0,
+        anchor: 0.64,
+        method: 0.89,
+      },
+      methodology:
+        "Takeaway-to-top over top-to-impact, on the clip's own clock.",
+    },
+  ],
+  refused: [
+    {
+      name: "rotation.x_factor",
+      event: "top",
+      reason:
+        "A down-the-line camera does not contain this measurement: the shoulders project 0.10 torso lengths at address.",
+    },
+  ],
+  view: {
+    view: "face_on",
+    confidence: 1.0,
+    shoulder_span_ratio: 0.83,
+    hip_span_ratio: 0.6,
+    openness: 0.9,
+    frames: [0, 1, 2],
+    methodology: "Projected shoulder width at address.",
+  },
+  lead_side: null,
+  references: [],
+  torso_length: 0.31,
+  warnings: [],
+};
+
+/**
+ * A coaching report with no findings and eleven refusals.
+ *
+ * The ordinary outcome, and the one the panel is laid out around: on the 30 fps
+ * amateur clip this engine reaches no conclusion at all.
+ */
+export const COACHING_REPORT = {
+  schema_version: 1,
+  computed: true,
+  findings: [],
+  refused: [
+    {
+      rule_id: "rotation.x_factor_top",
+      title: "X-factor at the top",
+      refusal: "basis_not_permitted",
+      reason:
+        "The published figure is a threshold on a spatial measurement; this clip measures a foreshortened angle.",
+      source: {
+        citation: "Golf Magazine (1992)",
+        year: 1992,
+        population: "unstated",
+        sample_size: null,
+        method: "convention",
+        measures: "Difference between shoulder and pelvis turn at the top.",
+        permitted_bases: [],
+        filmed_from: null,
+        note: "No measurement protocol is published.",
+      },
+    },
+  ],
+  rules_considered: 12,
+  view: "face_on",
+  frame_interval_s: 0.0333,
+  phrasing: { mode: "off", attempted: 0, accepted: 0, rejected: 0 },
+  warnings: [],
+};
+
+/** An overlay covering the fixture's frames, with one landmark blocked. */
+export const POSE_OVERLAY = {
+  schema_version: 1,
+  video_path: VFR_SEEK_INDEX.path,
+  content_key: VFR_SEEK_INDEX.content_key,
+  geometry: { width: 320, height: 240 },
+  start_frame: 0,
+  end_frame: 45,
+  frames: Array.from({ length: 45 }, (_, index) => ({
+    frame_index: index,
+    timestamp_s: VFR_SEEK_INDEX.timestamps_s[index] ?? 0,
+    points: [
+      {
+        landmark: 11,
+        x: 0.4 + index * 0.002,
+        y: 0.35,
+        state: "observed",
+        visibility: 0.98,
+      },
+      {
+        landmark: 12,
+        x: 0.55 + index * 0.002,
+        y: 0.35,
+        state: "observed",
+        visibility: 0.97,
+      },
+      // Blocked throughout, which is what the down-the-line clip really does
+      // where motion blur loses a wrist.
+      { landmark: 15, x: null, y: null, state: "blocked", visibility: 0.1 },
+    ],
+    shaft: null,
+  })),
+  landmarks: [11, 12, 15],
+  connections: [[11, 12]],
+  slow_motion_factor: 1,
+  undistorted: false,
+  club_tracked: false,
+  warnings: [],
+};
+
+/** An empty session list, which is what a first run shows. */
+export const NO_PROJECTS = { schema_version: 1, projects: [] };
+
+// --- three dimensions (Phase 15) -------------------------------------------
+
+/** One session, so the Three-D screen has something to reconstruct. */
+export const ONE_PROJECT = {
+  schema_version: 1,
+  projects: [
+    {
+      schema_version: 1,
+      id: 3,
+      name: "Range session",
+      notes: "",
+      created_at: "2026-09-18T10:00:00Z",
+      clips: [],
+      syncs: [],
+      rig: null,
+    },
+  ],
+  database_path: "/Users/example/Library/Application Support/gsa/projects.db",
+};
+
+/** Landmarks the scene fixture carries: two shoulders and two elbows. */
+const SCENE_LANDMARKS = [11, 12, 13, 14];
+
+/**
+ * A reconstruction over the same 45 frames the real fixture clip has.
+ *
+ * **The content key is the fixture clip's**, which is the whole point: the
+ * viewport refuses to scrub against a recording it cannot prove is the one that
+ * was reconstructed, and a scene carrying a made-up key would exercise the
+ * refusal instead of the pairing. `scene.spec.ts` flips it to test the other
+ * branch.
+ *
+ * The geometry is synthetic and deliberately simple — a body 2.5 m down the
+ * reference camera's axis, sliding sideways one centimetre a frame — because
+ * what this fixture is for is the *frame the viewport draws*, and a joint that
+ * moves a known amount per frame is one whose drawn position says which frame is
+ * on screen. The engine's real output is checked against a body whose 3D
+ * positions are inputs in `python/tests/test_scene.py`, and the projection that
+ * draws it is pinned to the engine's own in `projection.test.ts`.
+ *
+ * One frame is left entirely unreconstructed, because a viewport that held the
+ * previous pose across it would look perfectly correct.
+ */
+export const SCENE_EMPTY_FRAME = 20;
+
+export const RECONSTRUCTION_SCENE = {
+  schema_version: 1,
+  space: "camera",
+  reference_content_key: VFR_SEEK_INDEX.content_key,
+  reference_name: "vfr_30_to_15fps.mp4",
+  target_name: "down_the_line.mp4",
+  reference_role: "face_on",
+  target_role: "down_the_line",
+  start_frame: 0,
+  end_frame: 45,
+  frames: Array.from({ length: 45 }, (_, index) => {
+    const empty = index === SCENE_EMPTY_FRAME;
+    const points = SCENE_LANDMARKS.map((landmark) => ({
+      landmark,
+      position: empty
+        ? null
+        : {
+            // One centimetre of travel per frame: over 45 frames that is 45 cm,
+            // which at fx = 1400 and 2.5 m is about 250 px on screen. A frame
+            // out is visibly a frame out.
+            x: (landmark % 2 === 1 ? -0.2 : 0.2) + index * 0.01,
+            y: landmark < 13 ? -0.25 : 0.05,
+            z: 2.5,
+          },
+      refused: empty ? "not_seen" : null,
+      uncertainty: empty
+        ? null
+        : {
+            sigma_m: 0.02,
+            xx: 1e-5,
+            yy: 1e-5,
+            zz: 4e-4,
+            xy: 0,
+            xz: 0,
+            yz: 0,
+          },
+      convergence_deg: empty ? null : 88,
+      reprojection_px: empty ? null : 0.9,
+      visibility: empty ? 0.2 : 0.95,
+    }));
+    return {
+      frame_index: index,
+      timestamp_s: VFR_SEEK_INDEX.timestamps_s[index] ?? 0,
+      points,
+      reconstructed: empty ? 0 : points.length,
+    };
+  }),
+  landmarks: SCENE_LANDMARKS,
+  connections: [
+    [11, 12],
+    [11, 13],
+    [12, 14],
+  ],
+  trajectories: [],
+  cameras: [
+    {
+      kind: "reference",
+      role: "face_on",
+      name: "vfr_30_to_15fps.mp4",
+      position: { x: 0, y: 0, z: 0 },
+      forward: { x: 0, y: 0, z: 1 },
+      up: { x: 0, y: -1, z: 0 },
+      right: { x: 1, y: 0, z: 0 },
+      fx: 1400,
+      fy: 1400,
+      cx: 960,
+      cy: 540,
+      image_width: 1920,
+      image_height: 1080,
+      horizontal_fov_deg: 69,
+    },
+    {
+      kind: "target",
+      role: "down_the_line",
+      name: "down_the_line.mp4",
+      position: { x: -2.5, y: 0, z: 2.5 },
+      forward: { x: 1, y: 0, z: 0 },
+      up: { x: 0, y: -1, z: 0 },
+      right: { x: 0, y: 0, z: -1 },
+      fx: 1500,
+      fy: 1500,
+      cx: 960,
+      cy: 540,
+      image_width: 1920,
+      image_height: 1080,
+      horizontal_fov_deg: 65,
+    },
+  ],
+  calibration: "stereo",
+  centroid: { x: 0.02, y: -0.1, z: 2.5 },
+  radius_m: 0.45,
+  slow_motion_factor: 1,
+  pixel_sigma_px: 2.29,
+  report: {
+    schema_version: 1,
+    reconstructed: true,
+    space: "camera",
+    reference_role: "face_on",
+    target_role: "down_the_line",
+    reference_name: "vfr_30_to_15fps.mp4",
+    target_name: "down_the_line.mp4",
+    frames: 45,
+    reconstructed_frames: 44,
+    slow_motion_factor: 1,
+    calibration: "stereo",
+    baseline_m: 3.54,
+    convergence_deg: 90,
+    quality: {
+      points_attempted: 180,
+      points_reconstructed: 176,
+      coverage: 0.978,
+      median_reprojection_px: 0.9,
+      max_reprojection_px: 2.4,
+      median_convergence_deg: 88,
+      min_convergence_deg: 71,
+      median_uncertainty_m: 0.02,
+      p95_uncertainty_m: 0.031,
+      bones: [],
+      symmetry: [],
+      worst_bone_variation: 0.04,
+      pixel_sigma_px: 2.29,
+      methodology: "DLT, refined on reprojection error in both views",
+    },
+    pairing: null,
+    landmarks: [],
+    reconstructed_at: null,
+    config: {},
+    refusal: null,
+    warnings: [],
+  },
+  warnings: [],
 };

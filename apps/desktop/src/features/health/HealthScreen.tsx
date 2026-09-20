@@ -29,6 +29,8 @@ import { Separator } from "@/components/ui/separator";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { doctor } from "@/lib/ipc";
 
+import { ModelsPanel } from "./ModelsPanel";
+
 type LoadState =
   | { phase: "loading" }
   | { phase: "loaded"; report: EnvironmentReport }
@@ -77,7 +79,7 @@ function ComputePanel({ report }: { report: EnvironmentReport }) {
   // indicator, because torch and MediaPipe use different backends and
   // collapsing them would misrepresent where inference actually runs.
   const rows: Array<[string, string]> = [
-    ["Selected device", compute.selected_device],
+    ["PyTorch auto preference", compute.selected_device],
     ["PyTorch", compute.torch_version ?? "not available"],
     [
       "Metal (MPS)",
@@ -174,6 +176,8 @@ export function HealthScreen() {
           </Button>
         </div>
       </div>
+
+      <ModelsPanel />
 
       {state.phase === "loading" ? (
         <Card>

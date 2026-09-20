@@ -1,6 +1,6 @@
 # ADR-0009: Local polynomial regression on real timestamps, not Savitzky–Golay on a resampled grid
 
-**Status:** Accepted · **Date:** 2026-09-16 · **Phase:** 3
+**Status:** Accepted, one consequence superseded by [ADR-0021](ADR-0021-resolving-the-smoothing-window.md) · **Date:** 2026-09-16 · **Phase:** 3
 
 ## Context
 
@@ -123,6 +123,18 @@ for, which until now was stated as reasoning rather than measurement.
 The alternative — silently widening the window to whatever the clip can support —
 was rejected. It produces numbers, and they would be worse in a way nothing
 reported.
+
+> **Superseded by [ADR-0021](ADR-0021-resolving-the-smoothing-window.md).** The
+> sentence above this one — "Both reference clips in this repository are 24–30
+> fps, so this is the common case" — turned out to be the whole argument against
+> the decision it introduces. Emitting nothing on the common case meant five of
+> the eight clips in `data/` were refused with "the hands were never tracked",
+> pointing at pose estimation rather than at the window; and the floor was not
+> accepted anywhere in practice, but worked around with a hand-picked
+> `window_s=0.17` in every benchmark that touched a 30 fps clip. The window is
+> now resolved against the clip's measured rate and the widening is reported in
+> the result, which answers the "silently" the rejection turned on. Everything
+> else in this ADR stands.
 
 **Gap policy is separate from the fit.** Bracketing inside the fit prevents
 extrapolation beyond the observed range. It deliberately does _not_ prevent

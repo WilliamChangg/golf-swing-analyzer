@@ -114,14 +114,60 @@ export type SwingEvent = "takeaway" | "top" | "impact" | "finish";
  */
 export type SwingPhase = "address" | "backswing" | "downswing" | "follow_through";
 /**
- * The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing.
+ * Where the camera stood relative to the player.
+ *
+ * The single fact that decides what a projected measurement *means*. The same
+ * spine tilt is lateral side bend seen face-on and forward posture angle seen
+ * down the line; the same hip displacement is a slide towards the target in one
+ * and a move towards the ball in the other. Nothing in the arithmetic
+ * distinguishes them, so the view is measured and carried on every metric, and
+ * the anatomical reading is stated per view rather than assumed.
+ *
+ * FACE_ON
+ *     Perpendicular to the target line, looking at the player. The shoulder
+ *     line lies across the frame, so rotation is measurable by foreshortening
+ *     and left and right are distinguishable.
+ * DOWN_THE_LINE
+ *     Along the target line. The shoulder line points towards the camera and
+ *     collapses, so rotation about the spine is not recoverable, and the
+ *     frame's horizontal axis runs towards and away from the ball.
+ *
+ *     **Which end of the target line is not determined.** A camera behind the
+ *     player and one in front of them foreshorten the shoulder line
+ *     identically, and nothing else here separates them. The measurable
+ *     consequences are the same either way, which is why one label covers
+ *     both; what it costs is the sign of anything measured along the frame's
+ *     horizontal axis, so those quantities are reported as image directions
+ *     rather than as "towards the player" or "away from them". The reference
+ *     clip `data/amateur/dtl/iron_dtl.mp4` is filmed from in front, despite its name.
+ * UNKNOWN
+ *     Oblique, or too little of the body tracked at address to tell. Not a
+ *     failure: an oblique camera genuinely supports some measurements and not
+ *     others, and saying so beats picking the nearer label.
  */
 export type CameraView = "face_on" | "down_the_line" | "unknown";
 export type BodySide = "left" | "right";
 /**
- * What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.
+ * What this build may claim about the geometry of a recording.
  *
- * `none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`.
+ * The honesty gate of Phases 8 and 9, as a type. It is ordered, and
+ * `at_least` is how a consumer asks the question it actually has -- "may I
+ * triangulate" -- rather than enumerating the values that permit it and
+ * forgetting one when a fourth is added.
+ *
+ * NONE
+ *     No calibration. Every measurement is a statement about the image plane,
+ *     which is what Phases 5 and 6 produce and label as such. The lens's
+ *     distortion is present in every landmark and unmeasured.
+ * INTRINSICS
+ *     One camera's focal lengths, optical centre and distortion are measured.
+ *     Landmarks can be undistorted, so projected measurements improve, and a
+ *     pixel becomes a known direction. **Still no depth, so still no
+ *     metric-scale 3D claim.**
+ * STEREO
+ *     Both cameras are calibrated and their relative pose is measured, so two
+ *     views of one instant give an intersection rather than two directions.
+ *     This is what Phase 9 triangulates with.
  */
 export type CalibrationStatus = "none" | "intrinsics" | "stereo";
 
@@ -148,7 +194,12 @@ export interface MetricSet {
   torso_length: number;
   geometry: FrameGeometry;
   frames: number;
-  calibration?: CalibrationStatus;
+  /**
+   * What was known about this camera's geometry when these metrics were computed, and therefore what they are entitled to claim.
+   *
+   * `none` means the landmarks still carry the lens's distortion, which displaces a point near the frame edge by tens of pixels on an ordinary phone and biases every angle and distance measured from it. `intrinsics` means the lens was measured and removed, so the values below are cleaner statements about the image plane -- **and are still statements about the image plane**, because one camera cannot see depth however well it is calibrated. `stereo` is what Phase 9 triangulates with; no metric in this set requires it yet, and the gate that enforces that is in `compute.py`.
+   */
+  calibration?: CalibrationStatus & string;
   /**
    * How many times slower than real time the clip plays, as supplied by the caller. 1.0 is an ordinary recording. Timestamps here are **real seconds**, already divided by it, so they no longer index into the video file -- frame numbers do. Nothing in a conformed slow-motion clip records this, so it cannot be measured and is not guessed.
    */
@@ -181,6 +232,9 @@ export interface Metric {
    * Every frame whose landmarks entered this value, so it can be checked against the video rather than taken on trust.
    */
   source_frames: number[];
+  /**
+   * The camera view this was measured in. Carried on every metric because a projected quantity means different things from different places, and two clips of the same swing must never be compared across views as though the numbers described the same thing.
+   */
   view: CameraView;
   /**
    * What the number means anatomically from this view, in words. Separate from `methodology`, which says how it was computed: the arithmetic is the same from every camera position and the meaning is not.

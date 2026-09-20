@@ -174,7 +174,7 @@ camera behind the player and one in front foreshorten the shoulder line
 identically, and nothing here separates them; the measurable consequences are
 the same either way. What it costs is the sign of anything measured along the
 frame's horizontal axis, so those are reported as image directions rather than
-as "towards the player". The reference clip `data/dtl/iron_dtl.mp4` is filmed
+as "towards the player". The reference clip `data/amateur/dtl/iron_dtl.mp4` is filmed
 from in front, despite its name.
 
 The view is **measured**, from the projected width of the shoulder line at

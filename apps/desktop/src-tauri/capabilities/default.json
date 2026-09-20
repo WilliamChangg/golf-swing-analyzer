@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimal capability set: the frontend may call the app's own commands, and may open a native file picker to choose a video to import. No filesystem, shell, or network permissions are granted — the picker returns a path, which the frontend hands to Rust and Rust hands to the analysis engine, so the WebView itself never reads a file. Permissions are added as features need them, not in advance.",
+  "description": "Minimal capability set: the frontend may call the app's own commands and open a native file picker. No filesystem, shell or network permissions are granted. Phase 14 is the first feature that makes the WebView read a file at all — a video element cannot be fed over the RPC channel — and it reads only through the asset protocol, whose scope is empty in tauri.conf.json. The scope is extended one file at a time, and only by `commands::choose_clip`, which opens its own dialog in Rust and admits exactly what came back. What keeps that narrow is not who opened the picker: it is that there is no command anywhere taking a path and granting access to it, so the frontend cannot name a file it wants read. Permissions are added as features need them, not in advance.",
   "windows": ["main"],
   "permissions": ["core:default", "dialog:allow-open"]
 }

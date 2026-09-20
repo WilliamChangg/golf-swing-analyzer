@@ -34,7 +34,7 @@ from analyzer.contracts.sync import (
     SyncMethod,
     TimeMap,
 )
-from analyzer.filtering.landmarks import filter_sequence
+from analyzer.filtering.landmarks import filter_sequence, resolve_window, sequence_clock
 from analyzer.phases import detect_phases, swing_signals
 from analyzer.sync import (
     AnchorError,
@@ -275,15 +275,37 @@ class TestMismatchedFrameRates:
         assert one_fast > both_slow / np.sqrt(2)
         assert one_fast < both_slow
 
-    def test_the_default_window_refuses_a_thirty_fps_clip_and_says_why(self) -> None:
-        """Phase 3's frame-rate floor arrives here as a refusal naming the fix."""
+    def test_the_default_window_no_longer_strands_the_thirty_fps_clip(self) -> None:
+        """Phase 3's frame-rate floor used to arrive here as a refusal.
+
+        The 30 fps half of the pair could not support the default window, so it
+        contributed no signal at all and the pair was refused. It widens now, and
+        the ordinary consumer pair aligns without the caller choosing a window.
+        """
         result = align(camera(0.0, 120.0, name="fast.mov"), camera(0.4, 30.0, name="slow.mov"))
 
-        assert not result.aligned
-        assert result.refusal is not None
-        assert "smoothing window" in result.refusal
-        assert "slow.mov" in result.refusal
-        assert any("0.1 s window" in note for note in result.warnings)
+        assert result.aligned
+        assert result.refusal is None
+
+    def test_the_pair_is_smoothed_at_one_window_set_by_the_coarser_clip(self) -> None:
+        """The invariant a per-clip widening would have broken silently.
+
+        A wider window flattens and slightly shifts the speed features both
+        alignment methods key on, so two clips smoothed differently are biased
+        against each other by an amount nothing measures. Resolving per clip
+        would hand the 30 fps half of this pair a wider window than the 120 fps
+        half -- and each clip's own report would look entirely consistent.
+        """
+        fast = sequence_clock(swing_sequence(duration_s=DURATION_S, fps=120.0))
+        slow = sequence_clock(swing_sequence(duration_s=DURATION_S, fps=30.0))
+
+        together, requested = resolve_window(FilterConfig(), fast, slow)
+        alone_fast, _ = resolve_window(FilterConfig(), fast)
+        alone_slow, _ = resolve_window(FilterConfig(), slow)
+
+        assert requested == pytest.approx(0.10)
+        assert together.smoothing.window_s == alone_slow.smoothing.window_s
+        assert alone_fast.smoothing.window_s < alone_slow.smoothing.window_s
 
 
 class TestPartialOverlap:

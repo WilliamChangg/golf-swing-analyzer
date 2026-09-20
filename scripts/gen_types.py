@@ -34,6 +34,7 @@ SCHEMA_DIR = OUT_DIR / "schema"
 # Only root models are listed; nested models are inlined by the generator.
 EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.health", "EnvironmentReport"),
+    ("analyzer.contracts.models", "ModelInventory"),
     ("analyzer.contracts.video", "VideoMetadata"),
     ("analyzer.contracts.pose", "PoseExtractionResult"),
     ("analyzer.contracts.progress", "ProgressUpdate"),
@@ -42,19 +43,43 @@ EXPORTS: tuple[tuple[str, str], ...] = (
     ("analyzer.contracts.sync", "SyncModel"),
     ("analyzer.contracts.calibration", "CameraRig"),
     ("analyzer.contracts.reconstruction", "ReconstructionReport"),
+    # Phase 14. Each of the four below was withheld by an earlier phase on the
+    # grounds that nothing drew it, and each is drawn now -- which was the
+    # condition, not a formality. The panels that consume them are named in the
+    # note beneath.
+    ("analyzer.contracts.projects", "ProjectList"),
+    ("analyzer.contracts.projects", "Project"),
+    ("analyzer.contracts.coaching", "CoachingReport"),
+    ("analyzer.contracts.video", "SeekIndex"),
+    ("analyzer.contracts.overlay", "PoseOverlay"),
+    # Phase 15. `ReconstructionReport` has been exported since Phase 9 and is
+    # still the numbers; this is the same reconstruction as geometry, and the
+    # viewport is what draws it.
+    ("analyzer.contracts.scene", "ReconstructionScene"),
+    # Phase 16. The first contract here whose subject is a *pair*, and the
+    # Compare screen is what draws it.
+    ("analyzer.contracts.comparison", "SwingComparison"),
 )
 
-# `Project` and `ProjectList` are deliberately *not* exported. They are reachable
-# over RPC and from `analyzer project`, but no UI renders them yet -- project
-# management is Phase 14.1 -- and exporting types nothing draws would make the
-# app's type surface a description of the plan rather than of the app. Same
-# reasoning that kept `SequenceFilterReport` out until Phase 4 built its panel.
+# `Project` and `ProjectList` went in with Phase 14.1, which is the phase their
+# earlier exclusion named. `CoachingReport` went in with the findings panel
+# (14.7), which was the condition recorded when Phase 13 left it out -- and the
+# rendering questions that exclusion predicted did get answered by having to
+# answer them: a refusal is shown in its own list rather than as a greyed
+# finding, and a citation is a jump target rather than a link, because the
+# frames it cites are in the player on the same screen.
 #
-# `analyzer.contracts.labels` and `analyzer.contracts.ml` are not exported for a
-# stronger reason: they are never reaching the app. Labelling and training are
-# developer operations over a corpus that does not ship, nothing in `dispatch`
-# reaches `analyzer.ml`, and a TypeScript `ModelCard` would be a type for a
-# capability the desktop app does not have and is not going to be given.
+# `analyzer.contracts.labels` and `analyzer.contracts.ml` are still not
+# exported, and for the stronger reason that has not changed: they are never
+# reaching the app. Labelling and training are developer operations over a
+# corpus that does not ship, nothing in `dispatch` reaches `analyzer.ml`, and a
+# TypeScript `ModelCard` would be a type for a capability the desktop app does
+# not have and is not going to be given.
+#
+# `SequenceFilterReport` remains out on its own original terms. Phase 4 said it
+# would go in when a panel drew it; no panel draws it yet, and Phase 14 renders
+# the filter's *warnings* -- which arrive on the reports that carry them -- not
+# the report itself.
 
 BANNER = """\
 /**
@@ -96,6 +121,72 @@ def _strip_property_titles(node: Any) -> None:
             _strip_property_titles(item)
 
 
+def _rewrite_prefix_items(node: Any) -> None:
+    """Express fixed-length tuples the way the TypeScript generator reads them.
+
+    Pydantic emits a `tuple[A, B]` using JSON Schema 2020-12's `prefixItems`.
+    `json-schema-to-typescript` only understands draft-07's tuple form, where
+    the positional schemas sit in `items` as an array, and silently falls back
+    to `[unknown, unknown]` for anything else -- a type that compiles, carries
+    no information, and fails only at the point of use.
+
+    Rewriting here rather than reshaping the contract keeps the limitation where
+    it belongs. `POSE_CONNECTIONS` is a pair of landmarks and the Python type
+    says so; a `list[list[Landmark]]` declared to appease a generator would have
+    given up the "exactly two" guarantee in both languages to fix it in one.
+
+    Both keys are left in place. They do not contradict each other -- draft-07
+    readers use `items`, 2020-12 readers use `prefixItems` -- and dropping the
+    newer one would make the schema files a worse description of the wire than
+    the models they came from.
+    """
+    if isinstance(node, dict):
+        prefix = node.get("prefixItems")
+        if isinstance(prefix, list) and "items" not in node:
+            node["items"] = prefix
+        for value in node.values():
+            _rewrite_prefix_items(value)
+    elif isinstance(node, list):
+        for item in node:
+            _rewrite_prefix_items(item)
+
+
+def _rewrite_documented_refs(node: Any) -> None:
+    """Let a field document a shared model without the generator copying it.
+
+    Pydantic writes a described reference as `{"$ref": ..., "description": ...}`,
+    which JSON Schema 2020-12 allows and `json-schema-to-typescript` treats as an
+    anonymous schema: it inlines a **copy** of the target and names it after the
+    original with a digit stuck on. A contract using one `Vec3` for five fields
+    comes out as `Vec3` plus `Vec31` through `Vec35`, five structurally identical
+    interfaces that a reader has to work out are the same type.
+
+    Draft-07's way of saying the same thing -- a one-element `allOf` around the
+    reference -- the generator reads as a reference, so the named type survives
+    and the description still lands on the property as a comment. Both readings
+    are the same schema; this is a spelling the tool understands.
+
+    Same shape of fix as `_rewrite_prefix_items`, and the same argument: the
+    limitation belongs in the generator's input rather than in the contract.
+    Dropping the descriptions would have de-duplicated the types too, at the cost
+    of deleting the sentence that says `up` points along the image's -y -- which
+    is exactly the kind of convention this project writes down because getting it
+    wrong produces a plausible picture rather than an error.
+    """
+    if isinstance(node, dict):
+        reference = node.get("$ref")
+        if isinstance(reference, str) and len(node) > 1:
+            siblings = {key: value for key, value in node.items() if key != "$ref"}
+            node.clear()
+            node["allOf"] = [{"$ref": reference}]
+            node.update(siblings)
+        for value in node.values():
+            _rewrite_documented_refs(value)
+    elif isinstance(node, list):
+        for item in node:
+            _rewrite_documented_refs(item)
+
+
 def _json_schema(model: Any) -> dict[str, Any]:
     """Derive JSON Schema in serialization mode.
 
@@ -105,6 +196,8 @@ def _json_schema(model: Any) -> dict[str, Any]:
     """
     schema: dict[str, Any] = model.model_json_schema(mode="serialization")
     _strip_property_titles(schema)
+    _rewrite_prefix_items(schema)
+    _rewrite_documented_refs(schema)
     schema["title"] = model.__name__
     return schema
 

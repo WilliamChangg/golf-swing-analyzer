@@ -63,6 +63,38 @@ class LocalPolynomialError(ValueError):
     """The fit was asked for something it cannot compute."""
 
 
+def narrowest_window_s(interval_s: float, required_observations: int) -> float:
+    """Narrowest window holding `required_observations` samples at this spacing.
+
+    Samples sit `interval_s` apart, a window of width w centred on one of them
+    reaches `w / 2` either side, so it holds `2 * floor(w / (2 * interval)) + 1`
+    of them. Inverting that for the fewest a fit needs gives `(n - 1) * interval`;
+    the half-interval of headroom here keeps the window's boundary off a sample,
+    where floating-point luck would otherwise decide whether it is counted.
+
+    **Narrowest, not comfortable.** Every extra sample averages over more of the
+    swing, and the velocity peak is what phase detection keys on: on the 30 fps
+    reference footage, widening past this by a single frame costs about a quarter
+    of the impact confidence, and by three frames costs all of it.
+    """
+    if not np.isfinite(interval_s) or interval_s <= 0:
+        return float("nan")
+    return float((required_observations - 0.5) * interval_s)
+
+
+def sampling_interval_s(t: NDArray[np.float64]) -> float:
+    """Median spacing of a clip's timestamps, or NaN if there is no spacing to measure.
+
+    Median rather than mean: a variable-rate clip with one long stall between
+    frames has an honest typical spacing and a mean that describes neither part
+    of it.
+    """
+    if t.size < 2:
+        return float("nan")
+    interval = float(np.median(np.diff(t)))
+    return interval if interval > 0 else float("nan")
+
+
 @dataclass(frozen=True)
 class LocalPolynomialFit:
     """The fit evaluated at every input sample.

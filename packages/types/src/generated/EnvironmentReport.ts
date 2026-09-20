@@ -22,6 +22,9 @@ export type HealthStatus = "ok" | "degraded" | "missing" | "error";
 export interface EnvironmentReport {
   schema_version?: number;
   generated_at: string;
+  /**
+   * Worst status across all components, in the order OK < DEGRADED < MISSING < ERROR.
+   */
   overall_status: HealthStatus;
   platform: PlatformInfo;
   components: ComponentStatus[];
@@ -86,7 +89,7 @@ export interface ComputeInfo {
    */
   cuda_available: boolean;
   /**
-   * Device the engine will actually use.
+   * Preferred torch device for auto selection; runtime probing may fall back to CPU.
    */
   selected_device: string;
   cpu_fallback_available: boolean;

@@ -29,7 +29,12 @@ from pydantic import BaseModel, Field, model_validator
 from analyzer.contracts.pose import LandmarkSpace
 
 # Bump on any change that alters what a stored or reported filter result means.
-FILTER_SCHEMA_VERSION = 1
+#
+# 2: `SmoothingConfig.auto_widen`, and `SequenceFilterReport.requested_window_s`
+#    beside it. A version-1 reader seeing a version-2 report would read
+#    `config.smoothing.window_s` as the width the caller asked for; it is now the
+#    width actually fitted, which on a sub-45 fps clip is a different number.
+FILTER_SCHEMA_VERSION = 2
 
 
 class SignalUnit(StrEnum):
@@ -206,6 +211,16 @@ class SmoothingConfig(BaseModel, extra="forbid"):
     degree 3 on acceleration by about 4x at equal velocity error. The 0.10 s
     window is preferred over 0.125 s because velocity is the signal phase
     detection keys on, and it is 28% better there.
+
+    **The measurement was made at frame rates that can hold it, and the default
+    is unreachable below about 45 fps.** Degree 4 needs five observations; a
+    0.10 s window spans three at 30 fps. Nothing is then fitted *anywhere* --
+    not a degraded result, no result -- and every clip at the commonest consumer
+    frame rate reported that its landmarks were never tracked. The table above
+    says which window is best among those a clip can support; it never said the
+    shipped one is always supportable. `auto_widen` is what closes that gap, and
+    it widens to the narrowest width that fits rather than to a comfortable one,
+    because every extra sample costs velocity peak.
     """
 
     window_s: float = Field(
@@ -236,6 +251,19 @@ class SmoothingConfig(BaseModel, extra="forbid"):
             "than smoothed -- the fit passes through every point and its residual "
             "is zero by construction. Set this to polyorder + 2 or more to "
             "require that every emitted value actually averaged something."
+        ),
+    )
+    auto_widen: bool = Field(
+        default=True,
+        description=(
+            "Whether a window too narrow to fit its polynomial at the clip's "
+            "measured frame rate is widened to the narrowest width that can. "
+            "The alternative is not a coarser answer but no answer at all, "
+            "which is why this is on by default. Resolved once per sequence so "
+            "every landmark shares one window, and reported: the widened value "
+            "is what the result carries, with the requested one beside it. Set "
+            "False to have such a clip refused instead, which is the right "
+            "choice when a caller would rather recapture than measure wider."
         ),
     )
 
@@ -325,10 +353,27 @@ class LandmarkFilterReport(BaseModel):
 
 
 class SequenceFilterReport(BaseModel):
-    """Filtering across every landmark of one clip."""
+    """Filtering across every landmark of one clip.
+
+    `config` is the policy **as applied**, not as requested. The two differ only
+    when `auto_widen` resolved a window the clip's frame rate could not support,
+    and `requested_window_s` then carries what was asked for. That way round
+    because every other number in this report -- and the resolution factor phase
+    detection derives from `config.smoothing.window_s` -- describes the fit that
+    actually ran; a report naming a width nothing was fitted at would make each
+    of them unreadable.
+    """
 
     schema_version: int = FILTER_SCHEMA_VERSION
     config: FilterConfig
+    requested_window_s: float | None = Field(
+        default=None,
+        description=(
+            "The smoothing window the caller asked for, when `auto_widen` "
+            "replaced it. None means `config.smoothing.window_s` is what was "
+            "requested, which is the ordinary case."
+        ),
+    )
     space: LandmarkSpace
     slow_motion_factor: float = Field(
         default=1.0,

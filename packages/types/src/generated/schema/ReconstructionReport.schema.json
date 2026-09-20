@@ -498,7 +498,11 @@
       "type": "boolean"
     },
     "space": {
-      "$ref": "#/$defs/LandmarkSpace",
+      "allOf": [
+        {
+          "$ref": "#/$defs/LandmarkSpace"
+        }
+      ],
       "default": "camera",
       "description": "The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would."
     },
@@ -529,7 +533,11 @@
       "type": "number"
     },
     "calibration": {
-      "$ref": "#/$defs/CalibrationStatus",
+      "allOf": [
+        {
+          "$ref": "#/$defs/CalibrationStatus"
+        }
+      ],
       "description": "What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it."
     },
     "baseline_m": {

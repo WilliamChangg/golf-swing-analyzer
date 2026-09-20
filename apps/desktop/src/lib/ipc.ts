@@ -8,19 +8,28 @@
  */
 
 import type {
+  CoachingReport,
   EngineError,
   EngineResult,
   EnvironmentReport,
+  MetricSet,
+  ModelInventory,
   PoseExtractionResult,
+  PoseOverlay,
   ProgressUpdate,
+  Project,
+  ProjectList,
+  ReconstructionScene,
   CameraCalibration,
   CameraRig,
   CameraRole,
+  SeekIndex,
+  SwingComparison,
   SwingPhases,
   SyncModel,
   VideoMetadata,
 } from "@gsa/types";
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 /** Tauri command names. Must match the `#[tauri::command]` functions in Rust. */
@@ -32,6 +41,19 @@ const COMMANDS = {
   syncClips: "sync_clips",
   calibrateCamera: "calibrate_camera",
   getCalibration: "get_calibration",
+  chooseClip: "choose_clip",
+  seekIndex: "seek_index",
+  poseOverlay: "pose_overlay",
+  computeMetrics: "compute_metrics",
+  coachSwing: "coach_swing",
+  listProjects: "list_projects",
+  getProject: "get_project",
+  createProject: "create_project",
+  deleteProject: "delete_project",
+  addClip: "add_clip",
+  removeClip: "remove_clip",
+  reconstructScene: "reconstruct_scene",
+  compareSwings: "compare_swings",
 } as const;
 
 /** Event Rust re-emits engine progress notifications on. */
@@ -301,6 +323,281 @@ export function getCalibration(
 }
 
 /**
+ * Open the native file picker, and admit the chosen clip for playback.
+ *
+ * Returns the chosen path, or null if the user cancelled — cancelling is not an
+ * error and does not come back as one.
+ *
+ * **There is no `authorizeClip(path)` counterpart, and that absence is the
+ * feature.** A video element means the WebView reads files, which every phase
+ * before this one refused to allow. What makes it narrow is that the frontend
+ * cannot name the file: the picker runs in Rust, and only what a human selected
+ * there is added to the asset protocol's scope. A command that took a path and
+ * granted access to it would hand the restricted party the key to its own
+ * restriction. See `commands::choose_clip`.
+ */
+export function chooseClip(): Promise<EngineResult<string | null>> {
+  return call<string | null>(COMMANDS.chooseClip);
+}
+
+/**
+ * The URL a video element loads this clip from.
+ *
+ * Only resolvable for a clip that went through `chooseClip`; any other path
+ * produces a URL the asset protocol refuses, which surfaces as a video that
+ * will not load rather than as a thrown error.
+ */
+export function clipSource(path: string): string {
+  return convertFileSrc(path);
+}
+
+/**
+ * Every frame's presentation time, and the time to seek to to display it.
+ *
+ * The map the player runs on, and the reason it is not computed in the browser:
+ * `frame / fps` is wrong on variable-rate footage, and measurably wrong even on
+ * constant-rate footage whose container declares the wrong rate — which one of
+ * this project's own reference clips does, by 8.4%.
+ */
+export function seekIndex(path: string): Promise<EngineResult<SeekIndex>> {
+  return call<SeekIndex>(COMMANDS.seekIndex, { path });
+}
+
+/**
+ * Filtered landmarks over a frame range, in the coordinates they are drawn in.
+ *
+ * A range, because the payload is 33 landmarks per frame and a canvas draws
+ * one; the range exists so the UI makes one request per window rather than one
+ * per frame. The engine refuses a range past its own limit rather than
+ * truncating it.
+ *
+ * `withClub` costs a full decode pass — seconds, against milliseconds for the
+ * skeleton — so it is a separate request rather than a flag on the first one.
+ */
+export function poseOverlay(
+  path: string,
+  range: { startFrame: number; endFrame?: number },
+  options: AnalysisOptions & { withClub?: boolean } = {},
+): Promise<EngineResult<PoseOverlay>> {
+  return call<PoseOverlay>(COMMANDS.poseOverlay, {
+    path,
+    model: options.model ?? null,
+    startFrame: range.startFrame,
+    endFrame: range.endFrame ?? null,
+    windowS: options.windowS ?? null,
+    slowMotionFactor: options.slowMotionFactor ?? null,
+    projectId: options.projectId ?? null,
+    withClub: options.withClub ?? false,
+  });
+}
+
+/**
+ * Inputs shared by every analysis of one clip.
+ *
+ * One type rather than three copies because the three calls **must** agree: the
+ * metrics panel, the findings panel and the overlay are read side by side, and
+ * a different smoothing window in one of them would show a reader numbers that
+ * disagree with the skeleton drawn under them, with nothing on screen to say
+ * why.
+ */
+export interface AnalysisOptions {
+  model?: string;
+  /**
+   * Smoothing window in seconds. Worth exposing because a clip below about
+   * 60 fps cannot support the engine's 0.10 s default at all — it emits nothing
+   * — and the engine's own message names the width that clip's rate supports.
+   */
+  windowS?: number;
+  /** How many times slower than real time the clip plays. Supplied, never measured. */
+  slowMotionFactor?: number;
+  /** Apply this project's calibration, when the clip belongs to it. */
+  projectId?: number;
+}
+
+/**
+ * Measure the biomechanics metrics for a clip.
+ *
+ * **`computed: false` is a success**, and so is a long `refused` list. Phase 5
+ * refuses three metrics outright on a down-the-line clip because that camera
+ * position does not contain the measurement, which is a correct answer rather
+ * than a failure.
+ */
+export function computeMetrics(
+  path: string,
+  options: AnalysisOptions = {},
+): Promise<EngineResult<MetricSet>> {
+  return call<MetricSet>(COMMANDS.computeMetrics, analysisArgs(path, options));
+}
+
+/**
+ * Reach every conclusion this clip's measurements support, and refuse the rest.
+ *
+ * **An empty `findings` list is a success and is the ordinary outcome.** Across
+ * four reference clips this engine produces at most two findings, and on the
+ * 30 fps amateur clip it produces none — because one frame of ambiguity at the
+ * top is worth 0.74 of the published tempo band. The `refused` list is where
+ * nearly all of the information is, and the panel treats it that way.
+ */
+export function coachSwing(
+  path: string,
+  options: AnalysisOptions = {},
+): Promise<EngineResult<CoachingReport>> {
+  return call<CoachingReport>(COMMANDS.coachSwing, analysisArgs(path, options));
+}
+
+function analysisArgs(
+  path: string,
+  options: AnalysisOptions,
+): Record<string, unknown> {
+  return {
+    path,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+    slowMotionFactor: options.slowMotionFactor ?? null,
+    projectId: options.projectId ?? null,
+  };
+}
+
+/** Every project, with its clips. Stored alignments are omitted; see `getProject`. */
+export function listProjects(): Promise<EngineResult<ProjectList>> {
+  return call<ProjectList>(COMMANDS.listProjects);
+}
+
+/** One project, with its clips and its stored alignments. */
+export function getProject(projectId: number): Promise<EngineResult<Project>> {
+  return call<Project>(COMMANDS.getProject, { projectId });
+}
+
+/** Create an empty project. The name is not unique; the id is the identity. */
+export function createProject(
+  name: string,
+  options: { notes?: string } = {},
+): Promise<EngineResult<Project>> {
+  return call<Project>(COMMANDS.createProject, {
+    name,
+    notes: options.notes ?? null,
+  });
+}
+
+/**
+ * Delete a project, its clips and its alignments. The video files are untouched.
+ *
+ * Returns the remaining projects rather than nothing, because a caller that has
+ * just removed something is about to re-render the list.
+ */
+export function deleteProject(
+  projectId: number,
+): Promise<EngineResult<ProjectList>> {
+  return call<ProjectList>(COMMANDS.deleteProject, { projectId });
+}
+
+/**
+ * Attach a video to a project, identifying it **by content** rather than by path.
+ *
+ * `role` is where the camera was, as declared. Phase 6 measures the view from
+ * the footage and may disagree; that disagreement is worth being able to state,
+ * and cannot be stated unless the declaration was recorded.
+ */
+export function addClip(
+  projectId: number,
+  path: string,
+  role: CameraRole,
+  options: { slowMotionFactor?: number; label?: string } = {},
+): Promise<EngineResult<Project>> {
+  return call<Project>(COMMANDS.addClip, {
+    projectId,
+    path,
+    role,
+    slowMotionFactor: options.slowMotionFactor ?? null,
+    label: options.label ?? null,
+  });
+}
+
+/** Detach a clip from a project. Its stored alignments go with it. */
+export function removeClip(
+  projectId: number,
+  clipId: number,
+): Promise<EngineResult<Project>> {
+  return call<Project>(COMMANDS.removeClip, { projectId, clipId });
+}
+
+/**
+ * A project's swing in metres, with everything a viewport needs to draw it.
+ *
+ * The longest call the app makes: it filters both clips, aligns them and
+ * triangulates every landmark at every instant. It also refuses more often than
+ * anything else here, and each refusal is a real answer — a project whose
+ * cameras were never calibrated as a pair, or whose two clips have no measured
+ * relationship between their clocks, genuinely has no third dimension in it, and
+ * the engine names which of the two is missing.
+ *
+ * A range for `poseOverlay`'s reason and more strongly: a scene point carries a
+ * position, a covariance and three diagnostics, which is roughly four times an
+ * overlay point. The engine refuses a range past its own limit rather than
+ * truncating it.
+ */
+export function reconstructScene(
+  projectId: number,
+  range: { startFrame?: number; endFrame?: number } = {},
+  options: {
+    referenceClipId?: number;
+    targetClipId?: number;
+    model?: string;
+    windowS?: number;
+  } = {},
+): Promise<EngineResult<ReconstructionScene>> {
+  return call<ReconstructionScene>(COMMANDS.reconstructScene, {
+    projectId,
+    referenceClipId: options.referenceClipId ?? null,
+    targetClipId: options.targetClipId ?? null,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+    startFrame: range.startFrame ?? 0,
+    endFrame: range.endFrame ?? null,
+  });
+}
+
+/**
+ * Lay two recordings of a swing over each other, and refuse what cannot be compared.
+ *
+ * The longest call in the app after a reconstruction: it runs the whole analysis
+ * chain on both clips. It is also the one that refuses most, and every refusal is
+ * a real answer — two clips filmed from different positions do not contain a
+ * comparison of a projected angle, and no amount of arithmetic puts one in.
+ *
+ * **The smoothing window is shared and the slow-motion factors are not.**
+ * Smoothing two clips differently moves the features the comparison keys on, so
+ * a difference between two filter configurations would arrive looking exactly
+ * like a difference between two swings. A slow-motion factor is a property of one
+ * recording, and two swings by one player are routinely not both slowed.
+ *
+ * **`computed: false` is a success**, as it is for every other call here. It means
+ * one of the clips produced no usable clock — no swing, or a swing missing one of
+ * the four events — and the report says which.
+ */
+export function compareSwings(
+  referencePath: string,
+  targetPath: string,
+  options: {
+    model?: string;
+    windowS?: number;
+    referenceSlowMotion?: number;
+    targetSlowMotion?: number;
+    projectId?: number;
+  } = {},
+): Promise<EngineResult<SwingComparison>> {
+  return call<SwingComparison>(COMMANDS.compareSwings, {
+    referencePath,
+    targetPath,
+    model: options.model ?? null,
+    windowS: options.windowS ?? null,
+    referenceSlowMotion: options.referenceSlowMotion ?? null,
+    targetSlowMotion: options.targetSlowMotion ?? null,
+    projectId: options.projectId ?? null,
+  });
+}
+
+/**
  * Subscribe to engine progress.
  *
  * Returns a promise of an unsubscribe function, which is Tauri's shape: the
@@ -331,4 +628,16 @@ export function onProgress(
 export function progressFraction(update: ProgressUpdate): number | null {
   if (update.total == null || update.total <= 0) return null;
   return Math.min(update.current / update.total, 1);
+}
+
+/** Read and hash every model from the bundled manifest. */
+export function listModels(): Promise<EngineResult<ModelInventory>> {
+  return call<ModelInventory>("list_models", {});
+}
+
+/** Install the manifest-pinned version; never adopts upstream bytes silently. */
+export function installModel(
+  name: string,
+): Promise<EngineResult<ModelInventory>> {
+  return call<ModelInventory>("install_model", { name });
 }

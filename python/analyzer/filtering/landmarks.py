@@ -35,9 +35,10 @@ from analyzer.contracts.filtering import (
 )
 from analyzer.contracts.pose import FrameGeometry, Landmark, LandmarkSpace, PoseSequence
 from analyzer.filtering.gating import gated_observations
+from analyzer.filtering.localpoly import narrowest_window_s, sampling_interval_s
 from analyzer.filtering.pipeline import FilterPipeline, default_pipeline
 from analyzer.filtering.signal import Signal, signal_from_arrays
-from analyzer.pose.series import LandmarkSeries, landmark_series
+from analyzer.pose.series import LandmarkSeries, landmark_series, require_slow_motion_factor
 from analyzer.progress import NullReporter, ProgressReporter, ProgressTracker
 
 TASK_NAME = "filter_poses"
@@ -267,6 +268,81 @@ def _sequence_warnings(reports: list[LandmarkFilterReport], config: FilterConfig
     return warnings
 
 
+def sequence_clock(sequence: PoseSequence, slow_motion_factor: float = 1.0) -> NDArray[np.float64]:
+    """A sequence's timestamps on the time base the filter will see.
+
+    Slow motion divides them, which is the whole of what the factor does, so a
+    conformed 8x clip samples eight times as densely in real seconds and needs no
+    widening where a 30 fps one does. Exposed because `resolve_window` has to be
+    given every clock that will be compared before any of them is filtered.
+    """
+    require_slow_motion_factor(slow_motion_factor)
+    return np.array(
+        [frame.timestamp_s / slow_motion_factor for frame in sequence.frames], dtype=np.float64
+    )
+
+
+def resolve_window(
+    config: FilterConfig, *clocks: NDArray[np.float64]
+) -> tuple[FilterConfig, float | None]:
+    """Widen a smoothing window the clips' frame rates cannot support.
+
+    Returns the config to filter with, and the window originally asked for when
+    it was replaced.
+
+    **Resolved once for everything that will be compared, from those clips' own
+    timestamps.** Doing it per landmark would let two landmarks of one clip be
+    smoothed at different widths -- their velocities would then not be
+    comparable, and nothing downstream could tell, because each report would look
+    internally consistent.
+
+    The same argument reaches past one clip, which is why this takes several
+    clocks and resolves to the widest any of them needs. Anything that measures a
+    *difference* between two recordings -- sync, comparison -- must smooth them
+    identically, because a wider window flattens and slightly shifts the speed
+    features both key on, and the pair would be biased by an amount nothing
+    measures. So the coarser clip sets the window for the pair, which is the rule
+    `SyncClipsParams.filter` already states.
+
+    Widening only ever happens where the alternative is nothing at all: below
+    about 45 fps the shipped degree-4 window holds three samples where the fit
+    needs five, and `local_polynomial_fit` emits no value at any sample of any
+    landmark. That is not a coarser measurement to be traded against a finer one,
+    so it is not offered as a trade.
+    """
+    smoothing = config.smoothing
+    if not smoothing.auto_widen:
+        return config, None
+
+    widths = [
+        narrowest_window_s(interval, smoothing.required_observations)
+        for interval in (sampling_interval_s(clock) for clock in clocks)
+        if np.isfinite(interval)
+    ]
+    needed = max((w for w in widths if np.isfinite(w)), default=float("nan"))
+    if not np.isfinite(needed) or needed <= smoothing.window_s:
+        return config, None
+
+    widened = config.model_copy(
+        update={"smoothing": smoothing.model_copy(update={"window_s": needed})}
+    )
+    return widened, smoothing.window_s
+
+
+def _widening_warning(config: FilterConfig, requested_s: float, interval_s: float) -> str:
+    """Say that the window moved, and what it costs, in one place the caller reads."""
+    smoothing = config.smoothing
+    return (
+        f"The {requested_s:g} s smoothing window covers fewer than the "
+        f"{smoothing.required_observations} samples a degree-{smoothing.polyorder} fit needs at "
+        f"this clip's {1.0 / interval_s:.0f} fps, so it was widened to "
+        f"{smoothing.window_s:.3f} s -- the narrowest that fits. Nothing would have been fitted "
+        "at the requested width. The wider window averages over more of the swing, which flattens "
+        "peak speed and blunts impact timing; the events' resolution confidence already accounts "
+        "for it. Capturing at 120 fps or more is what makes the narrower window available."
+    )
+
+
 def filter_sequence(
     sequence: PoseSequence,
     config: FilterConfig | None = None,
@@ -285,7 +361,10 @@ def filter_sequence(
     fits a polynomial to the result. Undistorting afterwards would be a
     different and wrong operation: the fit would have smoothed the distorted
     trajectory, and its velocity and acceleration would describe that."""
-    resolved = config or FilterConfig()
+    requested = config or FilterConfig()
+    clock = sequence_clock(sequence, slow_motion_factor)
+    resolved, requested_window_s = resolve_window(requested, clock)
+
     pipeline = default_pipeline(resolved)
     selected = landmarks if landmarks is not None else tuple(Landmark)
 
@@ -301,16 +380,17 @@ def filter_sequence(
 
     elapsed = time.perf_counter() - started
     reports = [entry.report for entry in filtered.values()]
-    timestamps = (
-        next(iter(filtered.values())).t
-        if filtered
-        else np.array(
-            [frame.timestamp_s / slow_motion_factor for frame in sequence.frames],
-            dtype=np.float64,
-        )
-    )
+    timestamps = next(iter(filtered.values())).t if filtered else clock
 
     tracker.report("done", len(selected), len(selected))
+
+    warnings = _sequence_warnings(reports, resolved)
+    if requested_window_s is not None:
+        # First, because it is the reason for anything else the report says about
+        # the window, and a reader who stops after one line should get that one.
+        warnings.insert(
+            0, _widening_warning(resolved, requested_window_s, sampling_interval_s(clock))
+        )
 
     return FilteredSequence(
         space=space,
@@ -321,11 +401,12 @@ def filter_sequence(
         intrinsics=intrinsics,
         report=SequenceFilterReport(
             config=resolved,
+            requested_window_s=requested_window_s,
             space=space,
             slow_motion_factor=slow_motion_factor,
             samples=len(sequence.frames),
             landmarks=reports,
             elapsed_s=elapsed,
-            warnings=_sequence_warnings(reports, resolved),
+            warnings=warnings,
         ),
     )

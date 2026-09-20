@@ -1,5 +1,12 @@
 {
   "permissions": {
-    "allow": ["Read(//tmp/**)", "Read(//private/tmp/**)"]
+    "allow": [
+      "Read(//tmp/**)",
+      "Read(//private/tmp/**)",
+      "Read(//Users/williamchang/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/williamchang"
+    ]
   }
 }

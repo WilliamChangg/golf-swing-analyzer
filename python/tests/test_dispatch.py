@@ -27,11 +27,14 @@ from tests.conftest import CFR_30FPS, CFR_FRAME_COUNT, SQUARE_FRAME, requires_ff
 # hand on purpose: the table is what makes a newly-registered method visible.
 _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "doctor": {},
+    "list_models": {},
+    "install_model": {"name": "pose_landmarker_full"},
     "probe_video": {"path": str(CFR_30FPS)},
     "extract_poses": {"path": str(CFR_30FPS)},
     "filter_poses": {"path": "poses.parquet"},
     "detect_phases": {"path": "poses.parquet"},
     "compute_metrics": {"path": "poses.parquet"},
+    "coach_swing": {"path": "poses.parquet"},
     "sync_clips": {
         "reference": {"path": "a.parquet"},
         "target": {"path": "b.parquet"},
@@ -55,9 +58,13 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
     "get_calibration": {"project_id": 1},
     "clear_calibration": {"project_id": 1},
     "reconstruct": {"project_id": 1},
+    "reconstruct_scene": {"project_id": 1},
     "track_club": {"path": str(CFR_30FPS)},
     "detect_ball": {"path": str(CFR_30FPS)},
     "locate_impact": {"path": str(CFR_30FPS)},
+    "seek_index": {"path": str(CFR_30FPS)},
+    "pose_overlay": {"path": "poses.parquet"},
+    "compare_swings": {"reference_path": "a.parquet", "target_path": "b.parquet"},
 }
 
 # Everything that runs in milliseconds. `extract_poses` loads a model and
@@ -67,7 +74,17 @@ _METHOD_PARAMS: dict[str, dict[str, object]] = {
 # only safe to call here because `conftest.isolated_data` redirects the database
 # into `tmp_path`. Without that this table would create projects in the
 # developer's real data directory on every run.
-_FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
+#
+# `seek_index` qualifies for the same reason `probe_video` does -- it is two
+# ffprobe passes over a committed 60-frame fixture and touches nothing else.
+_FAST_METHODS = {
+    "doctor",
+    "probe_video",
+    "create_project",
+    "list_projects",
+    "list_models",
+    "seek_index",
+}
 
 # `calibrate_camera` and `calibrate_stereo` are absent from the fast set and from
 # the slow one: both need board footage, which this repository does not contain,
@@ -75,11 +92,24 @@ _FAST_METHODS = {"doctor", "probe_video", "create_project", "list_projects"}
 # against the engine. `tests/test_calibration.py` covers the path they call into,
 # from rendered board views, which is the stronger test of the two.
 #
+# `pose_overlay` is absent from both sets because it reads a stored pose
+# sequence, which means extracting one first -- the same reason `filter_poses`
+# and `compute_metrics` are absent. `tests/test_overlay.py` drives the builder it
+# calls into directly, from a synthetic sequence whose landmarks are inputs.
+#
 # `reconstruct` is absent for the same reason and one more: it needs a project
 # holding two calibrated clips *and* an alignment between them, which is three
 # pieces of state that only exist together on a real session.
 # `tests/test_reconstruction.py` drives the engine it calls into directly, from a
-# synthetic body whose 3D positions are inputs.
+# synthetic body whose 3D positions are inputs. `reconstruct_scene` runs the same
+# reconstruction and arranges it, so it is absent on the same grounds and
+# `tests/test_scene.py` covers the builder.
+#
+# `compare_swings` is absent from both sets because it runs that whole chain
+# *twice*, on two clips that each need a stored pose sequence. The table entry
+# exists so a method added without a test is still caught here;
+# `tests/test_comparison_compare.py` drives `compare()` directly, from two
+# synthetic swings whose relationship to each other is known by construction.
 
 
 class TestCall:

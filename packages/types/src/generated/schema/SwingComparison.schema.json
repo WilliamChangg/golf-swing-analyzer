@@ -1,0 +1,982 @@
+{
+  "$defs": {
+    "BodySide": {
+      "enum": [
+        "left",
+        "right"
+      ],
+      "title": "BodySide",
+      "type": "string"
+    },
+    "BracketTerm": {
+      "description": "One named contribution to what a difference had to clear.\n\nItemised rather than summed into a single number, because the three sources\ncall for completely different responses: a clock term is fixed by a faster\ncamera, a measurement term by a steadier landmark, and a camera term by\nputting the tripod back where it was.",
+      "properties": {
+        "source": {
+          "description": "What produced this term, in a few words.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Its size, in the metric's own unit.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "value",
+        "reason"
+      ],
+      "title": "BracketTerm",
+      "type": "object"
+    },
+    "CalibrationStatus": {
+      "description": "What this build may claim about the geometry of a recording.\n\nThe honesty gate of Phases 8 and 9, as a type. It is ordered, and\n`at_least` is how a consumer asks the question it actually has -- \"may I\ntriangulate\" -- rather than enumerating the values that permit it and\nforgetting one when a fourth is added.\n\nNONE\n    No calibration. Every measurement is a statement about the image plane,\n    which is what Phases 5 and 6 produce and label as such. The lens's\n    distortion is present in every landmark and unmeasured.\nINTRINSICS\n    One camera's focal lengths, optical centre and distortion are measured.\n    Landmarks can be undistorted, so projected measurements improve, and a\n    pixel becomes a known direction. **Still no depth, so still no\n    metric-scale 3D claim.**\nSTEREO\n    Both cameras are calibrated and their relative pose is measured, so two\n    views of one instant give an intersection rather than two directions.\n    This is what Phase 9 triangulates with.",
+      "enum": [
+        "none",
+        "intrinsics",
+        "stereo"
+      ],
+      "title": "CalibrationStatus",
+      "type": "string"
+    },
+    "CameraAgreement": {
+      "description": "Whether the two clips were filmed from the same place, and how closely.\n\n**The measurement this phase exists for.** Every projected quantity is a fact\nabout a camera position as much as about a body, and the view detector's\nthree labels are far too coarse to decide whether two clips share one: a\ncamera can move twenty degrees round a player and stay comfortably inside\n`face_on`.\n\nThe evidence is the projected shoulder span at address, in torso lengths --\nthe same number `ViewEstimate` decides the view from, and the same number\nevery foreshortening rotation is referred to. `openness` divides it by the\nwidest the line was ever seen in that clip, which makes it the cosine of how\nfar off broadside the shoulders were at address; the arccosine of that is an\nestimate of the camera's azimuth.\n\n**It is an estimate with two real weaknesses, stated rather than buried.** It\nassumes both clips show the same body, because a wider-shouldered player\nprojects a wider line from the same place; and it depends on each clip\ncontaining a frame where the shoulders come square, which Phase 5 recorded\nlandmark noise overstating by 12% on the reference footage. It is used to\nrefuse and to widen a bracket, never to correct a value.",
+      "properties": {
+        "reference_span": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Projected shoulder span at address, in torso lengths. Null when that clip produced no view estimate, which is what a clip with no detected swing does -- there is then no address phase to measure it over."
+        },
+        "target_span": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "span_disagreement": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Absolute difference of the two spans, divided by their mean. Null when either span is, and **not** a large number standing in for unknown: the gate below reads this, and an infinity here would refuse with a reason that sounded like a measurement."
+        },
+        "reference_openness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target_openness": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference_azimuth_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "How far off broadside this camera stood, in degrees, from the arccosine of `openness`. Null when the clip supplied no usable openness -- which is not a claim that the camera was square.\n\n**Reported and bracketed with, never gated on.** The arccosine is flat near broadside, so it turns a one-percent error in `openness` into eight degrees of azimuth; a gate on this number would refuse every pair ever filmed. The gate is `span_disagreement`, which is the measurement rather than a function of it."
+        },
+        "target_azimuth_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "azimuth_separation_deg": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The furthest apart the two cameras can have been, in degrees: the **sum** of the two azimuths, not their difference. Both are unsigned, because foreshortening is identical from either side of broadside and nothing here separates them -- so two cameras each five degrees off may have been in the same place or ten degrees apart, and a bracket has to assume the second."
+        },
+        "consistent": {
+          "description": "Whether the two cameras are close enough together for a projected quantity to be compared at all. Decided by the view class and by `span_disagreement`; false refuses every projected, image-plane and foreshortened difference by name.",
+          "type": "boolean"
+        },
+        "methodology": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "consistent",
+        "methodology"
+      ],
+      "title": "CameraAgreement",
+      "type": "object"
+    },
+    "CameraView": {
+      "description": "Where the camera stood relative to the player.\n\nThe single fact that decides what a projected measurement *means*. The same\nspine tilt is lateral side bend seen face-on and forward posture angle seen\ndown the line; the same hip displacement is a slide towards the target in one\nand a move towards the ball in the other. Nothing in the arithmetic\ndistinguishes them, so the view is measured and carried on every metric, and\nthe anatomical reading is stated per view rather than assumed.\n\nFACE_ON\n    Perpendicular to the target line, looking at the player. The shoulder\n    line lies across the frame, so rotation is measurable by foreshortening\n    and left and right are distinguishable.\nDOWN_THE_LINE\n    Along the target line. The shoulder line points towards the camera and\n    collapses, so rotation about the spine is not recoverable, and the\n    frame's horizontal axis runs towards and away from the ball.\n\n    **Which end of the target line is not determined.** A camera behind the\n    player and one in front of them foreshorten the shoulder line\n    identically, and nothing else here separates them. The measurable\n    consequences are the same either way, which is why one label covers\n    both; what it costs is the sign of anything measured along the frame's\n    horizontal axis, so those quantities are reported as image directions\n    rather than as \"towards the player\" or \"away from them\". The reference\n    clip `data/amateur/dtl/iron_dtl.mp4` is filmed from in front, despite its name.\nUNKNOWN\n    Oblique, or too little of the body tracked at address to tell. Not a\n    failure: an oblique camera genuinely supports some measurements and not\n    others, and saying so beats picking the nearer label.",
+      "enum": [
+        "face_on",
+        "down_the_line",
+        "unknown"
+      ],
+      "title": "CameraView",
+      "type": "string"
+    },
+    "ChannelSample": {
+      "description": "Both clips' value at one position on the normalised axis, and their difference.\n\nOne object rather than parallel arrays, so that \"null exactly where nothing\nis supported\" survives into TypeScript instead of becoming a check every\nconsumer writes separately. Same argument Phase 15 made for a scene point.",
+      "properties": {
+        "position": {
+          "type": "number"
+        },
+        "reference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Null where the reference clip supports no value."
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "difference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "target minus reference. Null unless both sides have a value."
+        },
+        "bracket": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a difference here would have to clear: each clip's event ambiguity, carried onto this axis and multiplied by the local slope of its own curve, then summed. Large where the curve is steep, which is exactly where two curves most easily appear to differ."
+        },
+        "resolved": {
+          "default": false,
+          "description": "Whether `difference` clears `bracket`. False where either is null.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "position",
+        "reference"
+      ],
+      "title": "ChannelSample",
+      "type": "object"
+    },
+    "ClipSummary": {
+      "description": "What one side of the comparison is, and what it is entitled to claim.\n\nEvery field here is something that can differ between two recordings without\neither swing differing, which is why they are on the report rather than left\nto the caller to remember: a reader looking at a difference needs to be able\nto see that one clip was undistorted and the other was not.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content_key": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/ContentKey"
+            }
+          ],
+          "description": "Identifies the recording by content. Two comparisons of the same pair are the same comparison; two clips with the same filename are not necessarily the same clip."
+        },
+        "frames": {
+          "type": "integer"
+        },
+        "view": {
+          "$ref": "#/$defs/CameraView"
+        },
+        "lead_side": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BodySide"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "calibration": {
+          "$ref": "#/$defs/CalibrationStatus"
+        },
+        "slow_motion_factor": {
+          "type": "number"
+        },
+        "torso_length": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Median shoulder-midpoint to hip-midpoint distance, in frame widths. Null when the clip never tracked a torso, which is what a clip with no detected swing looks like. Every length and speed in this report is divided by it, so it is reported rather than hidden -- it is the one number that decides whether two clips of differently-framed subjects are comparable at all."
+        },
+        "clock": {
+          "$ref": "#/$defs/PhaseClock"
+        }
+      },
+      "required": [
+        "path",
+        "content_key",
+        "frames",
+        "view",
+        "calibration",
+        "slow_motion_factor",
+        "clock"
+      ],
+      "title": "ClipSummary",
+      "type": "object"
+    },
+    "ClockKnot": {
+      "description": "One event, and how well the clip places it.\n\n`ambiguity_s` is the half-width of where the true instant could be, in real\nseconds. It starts at one frame interval -- the clip's own clock resolution,\ntaken from the events rather than from a declared frame rate, for the reasons\n`coaching.bracket` gives -- and is widened where an independent estimate of\nthe same instant disagrees by more. Phase 4 corroborates impact with the low\npoint of the hand arc; where two estimates of one instant sit 40 ms apart,\n40 ms is the honest ambiguity and one frame is not.",
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/SwingEvent"
+        },
+        "position": {
+          "description": "Where this event sits on the normalised axis.",
+          "type": "number"
+        },
+        "frame_index": {
+          "type": "integer"
+        },
+        "timestamp_s": {
+          "description": "Real-clock instant, after any slow-motion factor has been divided out. On a slowed clip this does not index the video file.",
+          "type": "number"
+        },
+        "confidence": {
+          "description": "Phase 4's own, carried through.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "ambiguity_s": {
+          "description": "Half-width of where this instant could be, in real seconds.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "ambiguity_source": {
+          "description": "What set the ambiguity, in words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "event",
+        "position",
+        "frame_index",
+        "timestamp_s",
+        "confidence",
+        "ambiguity_s",
+        "ambiguity_source"
+      ],
+      "title": "ClockKnot",
+      "type": "object"
+    },
+    "ComparisonConfig": {
+      "additionalProperties": false,
+      "description": "Policy for the comparison layer.\n\n**Structural bounds, not golf norms**, as everywhere else here. Nothing in\nthis file says what a good swing looks like, and the two camera tolerances\nare the only numbers with a measurement behind them rather than a statement\nof policy.",
+      "properties": {
+        "samples": {
+          "default": 121,
+          "description": "Points on the normalised axis, spanning takeaway to finish. 121 puts one every fortieth of a phase, which is finer than the frame rate of any clip this project has and coarse enough that the payload stays small. Nothing is interpolated beyond the clip's own samples: a position whose neighbours are unsupported comes back null.",
+          "maximum": 2001,
+          "minimum": 8,
+          "type": "integer"
+        },
+        "min_confidence": {
+          "default": 0.25,
+          "description": "Confidence below which a measurement does not support a comparison. Stated policy, and deliberately the same number `CoachingConfig` uses: a measurement good enough to compare against a published band is good enough to compare against another measurement.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "max_span_disagreement": {
+          "default": 0.1,
+          "description": "How far apart the two clips' address shoulder spans may sit, as a fraction of their mean, before the cameras are judged to have moved and every projected difference is refused.\n\n**The one threshold here with a measurement behind it.** `scripts/benchmark_compare.py --sweep camera` films one unchanged swing from a series of azimuths at the landmark noise Phase 3 measured on real footage, and reports both what the span does and what the metrics do. The gate is on the span rather than on the azimuth derived from it because the span is the measurement: the arccosine that turns it into an angle is flat near broadside and amplifies a percent into eight degrees.",
+          "minimum": 0.0,
+          "type": "number"
+        }
+      },
+      "title": "ComparisonConfig",
+      "type": "object"
+    },
+    "ContentKey": {
+      "description": "Identity of a file's contents, used to key derived artifacts.\n\nThe algorithm travels with the digest so a cache written under one scheme is\nnever silently compared against a digest produced by another.",
+      "properties": {
+        "algorithm": {
+          "$ref": "#/$defs/HashAlgorithm"
+        },
+        "digest": {
+          "description": "Lowercase hex sha256 digest.",
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "File size at the time the digest was taken.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "algorithm",
+        "digest",
+        "size_bytes"
+      ],
+      "title": "ContentKey",
+      "type": "object"
+    },
+    "DifferenceRefusal": {
+      "description": "Why a quantity present in both clips was not compared.\n\nEach is a different thing to do about it, which is why they are a typed set\nrather than a sentence -- the same argument `FindingRefusal` makes one layer\nacross.\n\nNO_SWING\n    One of the clips contains no detected swing, so it has no metrics and no\n    clock to normalise onto.\nMISSING\n    The quantity was produced for one clip and not the other. Usually a fact\n    about the recording that did not produce it, and its own `MetricSet`\n    says which.\nVIEW_MISMATCH\n    The two clips were filmed from different camera positions. A projected\n    angle is a fact about a camera position as much as about a body, so the\n    two numbers are not measurements of the same quantity. Durations survive\n    this; a stopwatch does not care where the camera stood.\nCAMERA_MOVED\n    Both clips were filmed from the same *class* of position and not from the\n    same position. Measured from the address shoulder span, which is what the\n    view detector reads and what every foreshortening rotation is referred\n    to. See `CameraAgreement`.\nCALIBRATION_MISMATCH\n    One clip's landmarks had a lens correction applied and the other's did\n    not. Phase 8 measured that correction moving peak hand speed by 3.0% and\n    a rotation by up to 1.2 degrees on real footage, which is a systematic\n    difference between the two recordings and not between the two swings.\nSUPPLIED_TIMEBASE\n    At least one clip carries a slow-motion factor, which is supplied rather\n    than measured. A duration from such a clip is a measured number\n    multiplied by a guess, and a difference of two of them is a difference of\n    two guesses. A **ratio** of two durations from one clip divides it out\n    and survives, which is the same gate Phase 13 applies.\nLOW_CONFIDENCE\n    One of the two measurements does not support a conclusion on its own, so\n    a difference of the two supports less.\nNO_BRACKET\n    Neither clip's measurement carries an uncertainty, and the quantity is\n    not one whose bracket can be derived from the clock. There is then no\n    distance a difference could be required to clear, and one invented here\n    would decide the answer.\nUNRESOLVED\n    The difference is real arithmetic and smaller than what the two\n    recordings can resolve. The most common outcome, and the one worth\n    reading: it names a difference that a faster camera or a steadier\n    landmark would settle.",
+      "enum": [
+        "no_swing",
+        "missing",
+        "view_mismatch",
+        "camera_moved",
+        "calibration_mismatch",
+        "supplied_timebase",
+        "low_confidence",
+        "no_bracket",
+        "unresolved"
+      ],
+      "title": "DifferenceRefusal",
+      "type": "string"
+    },
+    "Direction": {
+      "description": "Which way a difference went. Two members, and both are deliberate.\n\nHIGHER  - the target's value is larger than the reference's.\nLOWER   - the target's value is smaller.\n\nThere is no third member. \"The same\" is not a verdict this system can reach:\ntwo values closer together than the pair can resolve produce\n`DifferenceRefusal.UNRESOLVED`, which says the recordings could not tell them\napart rather than that the swings agreed. And there is no \"better\": see the\nmodule docstring.",
+      "enum": [
+        "higher",
+        "lower"
+      ],
+      "title": "Direction",
+      "type": "string"
+    },
+    "HandPathOverlay": {
+      "description": "Both clips' hand arcs, resampled onto the shared axis.\n\nThe one part of this report that is a picture rather than a number, and it\ncarries no bracket: a bracket on a two-dimensional path would be an ellipse\nper sample, and nothing here has measured the second axis of one. It is drawn\nas evidence to look at, alongside numbers that are bracketed, and the\ncontract says so rather than leaving a reader to assume the arcs are as well\ndetermined as the curves beside them.",
+      "properties": {
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/PathSample"
+          },
+          "type": "array"
+        },
+        "unit": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/MetricUnit"
+            }
+          ],
+          "default": "torso_lengths"
+        },
+        "comparable": {
+          "description": "False when the two clips' views differ, which makes the arcs two shapes.",
+          "type": "boolean"
+        },
+        "reason": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "comparable"
+      ],
+      "title": "HandPathOverlay",
+      "type": "object"
+    },
+    "HashAlgorithm": {
+      "description": "How a `ContentKey` digest was computed.\n\nSHA256          - the whole file. Use when the answer must be an integrity\n                  check, as it is for model weights.\nSHA256_SAMPLED  - size, plus sha256 over three fixed windows of the file.\n                  **This is not an integrity check.** It exists because\n                  hashing every byte of a multi-gigabyte recording on every\n                  open costs seconds, and a cache key only has to change\n                  when the file changes, not prove that it did not.",
+      "enum": [
+        "sha256",
+        "sha256-sampled-v1"
+      ],
+      "title": "HashAlgorithm",
+      "type": "string"
+    },
+    "MetricBasis": {
+      "description": "What kind of claim a metric's value is.\n\nTEMPORAL\n    A duration, or a ratio of durations. Depends on the clock and nothing\n    else, so it is unaffected by where the camera stood. The only basis in\n    this phase that measures the body rather than a picture of it.\n\nIMAGE_PLANE\n    A distance or a speed between two points as they appear in the frame,\n    divided by the subject's torso length. Exact as a statement about the\n    image; it under-reports any motion that ran towards or away from the\n    camera, which it cannot see at all.\n\nPROJECTED_ANGLE\n    The angle between two segments as they appear in the frame. Equal to the\n    real joint angle only when both segments lie in the image plane, and\n    smaller than it otherwise. Never a 3D joint angle.\n\nFORESHORTENED_ANGLE\n    A rotation about the vertical inferred from how much a body segment\n    shortened in the image: a shoulder line seen at 60% of its full width\n    has turned about 53 degrees away from the camera. It assumes the segment\n    was square to the camera at its reference frame, and it is blind to\n    direction -- a turn and its mirror image shorten identically -- so the\n    value is a magnitude.\n\nSPATIAL\n    A length, angle or speed between points **reconstructed in three\n    dimensions** from two calibrated views of the same instant. The only\n    basis here that is a statement about the body rather than about a\n    picture of it, and the reason every other one is named the way it is.\n\n    It is also the only basis whose meaning does not depend on the camera\n    view: a distance between two 3D points is the same distance from\n    anywhere, so a `SPATIAL` metric carries one anatomical reading instead\n    of one per view. What it does depend on is the *reconstruction*, whose\n    own error is reported per point and propagated into the metric's\n    `uncertainty` -- a 3D number is not automatically a better number, it is\n    a differently-conditioned one, and the conditioning is the ray\n    convergence angle rather than the camera position.",
+      "enum": [
+        "temporal",
+        "image_plane",
+        "projected_angle",
+        "foreshortened_angle",
+        "spatial"
+      ],
+      "title": "MetricBasis",
+      "type": "string"
+    },
+    "MetricDifference": {
+      "description": "One quantity measured in both clips, and how far apart the two came out.\n\nCarries no severity, no score and no judgement of which value is preferable.\nSee the module docstring; a test asserts the absence of those field names.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MetricName"
+        },
+        "label": {
+          "description": "The metric's own display label, including its anchor.",
+          "type": "string"
+        },
+        "group": {
+          "$ref": "#/$defs/MetricGroup"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        },
+        "basis": {
+          "$ref": "#/$defs/MetricBasis"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference_value": {
+          "type": "number"
+        },
+        "target_value": {
+          "type": "number"
+        },
+        "difference": {
+          "description": "target minus reference, in the metric's own unit.",
+          "type": "number"
+        },
+        "direction": {
+          "$ref": "#/$defs/Direction"
+        },
+        "bracket": {
+          "description": "What the difference had to clear, in the metric's unit. The **sum** of the terms below rather than their quadrature, which is where this parts company with `coaching.combined_bracket`: two anchors in one clip share a systematic error that largely cancels in their difference, and two separate recordings share nothing. A sum of bounds is a bound; a quadrature of bounds is not.",
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "terms": {
+          "description": "Where the bracket came from, itemised.",
+          "items": {
+            "$ref": "#/$defs/BracketTerm"
+          },
+          "type": "array"
+        },
+        "margin": {
+          "description": "How far the difference sits outside the bracket, in the metric's unit. Always positive: a difference that does not clear its bracket is refused as `unresolved` rather than reported with a margin of zero.",
+          "exclusiveMinimum": 0.0,
+          "type": "number"
+        },
+        "confidence": {
+          "description": "The weaker of the two measurements' confidences.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "reference_frames": {
+          "description": "Frames the reference clip's value was measured on. Indices into its video.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "target_frames": {
+          "description": "The same, for the target clip's video.",
+          "items": {
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "interpretation": {
+          "description": "What the difference means anatomically from this view, in words.",
+          "type": "string"
+        },
+        "methodology": {
+          "description": "How both numbers were produced. Never omitted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "group",
+        "unit",
+        "basis",
+        "reference_value",
+        "target_value",
+        "difference",
+        "direction",
+        "bracket",
+        "terms",
+        "margin",
+        "confidence",
+        "reference_frames",
+        "target_frames",
+        "interpretation",
+        "methodology"
+      ],
+      "title": "MetricDifference",
+      "type": "object"
+    },
+    "MetricGroup": {
+      "description": "Which family a metric belongs to. Presentation, not semantics.",
+      "enum": [
+        "posture",
+        "rotation",
+        "arms",
+        "timing"
+      ],
+      "title": "MetricGroup",
+      "type": "string"
+    },
+    "MetricName": {
+      "description": "Every quantity this engine knows how to measure.\n\nNamed per *quantity*, not per quantity-and-instant: `SPINE_TILT` at the top\nand at impact are the same measurement made twice, and they carry the same\nunit, basis and methodology. Which instant a particular value belongs to is\non the metric's `event` field, so the set of names does not grow by\nmultiplication every time another anchor becomes interesting.",
+      "enum": [
+        "spine_tilt",
+        "left_knee_flex",
+        "right_knee_flex",
+        "hip_sway",
+        "head_sway",
+        "head_lift",
+        "shoulder_turn",
+        "pelvis_turn",
+        "x_factor",
+        "shoulder_tilt",
+        "pelvis_tilt",
+        "hand_depth",
+        "hand_path_length",
+        "peak_hand_speed",
+        "lead_arm_angle",
+        "trail_arm_angle",
+        "shoulder_turn_3d",
+        "pelvis_turn_3d",
+        "x_factor_3d",
+        "lead_arm_angle_3d",
+        "trail_arm_angle_3d",
+        "peak_hand_speed_3d",
+        "backswing_duration",
+        "downswing_duration",
+        "follow_through_duration",
+        "takeaway_to_impact",
+        "tempo_ratio"
+      ],
+      "title": "MetricName",
+      "type": "string"
+    },
+    "MetricUnit": {
+      "description": "What a metric's value is in.\n\n`TORSO_LENGTHS` is the length unit throughout, rather than frame widths or\npixels. A distance in frame widths halves when the camera is moved twice as\nfar away; the same distance in the subject's own torso lengths does not. It\nis not a metric unit and does not pretend to be one -- it is a ratio of two\nmeasured image distances, which is exactly what survives an unknown camera.",
+      "enum": [
+        "degrees",
+        "seconds",
+        "ratio",
+        "torso_lengths",
+        "torso_lengths_per_s",
+        "metres_per_s"
+      ],
+      "title": "MetricUnit",
+      "type": "string"
+    },
+    "PathSample": {
+      "description": "Where each clip's hands were at one position on the normalised axis.\n\nIn torso lengths from that clip's own address hand position, so two subjects\nof different sizes filmed from different distances are on one scale. `x` is\nalong the image's horizontal and `y` is upward -- an image direction, not an\nanatomical one, because a down-the-line camera may be in front of the player\nor behind them and nothing here separates those.",
+      "properties": {
+        "position": {
+          "type": "number"
+        },
+        "reference_x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reference_y": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target_x": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target_y": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "position"
+      ],
+      "title": "PathSample",
+      "type": "object"
+    },
+    "PhaseClock": {
+      "description": "The map from one clip's clock onto swing position.\n\nPiecewise linear, with a knot at each of the four events. Linear *in time*\nwithin each phase rather than in frame number, because the footage may be\nvariable-rate and because a slow-motion factor has already been divided out\nof the timestamps.\n\nA clip missing any of the four events has no clock: three knots cannot\nnormalise the phase they do not bound, and extrapolating one would invent the\ninstant that decides where every sample lands.",
+      "properties": {
+        "knots": {
+          "description": "Four, in swing order, or empty when the clip could not be normalised.",
+          "items": {
+            "$ref": "#/$defs/ClockKnot"
+          },
+          "type": "array"
+        },
+        "usable": {
+          "description": "Whether all four events were located.",
+          "type": "boolean"
+        },
+        "frame_interval_s": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The clip's clock resolution in real seconds, as its own events imply it. The floor under every ambiguity above."
+        },
+        "slow_motion_factor": {
+          "default": 1.0,
+          "description": "The factor the timestamps were divided by, as supplied. Carried because a duration read off this clock is a measured number multiplied by it.",
+          "type": "number"
+        },
+        "methodology": {
+          "description": "How the map was built, in words. Never omitted.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "knots",
+        "usable",
+        "methodology"
+      ],
+      "title": "PhaseClock",
+      "type": "object"
+    },
+    "RefusedDifference": {
+      "description": "A quantity that could have been compared and deliberately was not.\n\nReported rather than omitted, for the reason `RefusedMetric` and\n`RefusedFinding` are: a quantity that did not differ and a quantity that\ncould not be compared look identical in a list of differences, and they mean\nopposite things.",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/MetricName"
+        },
+        "label": {
+          "type": "string"
+        },
+        "event": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SwingEvent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "refusal": {
+          "$ref": "#/$defs/DifferenceRefusal"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reference_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The arithmetic, where both values exist. Present on an `unresolved` refusal precisely because the numbers are not secret -- what is refused is the claim that they differ, not the values themselves."
+        },
+        "target_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bracket": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "refusal",
+        "reason"
+      ],
+      "title": "RefusedDifference",
+      "type": "object"
+    },
+    "SwingEvent": {
+      "description": "The instants that divide a swing.\n\nTAKEAWAY - the hands begin moving away from the ball.\nTOP      - the backswing reverses; the hands are momentarily near rest.\nIMPACT   - estimated from hand kinematics, not observed. See module docstring.\nFINISH   - the hands come back to rest after the follow-through.",
+      "enum": [
+        "takeaway",
+        "top",
+        "impact",
+        "finish"
+      ],
+      "title": "SwingEvent",
+      "type": "string"
+    },
+    "TrajectoryChannel": {
+      "description": "A scalar signal through the swing, comparable once both clips are normalised.\n\nThese are the signals Phase 4 reads the swing's events off, carried up rather\nthan recomputed, so that a curve in this report and the timeline beside it\ncannot come from two different readings of the same clip.\n\nHAND_SPEED and HAND_HEIGHT are divided by each subject's own torso length, so\nthey survive a change of framing and are dimensionless ratios rather than\nspeeds and distances. SHOULDER_ANGLE and HIP_ANGLE are projected into the\nimage plane and are comparable only between clips filmed from the same place.",
+      "enum": [
+        "hand_speed",
+        "hand_height",
+        "shoulder_angle",
+        "hip_angle"
+      ],
+      "title": "TrajectoryChannel",
+      "type": "string"
+    },
+    "TrajectoryComparison": {
+      "description": "One signal from both clips, on one axis, with the difference bracketed.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/TrajectoryChannel"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unit": {
+          "$ref": "#/$defs/MetricUnit"
+        },
+        "basis": {
+          "$ref": "#/$defs/MetricBasis"
+        },
+        "samples": {
+          "items": {
+            "$ref": "#/$defs/ChannelSample"
+          },
+          "type": "array"
+        },
+        "resolved_fraction": {
+          "description": "Fraction of the sampled positions where the two curves differ by more than the pair can resolve. A count of where they differ, and deliberately not a distance between them: a single number summarising how far apart two swings are is the score this report does not have.",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "largest_difference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Biggest resolved difference, in the channel's unit."
+        },
+        "largest_at": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Where on the axis that sat."
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DifferenceRefusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Set when this channel was not comparable at all."
+        },
+        "reason": {
+          "default": "",
+          "description": "Why, when `refusal` is set.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "channel",
+        "label",
+        "unit",
+        "basis",
+        "resolved_fraction"
+      ],
+      "title": "TrajectoryComparison",
+      "type": "object"
+    }
+  },
+  "description": "Everything this system concluded about two recordings, side by side.\n\n`computed` is false when either clip produced no swing, and then every list\nis empty rather than populated from whichever half worked.\n\n**Two recordings, and not necessarily two swings by one player.** Nothing\nhere can tell whether the same person made both, and nothing here asks: the\nlengths are in each subject's own torso lengths and the durations are on each\nclip's own clock, which is what makes a comparison arithmetically meaningful\nacross subjects and framings. What it does not make it is a comparison of\nlike with like -- two people are not two attempts -- and that judgement\nbelongs to whoever chose the two files.",
+  "properties": {
+    "schema_version": {
+      "default": 1,
+      "type": "integer"
+    },
+    "computed": {
+      "type": "boolean"
+    },
+    "reference": {
+      "$ref": "#/$defs/ClipSummary"
+    },
+    "target": {
+      "$ref": "#/$defs/ClipSummary"
+    },
+    "camera": {
+      "$ref": "#/$defs/CameraAgreement"
+    },
+    "differences": {
+      "items": {
+        "$ref": "#/$defs/MetricDifference"
+      },
+      "type": "array"
+    },
+    "refused": {
+      "items": {
+        "$ref": "#/$defs/RefusedDifference"
+      },
+      "type": "array"
+    },
+    "trajectories": {
+      "items": {
+        "$ref": "#/$defs/TrajectoryComparison"
+      },
+      "type": "array"
+    },
+    "hand_path": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HandPathOverlay"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "metrics_considered": {
+      "default": 0,
+      "description": "Quantities examined, whatever came out of them.",
+      "type": "integer"
+    },
+    "config": {
+      "$ref": "#/$defs/ComparisonConfig"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "computed",
+    "reference",
+    "target",
+    "camera"
+  ],
+  "title": "SwingComparison",
+  "type": "object"
+}

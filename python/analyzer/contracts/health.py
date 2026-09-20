@@ -76,7 +76,9 @@ class ComputeInfo(BaseModel):
     mps_available: bool = Field(description="torch.backends.mps.is_available()")
     mps_built: bool = Field(description="torch.backends.mps.is_built()")
     cuda_available: bool = Field(description="torch.cuda.is_available()")
-    selected_device: str = Field(description="Device the engine will actually use.")
+    selected_device: str = Field(
+        description="Preferred torch device for auto selection; runtime probing may fall back to CPU."
+    )
     cpu_fallback_available: bool
     mediapipe_delegate: str = Field(
         description="Delegate MediaPipe will use on this platform ('cpu' or 'gpu')."

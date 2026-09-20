@@ -204,15 +204,21 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
 
     speed, t = signals.speed, signals.t
     if not np.any(np.isfinite(speed)):
-        return _empty_result(
-            signals,
-            resolved,
-            [
-                "The hands were never tracked, so there is no signal to find a swing in. "
-                "Check the filtering report: the landmarks may have been gated out, or "
-                "the clip's frame rate may be too low for the smoothing window."
-            ],
-        )
+        # The filtering report is where the reason actually is, and no CLI or
+        # desktop reader ever sees it -- they see this. Telling them to go and
+        # check it sent every low-frame-rate clip off to look at pose tracking
+        # instead of at the window that emitted nothing, so its own findings come
+        # along rather than a pointer to them.
+        reasons = filtered.report.warnings
+        opener = "The hands were never tracked, so there is no signal to find a swing in."
+        if reasons:
+            said = f"{opener} The filtering report says why:"
+        else:
+            said = (
+                f"{opener} The filtering report gives no reason, which is itself worth "
+                "reporting: the landmarks were most likely gated out for low confidence."
+            )
+        return _empty_result(signals, resolved, [said, *reasons])
 
     peak_speed = signals.peak_speed
     if not np.isfinite(signals.torso_length) or signals.torso_length <= 0:
@@ -247,7 +253,22 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
     assert impact is not None  # noqa: S101 - a finite value exists, checked above
 
     # --- top: the speed minimum at the highest point before impact ----------
-    highest = _nan_argmax(signals.height, 0, impact)
+    #
+    # Searched back `top_search_s`, rather than to the start of the clip. On 38
+    # seconds of range footage the hands reach their highest point of the whole
+    # clip nine seconds before the fastest frame, in an unrelated practice swing,
+    # and the real swing was refused for having a 9.63 s descent.
+    #
+    # The bound is not `max_downswing_s`, which is what the duration gate below
+    # will judge this against and looks like the obvious choice. A clip whose
+    # slow motion has not been declared arrives with every duration stretched by
+    # the playback factor, so a one-second cut would slice through a real
+    # downswing, measure whatever remained, and understate the factor
+    # `_slow_motion_warning` goes on to suggest. The clip would then be refused
+    # while being told a correction too small to fix it. Bounding wide keeps that
+    # advice honest and still discards motion no reading makes part of the swing.
+    top_floor = int(np.searchsorted(t, t[impact] - resolved.top_search_s, side="left"))
+    highest = _nan_argmax(signals.height, top_floor, impact)
     if highest is None:
         return _empty_result(
             signals,
@@ -274,14 +295,50 @@ def detect_phases(filtered: FilteredSequence, config: PhaseConfig | None = None)
     # Stillness must also be sustained. A single frame dipping under the
     # threshold is noise, and treating it as the hands having stopped is the
     # same failure in miniature.
+    #
+    # And bounded at the far end by `max_backswing_s`, for the reason the top is
+    # bounded: on an untrimmed clip the last sustained stillness before the swing
+    # can be minutes of somebody standing about, and a takeaway placed there is
+    # not wrong by a little. Unlike the top's bound this one is not implied by a
+    # gate -- there is no maximum backswing -- so it stays a bound on the
+    # *search* and never refuses anything.
     quiet = np.isfinite(speed) & (speed < threshold)
     sustained = [run for run in _runs(quiet) if t[run[1] - 1] - t[run[0]] >= resolved.min_still_s]
 
-    backswing_peak = _nan_argmax(speed, 0, top)
+    backswing_floor = int(np.searchsorted(t, t[top] - resolved.max_backswing_s, side="left"))
+    backswing_peak = _nan_argmax(speed, backswing_floor, top)
     limit = backswing_peak if backswing_peak is not None else top
-    before_backswing = [run for run in sustained if run[0] < limit]
+    before_backswing = [run for run in sustained if backswing_floor <= run[0] < limit]
     if before_backswing:
         takeaway = min(before_backswing[-1][1], top)
+    elif (
+        quietest := _nan_argmin(speed, backswing_floor, max(limit, backswing_floor + 1))
+    ) is not None:
+        # No still stretch in range, so the quietest frame in it. Falling back to
+        # the clip's first tracked frame instead would leave the takeaway outside
+        # the window the swing was found in, which is the failure this bound
+        # exists to prevent, reintroduced by the fallback.
+        #
+        # Which of these two happened decides what the reader should do about it,
+        # so they are not one message. If the search reached the first tracked
+        # frame and still found no stillness, the clip simply starts mid-motion.
+        # If the bound stopped it short, there is more clip before this and the
+        # hands are moving throughout it -- a different recording, and a
+        # different fix.
+        takeaway = quietest
+        if backswing_floor <= int(np.argmax(np.isfinite(speed))):
+            warnings.append(
+                "The hands are already moving in the first tracked frame, so the takeaway is "
+                "reported at the quietest frame before the backswing rather than located. "
+                "Recording from a still address would place it properly."
+            )
+        else:
+            warnings.append(
+                f"The hands do not come to rest in the {resolved.max_backswing_s:g} s before "
+                "the top, so the takeaway is reported at the quietest frame in that stretch "
+                "rather than located. The clip holds more than one swing's worth of movement; "
+                "trimming it to a single swing from a still address would place it properly."
+            )
     else:
         takeaway = int(np.argmax(np.isfinite(speed)))
         warnings.append(

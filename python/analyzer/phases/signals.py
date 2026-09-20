@@ -203,7 +203,7 @@ def choose_hand(filtered: FilteredSequence) -> HandTrack:
 
     The two are not the same choice, and the difference decides whole clips.
     Down-the-line footage hides one wrist behind the other, and which one it
-    hides changes through the swing: on `data/dtl/iron_dtl.mp4` the right wrist
+    hides changes through the swing: on `data/amateur/dtl/iron_dtl.mp4` the right wrist
     is visible through address and the backswing while the left is not, and the
     left takes over once the right disappears after impact. Counting frames
     picks the left (59 against 48) and misses the entire address and backswing,

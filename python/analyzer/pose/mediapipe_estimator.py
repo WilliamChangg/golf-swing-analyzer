@@ -39,17 +39,13 @@ from analyzer.contracts.pose import (
     PoseFrame,
     PoseModelInfo,
 )
+from analyzer.environment.hardware import mediapipe_delegate
 from analyzer.ingestion.reader import VideoFrame
 from analyzer.pose.estimator import (
     PoseEstimationError,
     model_info,
     resolve_model,
 )
-
-# MediaPipe's Tasks Python API has no GPU delegate on macOS, so requesting one
-# would either fail or silently fall back. The delegate is stated as measured
-# rather than as hoped for; see the same reasoning in environment/hardware.py.
-_DELEGATE = "cpu"
 
 # Defaults are MediaPipe's own. They are named here rather than left implicit
 # because they are recorded on every result, and a result is only reproducible
@@ -122,8 +118,11 @@ class MediaPipePoseEstimator:
     ) -> None:
         entry, path = resolve_model(model_name)
 
+        delegate = mediapipe_delegate()
         options = mp_vision.PoseLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path=str(path)),
+            base_options=BaseOptions(
+                model_asset_path=str(path), delegate=getattr(BaseOptions.Delegate, delegate.upper())
+            ),
             running_mode=mp_vision.RunningMode.VIDEO,
             # One pose: a swing video has one subject, and accepting more would
             # mean choosing between them later with no basis for the choice.
@@ -150,7 +149,7 @@ class MediaPipePoseEstimator:
         self._info = model_info(
             entry,
             path,
-            delegate=_DELEGATE,
+            delegate=delegate,
             min_pose_detection_confidence=min_pose_detection_confidence,
             min_pose_presence_confidence=min_pose_presence_confidence,
             min_tracking_confidence=min_tracking_confidence,

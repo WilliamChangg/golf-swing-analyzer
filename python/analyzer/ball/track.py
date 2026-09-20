@@ -380,7 +380,7 @@ def _establish(
     #
     # The window is part of the identification and not a veto applied afterwards,
     # which is how it was written first and which fails on real footage rather
-    # than in principle. On `data/face-on/rory_face_on.mp4` three stationary
+    # than in principle. On `data/rory/face-on/rory_face_on.mp4` three stationary
     # candidates empty and stay empty; the best-supported of them goes at frame
     # 193, in the middle of the backswing, where it is something the player's own
     # body moved in front of. Choosing on support and then vetoing the winner
@@ -554,7 +554,7 @@ def _assign(
     the camera does, and consumer footage moves: handheld, digitally stabilised,
     or a repost with a slow pan across it.
 
-    Measured on `data/face-on/rory_face_on.mp4`, where the camera drifts gently
+    Measured on `data/rory/face-on/rory_face_on.mp4`, where the camera drifts gently
     through the swing. Against a fixed reference the ball's offset grows
     monotonically from 11 px at frame 327 to 14 px at frame 360 while its contrast
     stays healthy at 0.52-0.62 throughout -- so `stillness` decays to 0.22, the

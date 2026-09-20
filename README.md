@@ -6,20 +6,26 @@ segmented deterministically, and biomechanics metrics are computed with explicit
 units, confidence, and methodology. All processing runs on your machine; video
 never leaves it.
 
-> **Status: Phases 0-11 of 21 complete.** The foundation, typed engine boundary,
+> **Status: Phases 0-17 of 21 complete.** The foundation, typed engine boundary,
 > environment health check, video ingestion, single-camera pose extraction,
 > temporal filtering, swing phase detection, the biomechanics metric engine,
 > explicit coordinate frames with measured camera-view tagging, two-camera time
 > alignment, camera calibration, multi-view 3D reconstruction, club shaft
-> tracking and ball detection are built and verified. No coaching engine exists
-> yet. **Nothing has been reconstructed, calibrated or club-tracked from real
-> footage** — no board capture and no simultaneous two-camera recording exists in
-> this repository, and the club figures come from a rendered shaft whose angle is
-> an input, so every figure in §9 and §10a is synthetic and is a floor. The ball
-> is the exception: impact has been **observed** on one real clip, and §10b says
-> what that one clip does and does not settle. Sections below marked _Not yet
-> implemented_ say so rather than describing features that do not exist. See
-> [docs/ROADMAP.md](docs/ROADMAP.md).
+> tracking, ball detection, the temporal-ML apparatus, the coaching engine, the
+> desktop workflow — a frame-accurate player, a pose overlay, and the metrics and
+> findings panels — and the 3D viewport, which reports how much of a
+> reconstruction's uncertainty the reader's own viewpoint is hiding, swing
+> comparison, and measured content/configuration-cached re-analysis are built
+> and verified. **Nothing has been reconstructed, calibrated or
+> club-tracked from real footage** — no board capture and no simultaneous
+> two-camera recording exists in this repository, and the club figures come from
+> a rendered shaft whose angle is an input, so every figure in §9 and §10a is
+> synthetic and is a floor. The ball is the exception: impact has been
+> **observed** on one real clip, and §10b says what that one clip does and does
+> not settle. The coaching engine ships twelve rules of which **nine are refused
+> on every recording this system can currently make**, for reasons §12 sets out.
+> Sections below marked _Not yet implemented_ say so rather than describing
+> features that do not exist. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
@@ -27,8 +33,9 @@ never leaves it.
 
 The goal is a serious computer-vision system, not a wrapper that forwards video
 to a language model. The analysis pipeline produces structured quantitative
-evidence; any LLM layer added later only translates that evidence into coaching
-language and is forbidden from inventing measurements.
+evidence; the LLM layer, now built, only rewords that evidence, is off by
+default, never sees a frame, and is held to a deterministic guard that discards
+any sentence containing a number the evidence does not.
 
 Design commitments that shape everything else:
 
@@ -101,15 +108,27 @@ checked-in TypeScript does not match.
 
 ## 5. Running analysis
 
-_Partially implemented — Phase 13 outstanding._ A clip can be imported,
-inspected, run through pose estimation, filtered into trajectories with
-derivatives, segmented into swing phases, measured, aligned against a second
-camera, and — with both cameras calibrated — reconstructed into 3D positions in
-metres. All of it from the app's **Video** screen except project management and
-reconstruction, and all of it from a terminal:
+A clip can be imported, inspected, run through pose estimation, filtered into
+trajectories with derivatives, segmented into swing phases, measured, aligned
+against a second camera, reconstructed into 3D positions in metres with both
+cameras calibrated, reasoned about, and laid over another swing.
+
+The app's **Swing** screen runs that whole chain on one clip and puts a
+frame-accurate player under it, with the pose overlay, the measurements and the
+findings on the same screen — because each of the last three is only checkable
+against the first. **Three-D** triangulates a session's pair and draws the
+result, with the frame the browser reports painting shared between the video and
+the viewport; **Compare** lays two swings over each other on a phase-relative
+clock and refuses every difference the camera could explain; **Sessions** manages
+which clips belong together, **Video** keeps the stage-by-stage panels for
+checking one step in isolation, and **Environment** is the health report. Club
+tracking, ball detection and labelling remain terminal-only.
+
+Everything is available from a terminal:
 
 ```bash
 uv run --project python analyzer probe   path/to/swing.mov   # container metadata
+uv run --project python analyzer frames  path/to/swing.mov   # frame/time map for seeking
 uv run --project python analyzer extract path/to/swing.mov   # pose landmarks
 uv run --project python analyzer extract path/to/swing.mov --model pose_landmarker_lite
 uv run --project python analyzer filter  path/to/swing.mov   # smooth + differentiate
@@ -140,6 +159,8 @@ uv run --project python analyzer project list
 uv run --project python analyzer reconstruct 1
 uv run --project python analyzer reconstruct 1 --json
 uv run --project python analyzer metrics faceon.mov --project 1   # now includes the 3D metrics
+uv run --project python analyzer scene 1        # the same, shaped for a viewport
+uv run --project python analyzer scene 1 --start 0 --end 200      # a window of it
 
 # The club. Coverage per swing phase first, because the clip-wide rate misleads.
 uv run --project python analyzer club faceon.mov
@@ -157,6 +178,16 @@ uv run --project python analyzer labels                           # the set, and
 uv run --project python analyzer dataset                          # features, classes, imbalance
 uv run --project python analyzer train                            # split, fit, score, register
 uv run --project python analyzer models                           # what each may claim
+
+# Conclusions, and the far longer list of things that cannot be concluded.
+uv run --project python analyzer coach faceon.mov
+uv run --project python analyzer coach faceon.mov --slow-motion 7
+uv run --project python analyzer coach faceon.mov --phrase-with http://127.0.0.1:11434/api/generate
+
+# Two swings, one clock, and everything the camera explains instead.
+uv run --project python analyzer compare before.mov after.mov
+uv run --project python analyzer compare before.mov after.mov --window 0.15
+uv run --project python analyzer compare before.mov after.mov --reference-slow-motion 7
 ```
 
 Extraction writes landmarks to a Parquet file keyed by the video's content, and
@@ -240,9 +271,22 @@ video, so it lives in `~/Library/Application Support/golf-swing-analyzer`
 (`$XDG_DATA_HOME` elsewhere) rather than in the cache, and clips are identified by
 content so moving a file does not break the record of what it is.
 
+Coaching is the only layer here that draws a conclusion rather than measuring
+one, and most of what it does is decline to. Each rule declares the source of the
+threshold it compares against — who published it, on whom, and **by what
+method** — and a threshold measured by three-dimensional motion capture is not a
+threshold on a rotation this engine inferred from how much a line shortened in
+one photograph. Nine of the twelve shipped rules are refused for that reason or
+because no number has ever been published for the quantity at all. Every finding
+that survives carries the frames its numbers were measured on, and no sentence in
+the report — including the engine's own — may contain a number absent from that
+evidence. §12 has the numbers and
+[ADR-0017](docs/decisions/ADR-0017-borrowed-thresholds-and-the-guard.md) the
+reasoning.
+
 The engine methods are `doctor`, `probe_video`, `extract_poses`, `filter_poses`,
-`detect_phases`, `compute_metrics`, `track_club`, `detect_ball`, `locate_impact`,
-`sync_clips`, `sync_project`,
+`detect_phases`, `compute_metrics`, `coach_swing`, `track_club`, `detect_ball`,
+`locate_impact`, `sync_clips`, `sync_project`,
 `create_project`, `list_projects`, `get_project`, `delete_project`, `add_clip`,
 `remove_clip`, `relocate_clip`, `calibrate_camera`, `calibrate_stereo`,
 `get_calibration`, `clear_calibration` and `reconstruct`.
@@ -296,7 +340,7 @@ MPS does not make pose inference GPU-accelerated.
 ## 8. Computer vision pipeline
 
 _Complete through Phase 12._ Six stages are built; what sits on top of them is
-in §10, §11 and §12.
+in §10, §11 and §13.
 
 **Ingestion.** Container inspection and frame decoding behind a `FrameSource`
 interface that yields display-oriented frames carrying real presentation
@@ -615,7 +659,405 @@ backswing, downswing, follow-through and takeaway-to-impact durations with the
 tempo ratio. Each is declared once, with its unit and basis, so a unit written
 next to a computation cannot drift from the one in the documentation.
 
-## 12. Model architecture
+## 12. Coaching methodology
+
+The layer that turns measurements into sentences, and the first one where being
+wrong is expensive rather than embarrassing. A wrong angle is a wrong number; a
+wrong finding is a golfer changing their swing.
+
+Twelve rules ship. **Five can reach a comparison at all**, and seven are refused
+before a clip is looked at, because the refusal is about the threshold rather
+than about the footage. On the four reference clips only two rules have ever
+produced a finding, and both are timing rules.
+
+### Why a borrowed threshold usually cannot be used
+
+Golf coaching runs on numbers with no papers behind them. Ninety degrees of
+shoulder turn, forty-five degrees of X-factor, three-to-one tempo. Hard-coded as
+`THRESHOLD = 90.0` they look identical, and they are not. So every rule carries a
+`ThresholdSource` stating who published the number, on whom, and by what method —
+and the method decides what the number may be compared against:
+
+| the source measured with         | it is a threshold on | rules |
+| -------------------------------- | -------------------- | ----- |
+| three-dimensional motion capture | a `spatial` metric   | 1     |
+| video                            | what that camera saw | 3     |
+| this clip, against itself        | its own uncertainty  | 2     |
+| no stated protocol               | **nothing at all**   | 6     |
+
+A `convention` source permits no basis. That is not an oversight awaiting a
+citation: a number with no published measurement protocol has no quantity
+attached to it, so there is nothing here it could be a threshold on.
+
+The reference footage shows what the alternative costs. On a tour
+professional's face-on clip this engine measures a **shoulder turn of 53.0 ± 5.5
+degrees at the top**. The player is not restricted; the measurement is a
+foreshortening estimate from one camera, which under-reports by tens of degrees
+and says so in its `basis`. A rule comparing that against "about ninety" —
+however heavily caveated — tells a tour player to turn more.
+
+Two rules sit either side of the same gap, and the pair is the point:
+`rotation.x_factor_top` has a number (from a 1992 magazine article) and no
+protocol; `rotation.x_factor_top_3d` has a protocol and no number this project
+has read a figure it can cite. Both are in the registry, refused for different
+reasons, because a coaching engine that silently omitted the numbers every golf
+app displays would look like it had forgotten them.
+
+### What a comparison has to clear
+
+A value is only reported as being on one side of a band if it clears the band by
+more than its own **bracket**. Durations get one frame interval. Angles and
+distances get whatever uncertainty the metric layer measured, and are refused
+where it measured none. The tempo ratio gets a figure of its own, because the
+backswing and downswing share an endpoint: one frame of ambiguity at the top
+lengthens one and shortens the other at once.
+
+That turns out to decide whether the three usable rules ever fire
+(`scripts/benchmark_coaching.py --sweep resolution`, on a 0.800 s backswing over
+a 0.233 s downswing — the amateur reference clip exactly):
+
+| fps | bracket on the ratio | distance to the nearer band edge | outcome     |
+| --- | -------------------- | -------------------------------- | ----------- |
+| 30  | 0.738                | 0.371                            | **refused** |
+| 60  | 0.341                | 0.371                            | reported    |
+| 120 | 0.164                | 0.371                            | reported    |
+| 240 | 0.081                | 0.371                            | reported    |
+
+**At 30 fps a swing's tempo cannot be compared against the published band at
+all.** The band is 1.37 wide and one frame at the top is worth 0.74 of it; the
+crossover for this swing is 56 fps. The number every golf app puts on its front
+page is not resolvable by the camera most of them are pointed at. The source is
+more careful than its readers: Tour Tempo publishes frame counts — 18/6, 21/7,
+24/8 — and not a ratio, because 3:1 exactly is a ratio of two integers rather
+than a measurement with a resolution.
+
+A related gate refuses absolute durations on any clip whose slow-motion factor
+was supplied rather than measured, which is every slow-motion clip: nothing in a
+conformed file records it. The **ratio** survives, because a factor stretching
+both durations equally divides out of their quotient — the same argument that
+puts lengths in torso lengths, one dimension over.
+
+### What four real clips produced
+
+`scripts/benchmark_coaching.py --sweep clips`:
+
+| clip                     | view          | ms/frame | findings | refused | fired                        |
+| ------------------------ | ------------- | -------- | -------- | ------- | ---------------------------- |
+| amateur, face-on, 30 fps | face_on       | 33.3     | **0**    | 12      | —                            |
+| amateur, DTL, 30 fps     | down_the_line | 33.3     | 2        | 10      | tempo.ratio, tempo.downswing |
+| tour, face-on, 7x slow   | face_on       | 4.8      | 1        | 11      | tempo.ratio                  |
+| tour, DTL, 7x slow       | down_the_line | 4.8      | 1        | 11      | tempo.ratio                  |
+
+Every finding on every clip is temporal. Nothing measured in the image plane
+produced a comparison this engine would stand behind, from either camera
+position, on either golfer.
+
+The tour clip's surviving finding reports a tempo of **1.83:1** against a tour
+band of 2.43–3.80. The numbers are right and the conclusion is not about the
+swing: the finding cites the backswing, the downswing and the frames each came
+from, and following those frames leads to the takeaway, which this project had
+already flagged as suspect on slowed footage. That is the argument for citing
+evidence. **A finding that carries its frames can be discovered to be wrong; a
+sentence of advice cannot.**
+
+### The guard, and the language layer under it
+
+No sentence in a report may contain a number its evidence does not. The guard
+checks numerals to the precision they are written at, spelled-out numbers,
+units this system cannot produce, units it can produce but did not here,
+quantities nothing in the project measures, claims about where the ball went, and
+causal claims. Over a corpus of fourteen plausible inventions it rejects all
+fourteen while keeping three faithful rewordings, at 34 µs per candidate.
+
+It runs over the **engine's own sentences** in the test suite as well as over any
+model's. That is not symmetry for its own sake — the first thing it ever caught
+was a rule template that said "the two measurements", where the spelled-out "two"
+was a quantity absent from the evidence. The template was reworded rather than
+the guard relaxed.
+
+The phrasing layer is off by default, and off is a complete configuration: every
+finding already has a sentence. Turned on, it talks to a model on this machine —
+loopback is enforced in code, not documented as a convention — and receives the
+findings as JSON with no frame, no landmark and no file path in it. A candidate
+with one offence is discarded whole, not repaired, and the engine's own sentence
+ships. **No language model has ever phrased a finding in this repository**, because
+none is installed on the machine it was built on; every path is exercised against
+fakes, and `PhrasingReport` carries the counts that would make a later run
+evidence rather than an impression.
+
+**There is no score.** No severity, no grade, no ranking between findings, and a
+test asserts the absence of those field names. A single number summarising a
+swing would be the most quoted output of this system and the one with the least
+behind it: it would need a scale relating degrees of turn to seconds of tempo,
+and nobody has measured one.
+
+## 13. The player, and why seeking is a measurement
+
+Every panel in this app reports **frame indices** — impact at frame 46, an
+address baseline over frames 0 to 12, a finding citing frames 13 to 38. A
+`<video>` element cannot be asked for a frame. It is asked for a **time**, and
+its decoder shows whichever frame is being displayed then.
+
+So the conversion has to come from somewhere, and `frame / fps` is not it. That
+is the same mistake [section 6](#6-supported-video-formats) describes one layer
+down: on variable-rate footage the interval between frames is not constant, so
+dividing by an average accumulates error until the frame under the playhead is
+not the frame the panel beside it is talking about. Nothing about the resulting
+picture looks wrong.
+
+Measured over the clips in this repository (`scripts/benchmark_seek.py`), each
+cell counting frames the map lands on the wrong one:
+
+| clip                | frames | vfr | declared fps | measured fps | `frame / declared fps` | measured midpoints |
+| ------------------- | ------ | --- | ------------ | ------------ | ---------------------- | ------------------ |
+| cfr_30fps.mp4       | 60     | no  | 30.000       | 30.000       | 0 / 60                 | **0 / 60**         |
+| vfr_30_to_15fps.mp4 | 45     | yes | 23.684       | 22.759       | 39 / 45 (±6)           | **0 / 45**         |
+| PW_face-on.mp4      | 68     | no  | 27.470       | 30.000       | 56 / 68 (±5)           | **0 / 68**         |
+| iron_dtl.mp4        | 96     | yes | 30.063       | 30.063       | 0 / 96                 | **0 / 96**         |
+| rory_face_on.mp4    | 652    | no  | 30.006       | 30.000       | 651 / 652 (±1)         | **0 / 652**        |
+
+**Only one of those three failures is variable frame rate.**
+
+`PW_face-on.mp4` is constant-rate, evenly spaced at exactly 30 fps, and its
+container **declares 27.470** — an 8.4% error that drifts six frames across a
+2.3 s clip. It is one of the two clips every phase since Phase 4 has been
+measured on.
+
+`rory_face_on.mp4` has a declared rate right to four decimal places and still
+misses on 651 of 652 frames, every one by exactly one. `i / 30.006` lands a few
+hundred nanoseconds _below_ frame `i`'s presentation time, and a frame boundary
+has another frame on the other side of it.
+
+### What the app does instead
+
+The engine reads the per-frame presentation timestamps out of the container —
+it has done since Phase 1 — and `SeekIndex` now carries them, plus the **midpoint
+of the interval each frame is displayed for**. The midpoint is the furthest
+point from both boundaries, so it survives every source of rounding at once.
+
+Then the answer is checked. `requestVideoFrameCallback` reports the presentation
+time of the frame actually painted; the player looks it up and shows the
+difference from the frame it asked for. `currentTime` is not a substitute —
+browsers commonly leave it at the value requested, so reading it back confirms
+the seek against itself. Where the API is absent, the player says **"seeks are
+unverified"** rather than showing a residual of zero it never measured.
+
+That last part is the point. A player that seeks by `frame / fps` and displays
+the number it asked for looks correct on every clip in the table above,
+including the two it is five frames wrong on.
+
+### The overlay draws what the numbers were computed from
+
+The skeleton is the **filtered** trajectory converted back into drawing
+coordinates by the engine, not the estimator's raw output. An overlay here is an
+instrument: it exists so a metric can be checked against the frame it came from,
+and drawn from the raw landmarks it would sit slightly elsewhere than the thing
+being checked — leaving every disagreement unattributable.
+
+Three states are drawn differently, because only one of them is a measurement of
+that frame. **Observed** is solid. **Filled** is hollow: the position is
+supported, but not by an observation of this frame. **Blocked** is not drawn at
+all — the case where motion blur lost the wrists for 1.92 s exactly when they
+were moving fastest, which an overlay that interpolated across would hide.
+
+Full reasoning, including what the browser test found that the design did not
+predict, in [ADR-0018](docs/decisions/ADR-0018-seeking-by-measured-time.md).
+
+## 13a. The viewport, and the errors a viewpoint hides
+
+Section 9 reports what a reconstruction is worth: a positional uncertainty in
+millimetres, propagated through the triangulation's own Jacobian from a pixel
+sigma measured on the clip. That number is honest. Drawing the point it describes
+is where it stops being sufficient, because **a drawing is made from somewhere
+and a report is not.**
+
+A joint is drawn as a dot, and a dot carries no direction. Everything the
+reconstruction does not know about that joint therefore lands in one of two
+places: across the line of sight, where it spreads over the picture and a reader
+can see it, or **along** the line of sight, where it hides behind the dot. Which
+happens is decided entirely by where the viewer's camera is — and the camera
+almost nobody moves is the default one.
+
+`scripts/benchmark_viewport.py --sweep convergence`, bringing the two cameras
+together from a right angle at the 2.7 px landmark scatter section 8 measures on
+real footage:
+
+| separation | ray angle | true sigma  | visible fraction | **sigma on screen** |
+| ---------- | --------- | ----------- | ---------------- | ------------------- |
+| 90°        | 94°       | 5.5 mm      | 0.96             | **5.3 mm**          |
+| 60°        | 64°       | 7.3 mm      | 0.74             | **5.3 mm**          |
+| 45°        | 48°       | 9.4 mm      | 0.57             | **5.3 mm**          |
+| 30°        | 32°       | 13.7 mm     | 0.39             | **5.3 mm**          |
+| 20°        | 21°       | 20.2 mm     | 0.26             | **5.3 mm**          |
+| 15°        | 17°       | **25.6 mm** | 0.20             | **5.2 mm**          |
+
+**The last column is flat while the third grows 4.7x.** The picture a reader sees
+from the default viewpoint is the same whether the capture determined that joint
+to five millimetres or to twenty-six, because the direction that grew is the
+direction that camera is looking along.
+
+This is the third time this project has measured a number that is blind to the
+capture in exactly the same way. Section 9's calibration residual is flat across
+a four-hundred-fold change in focal-length error; its reprojection residual is
+flat across a 4.7x change in 3D error and is _exactly zero_ for a displacement
+along the epipolar line. This one is worse than both, because it is a picture
+rather than a number somebody might think to distrust.
+
+So the viewport reports it. Beside the body it shows what the measurement is
+worth, **what fraction of that the current viewpoint can show**, and what the
+picture therefore looks like it is worth — and it warns, below 70%, with the only
+instruction that helps: orbit, because the error does not change, only whether
+you can see it.
+
+Three consequences worth knowing before reading a picture from it:
+
+- **The default view is the reference camera itself**, with the focal length the
+  calibration measured — so it is the projection that produced the video, run
+  again on the reconstruction. That is the most flattering viewpoint available,
+  and it is the default anyway, because it is the only one that can be checked
+  against the footage. The answer to a flattering default is a viewport that says
+  how flattering it is being.
+- **The uncertainty ellipses are magnified, ×20 by default, and the factor is
+  drawn in the corner of the picture.** At true scale a joint determined to
+  5.4 mm at 3.4 m is about two thirds of a screen pixel, so the honest drawing is
+  an invisible one. The millimetres in the panel are the truth; the ellipse
+  carries the shape, which is the part a number cannot.
+- **There is no ground plane and no horizon.** The scene is metres in the
+  reference camera's frame, not a scene-fixed one — nothing here measures which
+  way is up — so a grid on the floor would be a drawing of an assumption.
+
+Full reasoning in
+[ADR-0019](docs/decisions/ADR-0019-the-viewpoint-is-part-of-the-measurement.md).
+
+## 13b. Comparing two swings, and the camera that ruins it
+
+Everything above measures one recording. Comparing two is the first thing this
+system does whose output is a statement about a pair, and the whole difficulty is
+one sentence: **two recordings differ for reasons that have nothing to do with
+the two swings.**
+
+Four such reasons, and only the last was a surprise. A supplied slow-motion
+factor makes a duration a guess multiplied by a measurement (§12 already gates on
+that). A lens correction applied to one clip and not the other displaces every
+landmark by tens of pixels near the frame edge (§16 measures that). Each clip's
+frame rate bounds what it can resolve (§12's bracket computes that).
+
+The fourth is where the tripod was, and it is larger than all of them.
+
+### One swing, seven cameras, twenty-five degrees of difference
+
+`scripts/benchmark_compare.py --sweep camera`. The **same** synthetic 3D swing —
+same body, same instants, same joint angles — projected through cameras that
+differ only in where they stand, at the 2.7 px landmark scatter §8 measures on
+real footage. Median of five seeds:
+
+| azimuth | address span | spans disagree | **shoulder turn reported** | what the engine does |
+| ------- | ------------ | -------------- | -------------------------- | -------------------- |
+| 0°      | 1.05 torso   | 0%             | **57.7°**                  | unresolved           |
+| 5°      | 1.04         | 1%             | 56.9°                      | unresolved           |
+| 10°     | 1.02         | 3%             | 55.1°                      | unresolved           |
+| 15°     | 0.99         | 6%             | 52.1°                      | unresolved           |
+| 20°     | 0.95         | 11%            | 47.7°                      | **refuses**          |
+| 30°     | 0.83         | 24%            | **32.9°**                  | **refuses**          |
+
+Nothing about the body changes down that table, and **every row is still
+classified `face_on`** — §10's three labels decide whether a recording contains a
+measurement at all, and a camera can move thirty degrees round a player without
+leaving one. The arithmetic behind it is not subtle: from a camera `a` degrees off
+broadside, a line that truly turned `t` projects `cos(a + t)` against an address
+span of `cos(a)`, so the reported angle is `arccos(cos(a + t) / cos(a))`, which
+equals `t` only at `a = 0`.
+
+So the comparison gates on the **address shoulder span** — a directly measured
+quantity in torso lengths — and refuses every projected, image-plane and
+foreshortened difference when two clips disagree by more than 10%. The azimuth
+derived from `openness` is reported and used to widen a bracket, never to decide:
+the arccosine is flat near broadside, so 1% of landmark noise comes out as 8
+degrees, and a gate on it would refuse every pair ever filmed. Full reasoning in
+[ADR-0020](docs/decisions/ADR-0020-a-difference-between-recordings.md).
+
+### Both swings on one clock, and what that costs
+
+Two swings take different amounts of time, so the curves are mapped onto **swing
+position**: 0 at the takeaway, 1 at the top, 2 at impact, 3 at the finish, linear
+in time within each phase. The four events are the only instants two recordings
+are known to share, so they are the only places a map between them can be pinned.
+
+`--sweep warp`, against warps whose answer is zero by construction — the
+synthetic fixture builds its arc from the fraction through each phase, so two
+tempos of it are one swing warped in time:
+
+| tempo | **phase-relative residual** | one uniform stretch |
+| ----- | --------------------------- | ------------------- |
+| 1.92  | **0.0000**                  | 0.0000              |
+| 1.17  | **0.0049**                  | 0.1685              |
+| 0.98  | **0.0073**                  | 0.2085              |
+| 3.59  | **0.0080**                  | 0.2643              |
+
+Hand height in frame widths, over a signal ranging about 0.30. The right-hand
+column is the obvious alternative — scale each clip's takeaway-to-finish interval
+to the same length — and it is **thirty times worse**, exact only where the two
+tempos happen to match. Tempo is the quantity two golfers are most likely to
+differ by.
+
+**The map destroys every timing difference, deliberately.** Nothing in an
+overlaid trajectory can say one player reached the top later; that is what the
+normalisation did to make the shapes comparable. Durations are compared
+separately, as durations with brackets of their own, and both clocks stay on
+screen so a reader can see what was divided out.
+
+### What a difference has to clear
+
+Each knot is located to a frame, so a real instant's position on the axis is known
+only as well as the events bounding it — and a curve read a frame early is a
+different curve. Every sample carries that ambiguity, propagated onto the axis and
+through the signal's own local range, and the app draws it as a **band** rather
+than leaving two lines for a reader to attribute gaps between.
+
+`--sweep resolution`, two swings of genuinely different shape at one tempo:
+
+| fps | of the swing that differs by more than the pair can resolve |
+| --- | ----------------------------------------------------------- |
+| 30  | 39%                                                         |
+| 60  | 61%                                                         |
+| 120 | 80%                                                         |
+| 240 | 89%                                                         |
+| 480 | 94%                                                         |
+
+The difference itself is the same at every rate. What grows is how much of it can
+be attributed to the swings rather than to the clock.
+
+### There is no score
+
+A difference carries a direction — higher or lower — and nothing else. No
+severity, no rank, no total. Such a number would be the most quoted output of this
+system and the least defensible: it would need a scale relating degrees of
+shoulder turn to seconds of tempo, which nobody has measured, and it would need to
+know which direction of each quantity is _desirable_, which §12 established no
+source supplies.
+
+There is also no "the same". Two values closer together than the pair can resolve
+are reported as **unresolved**, with both numbers and the bracket printed — the
+recordings could not tell them apart, which is the absence of evidence rather than
+evidence of agreement.
+
+### What the reference footage produces
+
+`--sweep clips`, over the three pairs this repository can build. Two are a face-on
+camera against a down-the-line one, so every projected quantity refuses and only
+the timings survive: a tempo difference of 1.63 on the amateur pair, 0.572 on the
+tour pair — the second independently corroborating §16's finding that those two
+clips are not the same swing.
+
+The third is the only pair of two swings by one player from one position, and it
+refuses too: `rory_dtl_2.mp4` begins at the takeaway, a clip with no address phase
+has no measured view, and a comparison that cannot say where either camera stood
+will not compare a projection. **That is a capture instruction rather than a
+defect. Start recording before the player is set up to the ball** — the address
+phase is where the view, the rotation baseline and the hand-path origin all come
+from.
+
+## 14. Model architecture
 
 **No model is trained on real swings, and none can be.** Phase 12 built the whole
 apparatus — labelling tool, versioned features, player-grouped splits, a TCN
@@ -669,20 +1111,69 @@ the pose graph opens on macOS arm64. The health check now runs a real inference
 rather than trusting an import, which is what caught it. See
 [ADR-0008](docs/decisions/ADR-0008-mediapipe-1.0.0.md).
 
-## 13. Testing
+### Local model management (Phase 18)
+
+Open **Environment → Manage models** to inspect the installed pose models and
+verify their SHA-256 against the manifest. Use **Download** for a missing model,
+**Update to pinned version** for mismatched weights, or **Reinstall** to fetch the
+same pinned artifact again. Downloads report progress and replace the installed
+file only after size and hash verification succeed. **Re-check** separately
+verifies that pose inference runs.
+
+Updates follow the manifest shipped with this build. Upstream changes are
+refused until deliberately re-pinned; `python scripts/download_models.py
+--update-hashes` remains a developer operation requiring new measurements.
+Temporal models trained locally remain in the CLI's model-card registry.
+
+Training accepts `--device auto`, `cpu`, `cuda` or `mps` (CPU remains the default).
+Unavailable accelerators or failed initialization probes fall back to CPU and
+record why. Set `GSA_FORCE_CPU=1` to force CPU even with an accelerator requested.
+MediaPipe uses its separate, explicitly selected CPU delegate. On macOS it still
+initializes graphics services, so a sandbox blocking those services can prevent
+its CPU graph from starting.
+
+To verify model files and measure fresh forced-CPU inference:
+
+```sh
+uv run --project python python scripts/benchmark_models.py data/amateur/face-on/PW_face-on.mp4
+```
+
+See [Phase 18](docs/ROADMAP.md#phase-18--local-model-management-)
+for the recorded measurements and cache invalidation behavior.
+
+## 15. Testing
 
 ```bash
 npm run check:all
 ```
 
-| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                               |
-| ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pytest     | 1,091 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry |
-| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                           |
-| Vitest     | 99    | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review                                                                                                                                                                       |
-| Playwright | 34    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review                                                                                                                                                                                  |
+| Suite      | Count | Scope                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pytest     | 1,382 | contracts, environment probes, model verification, dispatch, RPC framing, ingestion, pose, filtering, phases, biomechanics, time alignment, project storage, camera calibration, 3D reconstruction, club tracking, ball detection, impact fusion, labelling, features, splits, training, evaluation, model registry, coaching rules, evidence linking, the phrasing guard, the seek map, the overlay builder, the scene builder, **the phase-relative clock against warps whose answer is zero by construction** |
+| cargo test | 12    | protocol framing, id correlation, `uv`/project resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Vitest     | 250   | IPC error normalisation, health screen, video metadata rendering, extraction panel, swing inspector, two-camera alignment, calibration review, frame/time lookup, the player's measured residual, overlay drawing, metrics and findings panels, session management, **the viewport's projection pinned to the engine's own pixels**, the comparison plots' refusal to bridge a gap                                                                                                                               |
+| Playwright | 62    | UI layout, engine-data rendering, import flow, failure panels, frame-by-frame phase inspection, alignment flow, calibration review, **frame-accurate seek against a real decoder**, the 3D viewport scrubbing against one, and the comparison plots laid out by a real browser                                                                                                                                                                                                                                   |
 
-All 1,236 pass as of Phase 12.
+All 1,706 pass as of Phase 16.
+
+**Two tests assert an absence, in two languages.** `MetricDifference` and
+`SwingComparison` are checked for field names meaning a score, a severity or a
+rank, and the Compare panel is checked for those words anywhere in its rendered
+text — because a comparison screen is the most natural place in this application
+for a single number ranking two swings to appear, and a component could invent
+one out of fields that are individually honest. The word "score" is permitted
+exactly once on that panel, in the sentence saying there is not one.
+
+**One test crosses the language boundary, and it is the reason the viewport is
+allowed to do its own arithmetic.** A 3D camera moves with the mouse, so the
+projection cannot live behind an IPC call — which makes it a second
+implementation of something the engine already has.
+`scripts/benchmark_viewport.py --write-fixture` emits real points from the
+synthetic stereo reconstruction together with the pixels
+`StereoGeometry.project` puts them at, and `projection.test.ts` asserts the
+TypeScript reproduces them to floating-point precision. A sign flipped in either
+language fails a test rather than producing a convincing picture of a body that
+is inside out.
 
 The ingestion tests are deliberately split. Parsing logic is tested against
 literal ffprobe output and needs no FFmpeg installed, so the rotation and
@@ -789,7 +1280,7 @@ CI installs FFmpeg and downloads the pose models, and sets `GSA_REQUIRE_FFMPEG`
 and `GSA_REQUIRE_MODELS` so that a runner missing either **fails** rather than
 skipping — a skipped suite and a passing one look identical in a summary.
 
-## 14. Performance benchmarks
+## 16. Performance benchmarks
 
 Measured on the reference machine. Every figure here came out of a script in
 `scripts/`; none is estimated.
@@ -974,7 +1465,7 @@ single-camera user:
 | mild (k1 −0.10)       | 34.0 px           | 41 px  | 56.1° |
 | long lens (k1 −0.02)  | 2.5 px            | 3.0 px | 35.5° |
 
-On the reference swing `data/face-on/PW_face-on.mp4`, undistorting with a
+On the reference swing `data/amateur/face-on/PW_face-on.mp4`, undistorting with a
 plausible phone lens moves the trail arm angle at the top by +1.19°, shoulder
 turn at impact by +0.87°, and peak hand speed by 3.0% — and moves **no swing
 event**, because phase detection reads the shape of a speed curve and a smooth
@@ -1138,7 +1629,7 @@ picture; it only matters when the covering starts _before_ contact:
 The instant runs early by about half the covering. Reported rather than fixed.
 
 **The first observed impact in this project, and the only figure here that is
-not synthetic.** `data/face-on/rory_face_on.mp4` at a factor of 7 — the ball is
+not synthetic.** `data/rory/face-on/rory_face_on.mp4` at a factor of 7 — the ball is
 bracketed between frames 360 and 361, with no warnings:
 
 | source           | frame | delta vs the observation | uncertainty    |
@@ -1223,9 +1714,118 @@ featurise, 82 ms per clip to train 40 epochs, 0.7 ms per clip to run. Training
 the entire corpus costs less than extracting poses from one clip, which is the
 correct shape for this phase — the expensive thing was never the model.
 
-A general benchmark harness arrives in Phase 17.
+### The coaching engine
 
-## 15. Limitations
+`scripts/benchmark_coaching.py`. Two of its four sweeps measure the registry
+rather than a recording, and those are the phase's result.
+
+**What the rules can conclude, before a camera is switched on** (`--sweep
+inventory`):
+
+| verdict                 | rules | what would change it    |
+| ----------------------- | ----- | ----------------------- |
+| usable                  | 5     | —                       |
+| no measurement protocol | 4     | somebody publishing one |
+| no published number     | 3     | somebody publishing one |
+
+**The capture rate a tempo comparison needs** (`--sweep resolution`), held at the
+amateur reference clip's own swing — 0.800 s over 0.233 s, tempo 3.43 — and
+varying only the clock:
+
+| fps | bracket | to the nearer band edge | outcome         |
+| --- | ------- | ----------------------- | --------------- |
+| 30  | 0.738   | 0.371                   | **cannot tell** |
+| 60  | 0.341   | 0.371                   | reported        |
+| 120 | 0.164   | 0.371                   | reported        |
+| 240 | 0.081   | 0.371                   | reported        |
+
+Crossover at **56 fps**. The bracket is what one frame of ambiguity at the top is
+worth, and the top is shared between the two durations, so it moves the ratio far
+more than it moves either of them.
+
+**The engine over every reference clip with an extraction** (`--sweep clips`):
+zero findings on the 30 fps face-on amateur clip, two on the 30 fps
+down-the-line one, one on each tour clip. All four findings across all four clips
+are temporal.
+
+**The guard** (`--sweep guard`): 14 of 14 plausible inventions rejected, 3 of 3
+faithful rewordings kept, **34 µs** per candidate. Four of the fourteen are
+number offences and two of those contain no digits — "ninety degrees" and
+"forty-five degrees" — because the invention this most needs to catch is the one
+golf coaching quotes in words.
+
+**Cost**: `coach()` over twelve rules is **0.05 ms**, against seconds per clip
+for pose extraction. Nothing here is worth caching, which is what Phases 3 and 5
+concluded about the layers below it.
+
+**The 3D viewport** (2026-09-18, `scripts/benchmark_viewport.py`). What a
+viewpoint shows of what the reconstruction does not know, as the two cameras are
+brought together — the table [section 13a](#13a-the-viewport-and-the-errors-a-viewpoint-hides)
+discusses:
+
+| separation | true sigma | visible fraction | **sigma on screen** |
+| ---------- | ---------- | ---------------- | ------------------- |
+| 90°        | 5.5 mm     | 0.96             | **5.3 mm**          |
+| 45°        | 9.4 mm     | 0.57             | **5.3 mm**          |
+| 15°        | 25.6 mm    | 0.20             | **5.2 mm**          |
+
+The projection the viewport draws with agrees with the engine's own to
+**0.000e+00 px** over 8,778 reconstructed points, which is what makes a
+hand-written projection in the UI safe to ship.
+
+**Cost of a scene**, `--sweep cost`, plus `JSON.parse` timed in Node:
+
+| frames | build    | serialise | parse   | payload | per frame |
+| ------ | -------- | --------- | ------- | ------- | --------- |
+| 68     | 26.5 ms  | 5.8 ms    | —       | 0.98 MB | 14.0 KB   |
+| 96     | 42.0 ms  | 8.0 ms    | —       | 1.37 MB | 13.9 KB   |
+| 312    | 158.3 ms | 23.7 ms   | 11.9 ms | 3.98 MB | 12.5 KB   |
+
+Against roughly 1.3 s per clip to extract poses. A scene point carries a
+position, six covariance elements and three diagnostics against an overlay
+point's two coordinates, which is why the range limit is 600 frames rather than
+the overlay's 2,000.
+
+### Swing comparison
+
+`scripts/benchmark_compare.py --sweep cost`, median of five. The interesting
+column is the first: a comparison is arithmetic over two analyses that have
+already been paid for.
+
+| samples on the axis | compare | serialise | payload |
+| ------------------- | ------- | --------- | ------- |
+| 61                  | 6.1 ms  | 1.8 ms    | 68 KB   |
+| **121** (default)   | 11.2 ms | 1.4 ms    | 111 KB  |
+| 241                 | 21.7 ms | 2.4 ms    | 197 KB  |
+| 481                 | 42.5 ms | 4.6 ms    | 371 KB  |
+
+Against roughly 1.3 s per clip to extract poses, **twice** — the comparison is
+under one per cent of what it takes to reach it. 121 samples puts one every
+fortieth of a phase, which is finer than the frame rate of any clip here.
+
+The measurements that matter for this phase are not timings; they are in
+[section 13b](#13b-comparing-two-swings-and-the-camera-that-ruins-it).
+
+**End-to-end analysis** (2026-09-19,
+`scripts/benchmark.py data/amateur/face-on/PW_face-on.mp4 --repeats 5`,
+68-frame face-on clip, median of 5):
+
+| Operation       | Fresh analysis | Warm repeat |
+| --------------- | -------------: | ----------: |
+| Pose extraction |        2.285 s |       14 ms |
+| Phase detection |          36 ms |       34 ms |
+| Metrics         |          37 ms |       14 ms |
+| Coaching        |          37 ms |       14 ms |
+| Pose overlay    |          49 ms |       45 ms |
+
+The benchmark writes no cache-clearing command: its baseline extracts into a
+temporary directory and disables only the compact Phase 17 result cache. A warm
+repeat reuses pose Parquet only after the content key, model name and model hash
+agree; metrics and coaching also require an exact canonical configuration hash.
+Project-backed spatial results are intentionally not cached because calibration
+and sync state can change independently of video content.
+
+## 17. Limitations
 
 - **macOS/Apple silicon only, so far.** Nothing is known to be Windows- or
   Linux-incompatible, but neither has been tested, and the MediaPipe wheel
@@ -1234,7 +1834,65 @@ A general benchmark harness arrives in Phase 17.
   MediaPipe Tasks Python API on this platform.
 - **Playwright does not drive the real WebView.** It runs against the Vite dev
   server with the Tauri IPC bridge stubbed. Real-WebView automation needs
-  `tauri-driver` and a platform WebDriver, which is not set up.
+  `tauri-driver` and a platform WebDriver, which is not set up. One consequence
+  is specific and worth naming: the frame-accurate seek is verified in
+  **Chromium**, and the app ships on WKWebView. The player's residual display is
+  the mitigation and not a substitute — it makes a WebView that behaves
+  differently visible to the person using it rather than silent.
+- **The last frame of a clip may not be reachable by seeking.** How long a final
+  frame is displayed is not recorded in any container, so its seek target lies
+  past the end of the media; the browser clamps to the declared duration, and
+  where that duration equals the last frame's own presentation time there is no
+  time inside the media at which it is shown. No map can fix that. The player
+  reports it as a one-frame residual rather than hiding it.
+- **There is no two-camera player.** A side-by-side view needs two clips aligned
+  to each other, which needs a stored `SyncModel`, which needs a genuine
+  simultaneous pair. This repository contains none: the only two-angle candidate
+  aligns at a 95.8 ms residual against a 2.4 ms floor, which is the system
+  correctly reporting that the two clips are not the same swing.
+- **A 3D viewport is at its most flattering exactly where a capture is worst,
+  and the default viewpoint is the flattering one.** Measured, the uncertainty a
+  reader can see from the reference camera is flat at 5.3 mm while the
+  uncertainty being drawn grows from 5.5 mm to 25.6 mm as the two cameras close
+  from 90° to 15°. The viewport reports the fraction it is hiding and warns below
+  70%, which makes the problem visible rather than solving it — the picture from
+  that viewpoint is still the reassuring one. See
+  [section 13a](#13a-the-viewport-and-the-errors-a-viewpoint-hides).
+- **A camera moved thirty degrees round a player changes a reported shoulder turn
+  by twenty-five, and the view label does not notice.** Measured on one unchanged
+  synthetic swing: 57.7° seen square on and 32.9° from thirty degrees round, with
+  every row still classified `face_on`. The comparison layer gates on the address
+  shoulder span and refuses above a 10% disagreement, which makes the problem a
+  refusal rather than a wrong number — but it also means **two swings filmed from
+  two positions cannot be compared at all**, and every projected comparison over
+  the footage in this repository refuses for exactly that reason. See
+  [section 13b](#13b-comparing-two-swings-and-the-camera-that-ruins-it).
+- **That gate cannot tell a camera that moved from a player built differently.**
+  A broader-shouldered golfer projects a broader shoulder line from the same
+  tripod, so two different people filmed from one position can fail it. Nothing
+  in either recording separates the two explanations, and both account for a
+  difference the swing did not make.
+- **A trajectory comparison brackets _when_ a sample was taken, not _how well_
+  the value at it was measured.** Measured: on one unchanged swing recorded twice
+  with different landmark noise, **5% of sampled positions report a difference
+  that clears the bracket**. Closing that needs a per-sample landmark
+  uncertainty, and the filter's own residual cannot supply one — it is exactly
+  zero whenever the smoothing window holds as many samples as the polynomial has
+  coefficients, which is every clip below about 60 fps at the shipped defaults.
+- **The horizontal bracket on a comparison is one frame per event, and section 16
+  measured the takeaway moving sixty-five.** Under landmark noise at 120 fps the
+  top moves 8 ms and the takeaway 542 ms. Nothing in a single clip measures that,
+  so the refusals a comparison makes are a lower bound on the refusals warranted,
+  and the takeaway end of every overlaid plot is its least trustworthy part.
+- **The uncertainty ellipses in the viewport are not to scale.** At true scale
+  they are a fraction of a screen pixel, so they are magnified — ×20 by default,
+  with the factor drawn in the corner of the picture. Their _shape_ is the
+  measurement; their size is not, and the millimetres in the panel are.
+- **The viewport has never drawn a real reconstruction.** It is verified against
+  the synthetic stereo fixture, whose body is an input and which contains no pose
+  estimator, for the same reason section 9's figures are: no two clips here are
+  one swing and no real calibration exists. The viewpoint arithmetic is exact
+  because it is geometry; the millimetres it is drawing are a floor.
 - **Engine requests are serialised.** A mutex guards the worker; concurrent
   request multiplexing is not implemented because nothing needs it yet.
 - **Nothing can tell that two clips show the same swing.** Synchronisation
@@ -1282,9 +1940,10 @@ A general benchmark harness arrives in Phase 17.
   synthetically, which is a weaker claim and is labelled as one.
 - **Two clips share one smoothing window, so the coarser sets it.** Smoothing
   them differently would shift the features an alignment keys on by an amount
-  nothing measures. A 30 fps camera therefore cannot support the 0.10 s default
-  for either clip; the engine refuses and names the window that rate would
-  support.
+  nothing measures. `sync` therefore reads both clips before filtering either
+  and resolves one window across the pair, so a 30 fps camera widens the window
+  for its 120 fps partner too — and the pair is measured at a width neither
+  asked for, which the report names.
 - **No packaging story yet.** `npm run dev` runs from the repository and
   resolves the Python project by walking up from the working directory. A
   bundled app needs the engine shipped as a sidecar; that is not built.
@@ -1302,13 +1961,13 @@ A general benchmark harness arrives in Phase 17.
   were found are in the right place. That needs a labelled set. Phase 12 built
   the apparatus for one — a labelling tool, a schema, player-grouped splits — and
   no such set exists.
-- **Filtering needs about 60 fps or better at its default settings.** A 0.10 s
-  window with a degree-4 fit needs five samples, and 30 fps supplies three. Such
-  a clip gets no values at all, plus a message naming the minimum window its
-  measured rate would support — the alternative, widening the window silently,
-  produces numbers that are worse in a way nothing reports. Both reference clips
-  used during development are 24–30 fps, so this is the ordinary case rather than
-  an edge one, and it is the first quantitative backing for the ≥120 fps the
+- **Below about 45 fps the shipped window cannot be used, and is widened.** A
+  0.10 s window with a degree-4 fit needs five samples, and 30 fps supplies
+  three. Such a clip used to get no values at all; it is now filtered at the
+  narrowest window its measured rate supports, with both widths and the cost
+  named in the report. Most footage is 30 fps, so this is the ordinary case
+  rather than an edge one — and the cost is real: impact on a 30 fps clip lands
+  near half confidence, which remains quantitative backing for the ≥120 fps the
   capture protocol asks for.
 - **`analyzer phases` reports impact from the hands, and that has not changed.**
   It is a kinematic estimate and its contract says so. `analyzer impact` is where
@@ -1517,14 +2176,41 @@ A general benchmark harness arrives in Phase 17.
   equalises the sample rate and cannot equalise the filter: a 30 fps clip needs a
   167 ms window where a 120 fps clip uses 100 ms, and a wider window flattens the
   velocity peak. `DatasetSummary` reports it rather than averaging over it.
+- **Nine of the twelve coaching rules cannot fire, and no recording changes
+  that.** Six rest on a number with no published measurement protocol, and three
+  name a quantity for which nothing has published a threshold in any unit. This
+  is a fact about what golf instruction publishes, not about this engine, and it
+  is reported per rule rather than by omitting the rule.
+- **At 30 fps no tempo comparison is possible at all.** One frame of ambiguity at
+  the top is worth 0.74 of a band that is 1.37 wide. A phone recording at its
+  default rate produces a coaching report with zero findings on it, which is the
+  correct answer and an unsatisfying one.
+- **A finding compares against a population, not against a target.** Tour Tempo's
+  band describes tour professionals. A swing outside it is a swing unlike theirs,
+  which is not the same as a swing that is working badly, and nothing in this
+  system measures the second thing.
+- **The phrasing layer has never met a language model.** No local model is
+  installed on the machine this was built on, so the protocol, the request shape,
+  the guard integration and every failure path are exercised against fakes.
+- **The guard cannot tell whether a sentence is about the right finding.** A
+  model given two findings could describe the first using the second's numbers
+  and pass every check, because every number would be in the evidence. This is
+  why `Finding.observation` is never replaced and the model's version sits beside
+  it. Its spelled-out-number table is also finite and starts at two: "one" is
+  excluded because in English it is usually a pronoun, so "one degree of tilt"
+  gets through.
+- **Most same-clip comparisons refuse for want of an uncertainty.** Phase 6
+  quantifies uncertainty for the foreshortened rotations and for nothing else, so
+  a rule asking whether the spine angle changed from address to impact is refused
+  even though both values were measured. The quantity is measurable; what is
+  missing is a measurement of how well.
 - **The app icon is a placeholder** — a solid colour, not designed art.
 
-## 16. Future work
+## 18. Future work
 
-Phases 13-20: the coaching engine, desktop visualisation, 3D rendering, swing
-comparison, performance work, model management, test hardening and
-documentation. Sequencing, deliverables, and exit
-criteria per phase are in [docs/ROADMAP.md](docs/ROADMAP.md).
+Phases 19-20: test hardening and
+documentation. Sequencing, deliverables, and exit criteria per phase are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 Phase 7 began the two-camera work that makes the projections in §11 unnecessary,
 and settled the first of the two things a second view needs: the relation between
@@ -1533,7 +2219,7 @@ settled the second — where the cameras were. Phase 9 spends both, and the six
 metrics in §9 are the first numbers here that describe a body rather than a
 picture of one.
 
-Five open items carry forward:
+Six open items carry forward:
 
 - **Nothing here has been reconstructed from real footage.** It needs two
   calibrated cameras that filmed one swing at once, and no such recording exists
@@ -1543,7 +2229,14 @@ Five open items carry forward:
 - **A scene frame is one capture away.** Laying the calibration board on the
   ground with an edge along the target line would supply the vertical and the
   target line that a stereo pair does not, and with them a 3D forward spine
-  tilt. `data/README.md` now asks for that footage; nothing reads it yet.
+  tilt. `data/README.md` now asks for that footage; nothing reads it yet. Phase
+  15 inherits the gap directly: the viewport draws no ground plane and no
+  horizon, because it has neither.
+- **The viewport's default view is the most flattering one, by construction.**
+  It is the reference camera, which is what makes it the only view that can be
+  checked against the footage — and it is also the view a shallow capture's
+  errors point away from. The fraction it is hiding is reported and warned on;
+  nothing yet makes a reader orbit.
 - **Phase 4 is the limit on 3D metrics under noise, not the triangulation.**
   Measured: at 5 px of landmark scatter the reconstruction is still accurate to
   millimetres and the phase detector declines to call the clip a swing, so there
@@ -1556,6 +2249,21 @@ Five open items carry forward:
   single player. Three people would produce a split; eight would allow a number
   to be quoted. `data/README.md` says what to record and asks for consent in
   writing before anyone else's swing enters a training set.
+- **The comparison layer is one capture away from being useful, and the capture
+  is cheap.** Two swings by one player, filmed from one tripod that nobody
+  touches between them, each started before the player addresses the ball. This
+  repository contains the first two conditions once and fails the third: the only
+  same-player, same-position pair has a clip that begins at the takeaway, and a
+  clip with no address phase has no measured view. `data/README.md` now asks for
+  that footage.
+- **What the coaching engine is short of divides cleanly, and only half of it is
+  a recording.** Its three timing rules would fire on ordinary footage shot above
+  about 60 fps, which is a capture away. `rotation.x_factor_top_3d` needs a
+  stereo calibration _and_ a citable range for the quantity it triangulates, and
+  the first of those is the same missing two-camera session as everything above.
+  The six convention rules need neither: they need somebody to publish a
+  measurement protocol for a number the sport has quoted for thirty years, and no
+  phase of this project can supply one.
 
 ## Licence
 

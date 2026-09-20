@@ -193,6 +193,14 @@ export interface PhaseConfig {
    */
   max_downswing_s?: number;
   /**
+   * How far back from the top to look for the takeaway. A search bound, not a gate: a backswing longer than this is not refused, it is simply not searched for past here, because on an untrimmed clip the last still stretch before the swing can be a minute of someone standing about. Loose on purpose -- the slowest genuine backswing in the reference footage is 2.4 s, and a waggle before it is part of the swing rather than a second event.
+   */
+  max_backswing_s?: number;
+  /**
+   * How far back from the fastest frame to look for the top. Deliberately far looser than `max_downswing_s`, which would seem the natural bound and is the wrong one: on a conformed slow-motion clip every duration arrives stretched by the playback factor, and a search cut at one second would measure a truncated downswing and understate the factor the clip needs -- breaking the one diagnostic that would have told the caller what was wrong. Three seconds holds an eight-times slowed downswing whole, while still excluding the unrelated motion that makes an untrimmed clip report a descent lasting ten seconds.
+   */
+  top_search_s?: number;
+  /**
    * How far either side of the highest hand position to look for the speed minimum that marks the top.
    */
   transition_search_s?: number;

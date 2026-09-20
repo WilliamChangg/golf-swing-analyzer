@@ -7,7 +7,39 @@
  */
 
 /**
- * The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would.
+ * Which reference frame a set of landmarks is expressed in.
+ *
+ * The full vocabulary, including the frames this build cannot yet produce, so
+ * that a later phase adds the capability rather than the concept and nothing
+ * in between can claim a frame it does not have. `analyzer/coordinates.py`
+ * holds the conversions and `docs/coordinate-systems.md` the conventions.
+ *
+ * IMAGE
+ *     Normalised to the displayed frame: x divided by the width and y by the
+ *     height, both in [0, 1], y increasing downward. **Anisotropic** -- see
+ *     `FrameGeometry`. As stored by the pose estimator, and the frame a
+ *     landmark is drawn in.
+ * FRAME_WIDTHS
+ *     Both axes divided by the frame *width*, y increasing upward, origin at
+ *     the bottom-left of the displayed frame. Isotropic, so a distance means
+ *     the same whichever way it points, and an angle is the angle in the
+ *     picture. **The frame every measurement is taken in.** Derived from
+ *     IMAGE and `FrameGeometry`; never stored.
+ * HIP_LOCAL
+ *     Approximate metres, centred on the hip midpoint and oriented to the
+ *     body. MediaPipe calls these "world landmarks"; they are not calibrated
+ *     world coordinates and carry no camera geometry.
+ * CAMERA
+ *     Metres in three dimensions, centred on the reference camera. Produced by
+ *     triangulating two calibrated views of the same instant, which is Phase 9
+ *     -- so it is **not readable from a stored pose sequence**, which is one
+ *     clip and therefore one projection. `analyzer.reconstruction` is where it
+ *     comes from.
+ * WORLD
+ *     Metres in three dimensions, in a frame fixed to the scene. **Not
+ *     produced by this build**, and not for want of arithmetic: a scene-fixed
+ *     frame needs a gravity direction and a target line, and a stereo pair
+ *     supplies neither. See `docs/coordinate-systems.md` for what would.
  */
 export type LandmarkSpace = "image" | "frame_widths" | "hip_local" | "camera" | "world";
 /**
@@ -24,7 +56,26 @@ export type LandmarkSpace = "image" | "frame_widths" | "hip_local" | "camera" | 
  */
 export type CameraRole = "face_on" | "down_the_line" | "other";
 /**
- * What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it.
+ * What this build may claim about the geometry of a recording.
+ *
+ * The honesty gate of Phases 8 and 9, as a type. It is ordered, and
+ * `at_least` is how a consumer asks the question it actually has -- "may I
+ * triangulate" -- rather than enumerating the values that permit it and
+ * forgetting one when a fourth is added.
+ *
+ * NONE
+ *     No calibration. Every measurement is a statement about the image plane,
+ *     which is what Phases 5 and 6 produce and label as such. The lens's
+ *     distortion is present in every landmark and unmeasured.
+ * INTRINSICS
+ *     One camera's focal lengths, optical centre and distortion are measured.
+ *     Landmarks can be undistorted, so projected measurements improve, and a
+ *     pixel becomes a known direction. **Still no depth, so still no
+ *     metric-scale 3D claim.**
+ * STEREO
+ *     Both cameras are calibrated and their relative pose is measured, so two
+ *     views of one instant give an intersection rather than two directions.
+ *     This is what Phase 9 triangulates with.
  */
 export type CalibrationStatus = "none" | "intrinsics" | "stereo";
 
@@ -45,7 +96,10 @@ export type CalibrationStatus = "none" | "intrinsics" | "stereo";
 export interface ReconstructionReport {
   schema_version?: number;
   reconstructed: boolean;
-  space?: LandmarkSpace;
+  /**
+   * The frame the points are in: metres, centred on the reference camera. **Not WORLD.** A scene-fixed frame needs a gravity direction and a target line, and a stereo pair supplies neither; see the module docstring for what would.
+   */
+  space?: LandmarkSpace & string;
   reference_role: CameraRole;
   target_role: CameraRole;
   /**
@@ -65,6 +119,9 @@ export interface ReconstructionReport {
    * The reference clip's factor. Timestamps here are real seconds, as everywhere else above Phase 3.
    */
   slow_motion_factor?: number;
+  /**
+   * What was known about the two cameras' geometry. Always `stereo` for a reconstruction that happened; carried so a stored result cannot be read without it.
+   */
   calibration: CalibrationStatus;
   /**
    * Distance between the two optical centres, from the rig.

@@ -258,6 +258,117 @@ class TestDoubleSwing:
         assert any("swing-like motions" in w for w in result.warnings)
 
 
+class TestUntrimmedClip:
+    """A swing with unrelated motion in front of it, which is what real footage is.
+
+    The searches for the top and the takeaway used to run back to frame zero, so
+    whatever the hands did earliest in the clip decided both. On 38 seconds of
+    range footage the hands reached their highest point of the clip nine seconds
+    before the fastest frame, in an unrelated practice swing, and the real swing
+    was refused for having a 9.63 s descent -- then told, wrongly, that it looked
+    like nine-times slow motion.
+
+    The lead-in here is that failure in miniature: hands raised higher than the
+    top of the swing and lowered again, slowly enough that the swing still owns
+    the fastest frame, several seconds before the swing begins.
+    """
+
+    LEAD_S = 5.0
+
+    @classmethod
+    def _with_lead_in(cls) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        t = np.arange(0.0, cls.LEAD_S + DURATION_S, 1.0 / FPS)
+
+        # A slow raise and lower, reaching past the swing's own top: the arc's
+        # highest point is at pi, and the swing only ever reaches ARC_TOP_ANGLE.
+        angle = np.zeros_like(t)
+        lead = t < cls.LEAD_S
+        angle[lead] = np.pi * np.sin(np.pi * t[lead] / cls.LEAD_S) ** 2
+        angle[~lead] = _arc_angle(t[~lead] - cls.LEAD_S)
+
+        height = ARC_LOW_HEIGHT + ARC_RADIUS * (1.0 - np.cos(angle))
+        return 0.5 + ARC_RADIUS * np.sin(angle), 1.0 - height, t
+
+    def test_the_lead_in_really_does_go_higher_than_the_top(self) -> None:
+        """Otherwise the fixture proves nothing about which point was chosen."""
+        _, y, t = self._with_lead_in()
+        lead, swing = t < self.LEAD_S, t >= self.LEAD_S
+        assert np.max(1.0 - y[lead]) > np.max(1.0 - y[swing])
+
+    def test_the_swing_is_found_despite_the_lead_in(self) -> None:
+        x, y, t = self._with_lead_in()
+        result = _detect(_sequence(x, y, t))
+
+        assert result.detected
+        top = result.event(SwingEvent.TOP)
+        assert top is not None
+        assert top.timestamp_s == pytest.approx(self.LEAD_S + TOP_S, abs=TOLERANCE_S)
+
+    def test_the_takeaway_lands_in_the_swing_not_in_the_lead_in(self) -> None:
+        x, y, t = self._with_lead_in()
+        result = _detect(_sequence(x, y, t))
+
+        takeaway = result.event(SwingEvent.TAKEAWAY)
+        assert takeaway is not None
+        assert takeaway.timestamp_s >= self.LEAD_S
+
+    def test_an_unbounded_search_is_what_used_to_refuse_it(self) -> None:
+        """The bound is the fix, stated as the thing whose removal brings the bug back."""
+        x, y, t = self._with_lead_in()
+        unbounded = PhaseConfig(top_search_s=1000.0, max_backswing_s=1000.0)
+        result = _detect(_sequence(x, y, t), phase_config=unbounded)
+
+        assert not result.detected
+        assert any("descent taking" in w for w in result.warnings)
+
+    @staticmethod
+    def _slowed_six_times() -> PoseSequence:
+        real = np.arange(0.0, DURATION_S, 1.0 / (FPS * 6.0))
+        x, y = _hand_path(real)
+        return _sequence(x, y, real * 6.0)
+
+    @classmethod
+    def _suggested_factor(cls, phase_config: PhaseConfig | None) -> float:
+        result = _detect(cls._slowed_six_times(), phase_config=phase_config)
+        warning = next(w for w in result.warnings if "slow-motion" in w)
+        return float(warning.split("at least ")[1].split(" ")[0])
+
+    def test_the_bound_is_wide_enough_to_keep_slow_motion_diagnosable(self) -> None:
+        """Why the top is not bounded by `max_downswing_s`, the apparently obvious choice.
+
+        An undeclared slow-motion clip arrives with every duration stretched by
+        the playback factor. Bounding the top search at one second would cut
+        through its real downswing, measure whatever remained, and suggest a
+        factor derived from the truncated number -- refusing the clip while
+        advising a correction too small to fix it. The suggestion has to be
+        sufficient, which is the whole of what it is for.
+        """
+        suggested = self._suggested_factor(None)
+        recovered = filter_sequence(self._slowed_six_times(), FilterConfig())
+        assert detect_phases(recovered) is not None
+
+        rescued = detect_phases(
+            filter_sequence(
+                self._slowed_six_times(), FilterConfig(), slow_motion_factor=suggested * 1.05
+            )
+        )
+        assert rescued.detected
+
+    def test_cutting_the_bound_to_a_downswing_breaks_that_advice(self) -> None:
+        """The counterfactual, so the width above reads as a decision rather than a number."""
+        narrow = PhaseConfig(top_search_s=PhaseConfig().max_downswing_s)
+        suggested = self._suggested_factor(narrow)
+
+        stranded = detect_phases(
+            filter_sequence(
+                self._slowed_six_times(), FilterConfig(), slow_motion_factor=suggested * 1.05
+            ),
+            narrow,
+        )
+        assert suggested < self._suggested_factor(None)
+        assert not stranded.detected
+
+
 class TestConfidence:
     def test_overall_is_the_product_of_its_factors(self) -> None:
         result = _detect(_swing())
@@ -369,7 +480,7 @@ class TestSignals:
         assert swing_signals(filtered).hand.source is HandSource.MIDPOINT
 
     def test_picks_the_wrist_whose_tracking_covers_the_swing(self) -> None:
-        """The failure `data/dtl/iron_dtl.mp4` exposed.
+        """The failure `data/amateur/dtl/iron_dtl.mp4` exposed.
 
         Down-the-line footage hides one wrist behind the other, and which one it
         hides changes through the swing. Here the right wrist is visible for the

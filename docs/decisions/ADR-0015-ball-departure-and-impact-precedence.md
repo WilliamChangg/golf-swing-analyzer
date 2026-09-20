@@ -124,7 +124,7 @@ need.
 `HAND_LOW` above `HAND_SPEED` is the one step in the order that rests on a
 measurement rather than an argument, and it is the question the roadmap left open
 after the tour-pro footage arrived. It is now measured rather than estimated. On
-`data/face-on/rory_face_on.mp4`, with the ball bracketed between frames 360 and
+`data/rory/face-on/rory_face_on.mp4`, with the ball bracketed between frames 360 and
 361:
 
 | source           | frame | delta vs the observation |

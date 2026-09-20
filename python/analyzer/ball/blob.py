@@ -332,7 +332,7 @@ def _regions(
     is the obvious way to bound the work and it discards a golf ball: a ball is one
     of the *smallest* things in the response, and on real footage a frame offers
     dozens of larger ones -- grass clumps, compression blocks, the shadow under a
-    shoe. Measured on `data/face-on/rory_face_on.mp4`, the ball sat well outside
+    shoe. Measured on `data/rory/face-on/rory_face_on.mp4`, the ball sat well outside
     the largest 32 regions of its own frame. What remains after the band is then
     ranked by **closeness to a ball's expected size**, so the cap only ever drops
     candidates that are already less ball-like than the ones it keeps.

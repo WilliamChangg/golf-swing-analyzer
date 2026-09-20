@@ -38,6 +38,8 @@ from analyzer.contracts.calibration import (
     StereoCalibration,
 )
 from analyzer.contracts.club import ClubTrackingReport
+from analyzer.contracts.coaching import CoachingReport, Comparison, FindingRefusal
+from analyzer.contracts.comparison import ClipSummary, DifferenceRefusal, SwingComparison
 from analyzer.contracts.filtering import SequenceFilterReport
 from analyzer.contracts.health import EnvironmentReport, HealthStatus
 from analyzer.contracts.impact import FusedImpact
@@ -55,8 +57,9 @@ from analyzer.contracts.progress import ProgressUpdate
 from analyzer.contracts.projects import Project, ProjectList
 from analyzer.contracts.reconstruction import ReconstructionReport
 from analyzer.contracts.rpc import EngineError
+from analyzer.contracts.scene import ReconstructionScene
 from analyzer.contracts.sync import SyncModel
-from analyzer.contracts.video import TimestampSource, VideoMetadata
+from analyzer.contracts.video import SeekIndex, TimestampSource, VideoMetadata
 from analyzer.dispatch import call
 from analyzer.progress import CallbackReporter
 
@@ -282,6 +285,101 @@ def probe(
         typer.echo(json.dumps(metadata.model_dump(mode="json"), indent=2))
     else:
         _render_metadata(metadata)
+
+
+def _render_seek_index(index: SeekIndex) -> None:
+    """The frame/time map, and what the obvious alternative would have done.
+
+    The comparison column is the point of printing this at all. A list of
+    timestamps is not interesting; a list of the frames `frame / fps` would have
+    displayed instead of the one asked for is, and it is the only way to see
+    without a video player that a clip's declared rate is wrong.
+    """
+    import bisect
+
+    console.print(f"[bold]{Path(index.path).name}[/bold]")
+    console.print(f"  {index.frame_count} frames, times from [cyan]{index.source.value}[/cyan]")
+
+    metadata = call("probe_video", {"path": index.path})
+    assert isinstance(metadata, VideoMetadata)  # noqa: S101 - narrows the dispatch return type
+    nominal = metadata.timing.nominal_fps
+
+    def displayed(at: float) -> int:
+        return max(bisect.bisect_right(index.timestamps_s, at) - 1, 0)
+
+    table = Table(expand=True)
+    table.add_column("frame", justify="right")
+    table.add_column("shown at", justify="right")
+    table.add_column("seek to", justify="right")
+    table.add_column("frame / declared fps", justify="right")
+
+    # The first and last few frames, and the rest elided: the interesting rows
+    # are at the ends and a 652-frame clip would otherwise scroll a terminal.
+    shown = (
+        range(index.frame_count)
+        if index.frame_count <= 12
+        else [*range(6), *range(index.frame_count - 6, index.frame_count)]
+    )
+    previous = -1
+    for frame in shown:
+        if previous >= 0 and frame != previous + 1:
+            table.add_row("…", "", "", "")
+        naive = "—"
+        if nominal:
+            landed = displayed(frame / nominal)
+            naive = "[green]lands here[/green]" if landed == frame else f"[red]frame {landed}[/red]"
+        table.add_row(
+            str(frame),
+            f"{index.timestamps_s[frame]:.6f}s",
+            f"{index.seek_targets_s[frame]:.6f}s",
+            naive,
+        )
+        previous = frame
+    console.print(table)
+
+    if nominal:
+        wrong = sum(1 for frame in range(index.frame_count) if displayed(frame / nominal) != frame)
+        tone = "green" if wrong == 0 else "yellow"
+        console.print(
+            f"  declared {nominal:.3f} fps, measured "
+            f"{metadata.timing.measured_fps or float('nan'):.3f} fps — "
+            f"[{tone}]`frame / declared fps` would miss on {wrong} of "
+            f"{index.frame_count} frames[/{tone}]"
+        )
+
+    for warning in index.warnings:
+        console.print(f"  [yellow]{warning}[/yellow]")
+
+
+@app.command()
+def frames(
+    path: Annotated[Path, typer.Argument(help="Video file to inspect.")],
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the whole map as JSON instead of a table.")
+    ] = False,
+) -> None:
+    """Every frame's presentation time, and the time to seek to to display it.
+
+    What the desktop player runs on. Worth having on the command line because it
+    is the only way to check, without opening a video, whether a clip's declared
+    frame rate would put the playhead on the frame a panel is talking about --
+    and on two of this repository's own reference clips it would not.
+    """
+    try:
+        index = call("seek_index", {"path": str(path)})
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(index, SeekIndex)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(index.model_dump(mode="json"), indent=2))
+    else:
+        _render_seek_index(index)
 
 
 def _render_filter(report: SequenceFilterReport) -> None:
@@ -599,26 +697,35 @@ _GROUP_TITLES: dict[MetricGroup, str] = {
 }
 
 
-def _format_value(metric: Metric) -> str:
+def _format_measure(value: float, unit: MetricUnit, uncertainty: float | None = None) -> str:
     """Render a value with its unit, at a precision the measurement can support.
 
     The uncertainty rides alongside where there is one. A turn of 53 degrees and
     a turn of 53 give-or-take 13 are different findings, and only one of them is
     worth telling a player.
+
+    Takes the parts rather than a `Metric` so that a finding's evidence renders
+    identically to the metrics panel. The same number shown two ways in one
+    application is a reader's problem to reconcile, and there is no reason to
+    give them one.
     """
-    if metric.unit is MetricUnit.DEGREES:
-        if metric.uncertainty is not None:
-            return f"{metric.value:+.1f} +/-{metric.uncertainty:.0f} deg"
-        return f"{metric.value:+.1f} deg"
-    if metric.unit is MetricUnit.SECONDS:
-        return f"{metric.value:.3f} s"
-    if metric.unit is MetricUnit.RATIO:
-        return f"{metric.value:.2f} : 1"
-    if metric.unit is MetricUnit.TORSO_LENGTHS_PER_S:
-        return f"{metric.value:.2f} torso/s"
-    if metric.unit is MetricUnit.METRES_PER_S:
-        return f"{metric.value:.2f} m/s"
-    return f"{metric.value:+.3f} torso"
+    if unit is MetricUnit.DEGREES:
+        if uncertainty is not None:
+            return f"{value:+.1f} +/-{uncertainty:.0f} deg"
+        return f"{value:+.1f} deg"
+    if unit is MetricUnit.SECONDS:
+        return f"{value:.3f} s"
+    if unit is MetricUnit.RATIO:
+        return f"{value:.2f} : 1"
+    if unit is MetricUnit.TORSO_LENGTHS_PER_S:
+        return f"{value:.2f} torso/s"
+    if unit is MetricUnit.METRES_PER_S:
+        return f"{value:.2f} m/s"
+    return f"{value:+.3f} torso"
+
+
+def _format_value(metric: Metric) -> str:
+    return _format_measure(metric.value, metric.unit, metric.uncertainty)
 
 
 def _render_metrics(result: MetricSet) -> None:
@@ -1939,6 +2046,132 @@ def reconstruct(
         raise typer.Exit(code=1)
 
 
+@app.command()
+def scene(
+    project: Annotated[int, typer.Argument(help="Which project's pair to draw.")],
+    reference_clip: Annotated[
+        int | None,
+        typer.Option("--reference-clip", help="Which clip sets the clock and the frame."),
+    ] = None,
+    target_clip: Annotated[
+        int | None, typer.Option("--target-clip", help="The second view.")
+    ] = None,
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use for both clips.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds, for both clips.")
+    ] = None,
+    start_frame: Annotated[int, typer.Option("--start", help="First reference frame.")] = 0,
+    end_frame: Annotated[
+        int | None, typer.Option("--end", help="Exclusive last reference frame.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the whole scene as JSON instead of a summary.")
+    ] = False,
+) -> None:
+    """The reconstruction shaped for a viewport, and what a viewpoint would hide.
+
+    The summary's last row is the one worth reading. It is the fraction of each
+    joint's positional uncertainty that is visible from the reference camera --
+    which is where a viewport opens unless somebody moves it -- and a low number
+    means the picture will look more confident than the measurement is.
+    """
+    params: dict[str, object] = {
+        "project_id": project,
+        "model": model,
+        "start_frame": start_frame,
+    }
+    if reference_clip is not None:
+        params["reference_clip_id"] = reference_clip
+    if target_clip is not None:
+        params["target_clip_id"] = target_clip
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if end_frame is not None:
+        params["end_frame"] = end_frame
+
+    try:
+        result = call("reconstruct_scene", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, ReconstructionScene)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_scene(result)
+
+
+def _render_scene(result: ReconstructionScene) -> None:
+    """What a viewport is about to draw, and how honest the default view of it is."""
+    import numpy as np
+
+    from analyzer.reconstruction.triangulate import visible_uncertainty_fraction
+
+    summary = Table(title="Scene", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+
+    summary.add_row("space", f"{result.space.value}  [dim]metres, centred on the reference[/dim]")
+    summary.add_row(
+        "frames", f"{len(result.frames)}  [dim]{result.start_frame}..{result.end_frame}[/dim]"
+    )
+    summary.add_row(
+        "reconstructed",
+        f"{sum(frame.reconstructed for frame in result.frames)} points over "
+        f"{sum(1 for frame in result.frames if frame.reconstructed)} frames",
+    )
+    summary.add_row("framing", f"radius {result.radius_m:.2f} m about the measured centroid")
+    for camera in result.cameras:
+        summary.add_row(
+            f"{camera.kind.value} camera",
+            f"{camera.name}  [dim]{camera.role.value}, {camera.horizontal_fov_deg:.0f} deg h-fov, "
+            f"at ({camera.position.x:+.2f}, {camera.position.y:+.2f}, {camera.position.z:+.2f}) m[/dim]",
+        )
+
+    # The phase's own number. The reference camera is the origin, so the
+    # direction to each point is the point.
+    points, matrices, sigmas = [], [], []
+    for frame in result.frames:
+        for point in frame.points:
+            if point.position is None or point.uncertainty is None:
+                continue
+            points.append([point.position.x, point.position.y, point.position.z])
+            unknown = point.uncertainty
+            matrices.append(
+                [
+                    [unknown.xx, unknown.xy, unknown.xz],
+                    [unknown.xy, unknown.yy, unknown.yz],
+                    [unknown.xz, unknown.yz, unknown.zz],
+                ]
+            )
+            sigmas.append(unknown.sigma_m)
+
+    if points:
+        fraction = visible_uncertainty_fraction(np.array(matrices), np.array(points))
+        finite = np.isfinite(fraction)
+        worst = np.array(sigmas)[finite]
+        shown = float(np.median(fraction[finite]))
+        summary.add_row("uncertainty", f"{np.median(worst) * 1000:.1f} mm at the median")
+        tone = "green" if shown > 0.7 else "yellow" if shown > 0.4 else "red"
+        summary.add_row(
+            "visible from the reference camera",
+            f"[{tone}]{shown:.0%}[/{tone}]  [dim]of it; the rest points down the line of "
+            f"sight and draws as {np.median(worst * fraction[finite]) * 1000:.1f} mm[/dim]",
+        )
+
+    console.print(summary)
+    for warning in result.warnings:
+        console.print(f"[yellow]! {warning}[/yellow]")
+
+
 def _render_club(result: ClubTrackingReport) -> None:
     """Coverage per phase first, because the aggregate rate is the misleading one.
 
@@ -2786,7 +3019,11 @@ def train(
         int | None, typer.Option("--epochs", help="Maximum passes over the set.")
     ] = None,
     device: Annotated[
-        str, typer.Option("--device", help="torch device. cpu is the default.")
+        str,
+        typer.Option(
+            "--device",
+            help="torch device: cpu (default), auto, cuda or mps. GSA_FORCE_CPU overrides.",
+        ),
     ] = "cpu",
     search: Annotated[
         list[Path] | None,
@@ -2862,7 +3099,7 @@ def train(
         trained,
         split.test,
         model_id=identifier,
-        device=device,
+        device=report.device,
         label_digest=built.summary.label_digest,
     )
     _render_evaluation(comparison.rule, "Rule-based detector, held-out clips")
@@ -2930,6 +3167,432 @@ def models() -> None:
             "-" if evaluation is None else ("yes" if evaluation.claims_permitted else "no"),
         )
     console.print(table)
+
+
+_REFUSAL_TAG: dict[FindingRefusal, str] = {
+    FindingRefusal.NO_SWING: "no swing",
+    FindingRefusal.NO_METRIC: "not measured",
+    FindingRefusal.NO_THRESHOLD: "no threshold exists",
+    FindingRefusal.BASIS_NOT_PERMITTED: "wrong kind of number",
+    FindingRefusal.VIEW_MISMATCH: "wrong camera",
+    FindingRefusal.SUPPLIED_TIMEBASE: "supplied timebase",
+    FindingRefusal.LOW_CONFIDENCE: "low confidence",
+    FindingRefusal.NO_UNCERTAINTY: "no uncertainty",
+    FindingRefusal.UNRESOLVED: "cannot resolve",
+}
+
+_COMPARISON_STYLE: dict[Comparison, str] = {
+    Comparison.BELOW: "yellow",
+    Comparison.WITHIN: "green",
+    Comparison.ABOVE: "yellow",
+}
+
+
+def _render_coaching(report: CoachingReport) -> None:
+    summary = Table(title="Coaching", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("Value", overflow="fold")
+    summary.add_row("rules considered", str(report.rules_considered))
+    summary.add_row("findings", f"{len(report.findings)}")
+    summary.add_row("refused", f"{len(report.refused)}")
+    summary.add_row("camera view", report.view.value)
+    if report.frame_interval_s is not None:
+        summary.add_row(
+            "clock resolution",
+            f"{report.frame_interval_s * 1000:.1f} ms between frames "
+            f"({1.0 / report.frame_interval_s:.0f} per real second)",
+        )
+    phrasing = report.phrasing
+    summary.add_row(
+        "phrasing",
+        f"{phrasing.mode.value}"
+        + (f" via {phrasing.provider}" if phrasing.provider else "")
+        + (
+            f" — {phrasing.accepted} kept, {phrasing.rejected} rejected"
+            if phrasing.attempted
+            else ""
+        ),
+    )
+    console.print(summary)
+
+    for finding in report.findings:
+        style = _COMPARISON_STYLE[finding.comparison]
+        body = [
+            finding.observation,
+            "",
+            f"[dim]source:[/dim] {finding.source.citation}",
+            f"[dim]measured on:[/dim] {finding.source.population}",
+        ]
+        if finding.phrased is not None:
+            body.insert(1, f"\n[dim]phrased:[/dim] {finding.phrased}")
+        for item in finding.evidence:
+            shown = item.frames if len(item.frames) <= 6 else [item.frames[0], item.frames[-1]]
+            span = (
+                f"frames {shown[0]}-{shown[-1]}"
+                if len(item.frames) > 6
+                else "frames " + ", ".join(str(frame) for frame in shown)
+            )
+            body.append(
+                f"[dim]evidence:[/dim] {item.label} = "
+                f"{_format_measure(item.value, item.unit, item.uncertainty)} "
+                f"({span}, confidence {item.confidence:.2f})"
+            )
+        console.print(
+            Panel(
+                "\n".join(body),
+                title=f"[{style}]{finding.comparison.value}[/{style}] {finding.title}",
+                title_align="left",
+                subtitle=f"[dim]{finding.rule_id}[/dim]",
+                subtitle_align="right",
+            )
+        )
+
+    if report.refused:
+        refusals = Table(title="Refused", title_justify="left", expand=True)
+        refusals.add_column("rule", no_wrap=True)
+        # The tag rides with the reason rather than taking a column of its own:
+        # the reasons are the readable part and a third narrow column squeezes
+        # them into a ribbon on an eighty-column terminal.
+        refusals.add_column("why", overflow="fold", ratio=2)
+        for entry in report.refused:
+            refusals.add_row(
+                entry.rule_id,
+                f"[yellow]{_REFUSAL_TAG[entry.refusal]}[/yellow] — {entry.reason}",
+            )
+        console.print(refusals)
+
+    for rejection in report.phrasing.rejections:
+        console.print(
+            f"[red]guard[/red] {rejection.rule_id}: {rejection.offence} "
+            f"({rejection.token!r}) — the engine's own sentence was used instead."
+        )
+    if report.phrasing.unavailable:
+        console.print(f"[yellow]![/yellow] {report.phrasing.unavailable}")
+
+    console.print(
+        "[dim]Every finding above cites the frames its numbers were measured on. "
+        "No sentence here contains a number absent from that evidence — the same "
+        "guard is applied to the engine's own words and to any model's.\n"
+        "There is no score: a single number summarising a swing would need a scale "
+        "relating degrees of turn to seconds of tempo, and nobody has measured one.[/dim]"
+    )
+
+    for warning in report.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+@app.command()
+def coach(
+    path: Annotated[
+        Path, typer.Argument(help="Pose Parquet file, or the video it was extracted from.")
+    ],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given a video.")
+    ] = None,
+    window: Annotated[
+        float | None, typer.Option("--window", help="Filtering window in seconds.")
+    ] = None,
+    slow_motion: Annotated[
+        float,
+        typer.Option(
+            "--slow-motion",
+            help="How many times slower than real time the clip plays (8 for 8x slo-mo).",
+        ),
+    ] = 1.0,
+    project: Annotated[
+        int | None,
+        typer.Option("--project", help="Apply this project's camera calibration."),
+    ] = None,
+    phrasing: Annotated[
+        str | None,
+        typer.Option(
+            "--phrase-with",
+            help=(
+                "Base URL of a language model on THIS machine to reword the findings. "
+                "Loopback only. Off by default, and off is complete."
+            ),
+        ),
+    ] = None,
+    phrasing_model: Annotated[
+        str | None, typer.Option("--phrase-model", help="Which local model to ask for.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw report as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Reach the conclusions a swing's measurements support, and refuse the rest."""
+    params: dict[str, object] = {
+        "path": str(path),
+        "model": model,
+        "slow_motion_factor": slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if project is not None:
+        params["project_id"] = project
+    if phrasing is not None:
+        params["coaching"] = {
+            "phrasing": "local",
+            "phrasing_endpoint": phrasing,
+            "phrasing_model": phrasing_model,
+        }
+
+    try:
+        result = call("coach_swing", params)
+    except EngineError as exc:
+        console.print(f"[red]{exc}[/red]")
+        remediation = (exc.data or {}).get("remediation")
+        if remediation:
+            console.print(f"[dim]fix: {remediation}[/dim]")
+        raise typer.Exit(code=1) from exc
+
+    assert isinstance(result, CoachingReport)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_coaching(result)
+
+    # Non-zero when no conclusion was reached, so a script driving this learns
+    # that the swing produced nothing rather than reading silence as approval.
+    if not result.findings:
+        raise typer.Exit(code=1)
+
+
+_DIFFERENCE_TAG: dict[DifferenceRefusal, str] = {
+    DifferenceRefusal.NO_SWING: "no swing",
+    DifferenceRefusal.MISSING: "one clip only",
+    DifferenceRefusal.VIEW_MISMATCH: "different views",
+    DifferenceRefusal.CAMERA_MOVED: "camera moved",
+    DifferenceRefusal.CALIBRATION_MISMATCH: "one lens corrected",
+    DifferenceRefusal.SUPPLIED_TIMEBASE: "supplied timebase",
+    DifferenceRefusal.LOW_CONFIDENCE: "low confidence",
+    DifferenceRefusal.NO_BRACKET: "no uncertainty",
+    DifferenceRefusal.UNRESOLVED: "cannot resolve",
+}
+
+
+def _render_clock(summary: ClipSummary, title: str) -> Table:
+    """One clip's knots, which is what the normalisation divided out."""
+    table = Table(title=title, title_justify="left", expand=True)
+    table.add_column("event", no_wrap=True)
+    table.add_column("frame", justify="right", no_wrap=True)
+    table.add_column("time", justify="right", no_wrap=True)
+    table.add_column("+/-", justify="right", no_wrap=True)
+    table.add_column("located to", overflow="fold", ratio=2)
+
+    for knot in summary.clock.knots:
+        table.add_row(
+            knot.event.value,
+            str(knot.frame_index),
+            f"{knot.timestamp_s:.3f} s",
+            f"{knot.ambiguity_s * 1000:.0f} ms",
+            knot.ambiguity_source,
+        )
+    return table
+
+
+def _render_comparison(result: SwingComparison) -> None:
+    summary = Table(title="Comparison", title_justify="left", expand=True)
+    summary.add_column("Property", no_wrap=True)
+    summary.add_column("reference", overflow="fold")
+    summary.add_column("target", overflow="fold")
+    for label, left, right in (
+        ("clip", Path(result.reference.path).name, Path(result.target.path).name),
+        ("frames", str(result.reference.frames), str(result.target.frames)),
+        ("view", result.reference.view.value, result.target.view.value),
+        ("calibration", result.reference.calibration.value, result.target.calibration.value),
+        (
+            "slow motion",
+            f"{result.reference.slow_motion_factor:g}x",
+            f"{result.target.slow_motion_factor:g}x",
+        ),
+        (
+            "torso length",
+            _opt_widths(result.reference.torso_length),
+            _opt_widths(result.target.torso_length),
+        ),
+        (
+            "shoulders at address",
+            _opt_torso(result.camera.reference_span),
+            _opt_torso(result.camera.target_span),
+        ),
+        (
+            "camera azimuth",
+            _opt_deg(result.camera.reference_azimuth_deg),
+            _opt_deg(result.camera.target_azimuth_deg),
+        ),
+    ):
+        summary.add_row(label, left, right)
+    console.print(summary)
+
+    verdict = (
+        "same position" if result.camera.consistent else "[yellow]moved, or not one body[/yellow]"
+    )
+    spans = (
+        f"spans disagree by {result.camera.span_disagreement * 100:.0f}%"
+        if result.camera.span_disagreement is not None
+        else "the spans could not be compared"
+    )
+    console.print(
+        f"Cameras: {verdict} — {spans}"
+        + (
+            f", up to {result.camera.azimuth_separation_deg:.1f} degrees apart"
+            if result.camera.azimuth_separation_deg is not None
+            else ""
+        )
+    )
+
+    if not result.computed:
+        for warning in result.warnings:
+            console.print(f"[yellow]![/yellow] {warning}")
+        return
+
+    console.print(_render_clock(result.reference, "Reference clock"))
+    console.print(_render_clock(result.target, "Target clock"))
+
+    if result.differences:
+        table = Table(title="Differences", title_justify="left", expand=True)
+        table.add_column("quantity", overflow="fold")
+        table.add_column("reference", justify="right", no_wrap=True)
+        table.add_column("target", justify="right", no_wrap=True)
+        table.add_column("difference", justify="right", no_wrap=True)
+        table.add_column("had to clear", justify="right", no_wrap=True)
+        for entry in result.differences:
+            table.add_row(
+                entry.label,
+                _format_measure(entry.reference_value, entry.unit),
+                _format_measure(entry.target_value, entry.unit),
+                f"[bold]{entry.difference:+.3g}[/bold]",
+                f"{entry.bracket:.3g}",
+            )
+        console.print(table)
+    else:
+        console.print(
+            "[yellow]No quantity measured in both clips differs by more than the "
+            "two recordings can resolve.[/yellow]"
+        )
+
+    if result.refused:
+        refusals = Table(title="Not compared", title_justify="left", expand=True)
+        refusals.add_column("quantity", no_wrap=True)
+        refusals.add_column("why", overflow="fold", ratio=2)
+        for refusal in result.refused:
+            refusals.add_row(
+                refusal.label,
+                f"[yellow]{_DIFFERENCE_TAG[refusal.refusal]}[/yellow] — {refusal.reason}",
+            )
+        console.print(refusals)
+
+    trajectories = Table(title="Trajectories", title_justify="left", expand=True)
+    trajectories.add_column("channel", no_wrap=True)
+    trajectories.add_column("resolved", justify="right", no_wrap=True)
+    trajectories.add_column("largest", justify="right", no_wrap=True)
+    trajectories.add_column("at", justify="right", no_wrap=True)
+    trajectories.add_column("note", overflow="fold", ratio=2)
+    for channel in result.trajectories:
+        if channel.refusal is not None:
+            trajectories.add_row(
+                channel.label,
+                "—",
+                "—",
+                "—",
+                f"[yellow]{_DIFFERENCE_TAG[channel.refusal]}[/yellow] — {channel.reason}",
+            )
+            continue
+        trajectories.add_row(
+            channel.label,
+            f"{channel.resolved_fraction * 100:.0f}%",
+            "—"
+            if channel.largest_difference is None
+            else f"{channel.largest_difference:+.3g} {channel.unit.value}",
+            "—" if channel.largest_at is None else f"{channel.largest_at:.2f}",
+            "of the sampled positions carry a difference bigger than the bracket",
+        )
+    console.print(trajectories)
+
+    console.print(
+        "[dim]Positions run 0 at the takeaway, 1 at the top, 2 at impact, 3 at the "
+        "finish. Putting both clips on that axis is what makes the shapes "
+        "comparable and it divides out every timing difference between them — those "
+        "are in the table above, as durations, or refused there.\n"
+        "There is no score and no better: a difference has a direction and a size, "
+        "and which direction is desirable is not something this system measures or "
+        "has a source for.[/dim]"
+    )
+
+    for warning in result.warnings:
+        console.print(f"[yellow]![/yellow] {warning}")
+
+
+def _opt_deg(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f}°"
+
+
+def _opt_torso(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f} torso"
+
+
+def _opt_widths(value: float | None) -> str:
+    return "—" if value is None else f"{value:.3f} frame widths"
+
+
+@app.command()
+def compare(
+    reference: Annotated[Path, typer.Argument(help="The clip differences are measured from.")],
+    target: Annotated[Path, typer.Argument(help="The clip differences are measured to.")],
+    model: Annotated[
+        str | None, typer.Option("--model", help="Which extraction to use, when given videos.")
+    ] = None,
+    window: Annotated[
+        float | None,
+        typer.Option("--window", help="Filtering window in seconds, applied to both clips."),
+    ] = None,
+    reference_slow_motion: Annotated[
+        float, typer.Option("--reference-slow-motion", help="Factor for the reference clip.")
+    ] = 1.0,
+    target_slow_motion: Annotated[
+        float, typer.Option("--target-slow-motion", help="Factor for the target clip.")
+    ] = 1.0,
+    project: Annotated[
+        int | None, typer.Option("--project", help="Apply this project's camera calibration.")
+    ] = None,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Emit the raw comparison as JSON instead of tables.")
+    ] = False,
+) -> None:
+    """Lay two recordings of a swing over each other, and refuse what cannot be compared."""
+    params: dict[str, object] = {
+        "reference_path": str(reference),
+        "target_path": str(target),
+        "model": model,
+        "reference_slow_motion": reference_slow_motion,
+        "target_slow_motion": target_slow_motion,
+    }
+    if window is not None:
+        params["filter"] = {"smoothing": {"window_s": window}}
+    if project is not None:
+        params["project_id"] = project
+
+    # `_run_with_progress` reports a failure and exits non-zero itself, so there
+    # is nothing to catch here. Quiet under `--json` so the bar does not land in
+    # a pipe somebody is parsing.
+    result = _run_with_progress("compare_swings", params, "Comparing", quiet=as_json)
+
+    assert isinstance(result, SwingComparison)  # noqa: S101 - narrows the dispatch return type
+
+    if as_json:
+        typer.echo(json.dumps(result.model_dump(mode="json"), indent=2))
+        return
+
+    _render_comparison(result)
+
+    # Non-zero when nothing could be compared at all, so a script driving this
+    # learns that the pair produced no comparison rather than reading an empty
+    # table as agreement.
+    if not result.computed:
+        raise typer.Exit(code=1)
 
 
 # executed as `python -m analyzer.cli` -- the commands exist under the installed
