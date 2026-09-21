@@ -253,6 +253,7 @@ export function SwingScreen() {
 
   const analyse = useCallback(async () => {
     if (!clip) return;
+    setAnalysis(EMPTY);
 
     // Extraction first and separately: it is the only step measured in seconds
     // per clip, and it writes a Parquet the rest read. Running it every time
@@ -270,12 +271,15 @@ export function SwingScreen() {
         ...(options.windowS === undefined ? {} : { windowS: options.windowS }),
       }),
     );
+    if (!phases) return;
     const metrics = await run("Measuring", () =>
       computeMetrics(clip.path, options),
     );
+    if (!metrics) return;
     const coaching = await run("Reaching conclusions", () =>
       coachSwing(clip.path, options),
     );
+    if (!coaching) return;
 
     // The overlay is fetched for the whole clip where that fits inside the
     // engine's range limit, which covers every reference clip here. A longer

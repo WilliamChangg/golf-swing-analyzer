@@ -5,8 +5,6 @@
       "Read(//private/tmp/**)",
       "Read(//Users/williamchang/**)"
     ],
-    "additionalDirectories": [
-      "/Users/williamchang"
-    ]
+    "additionalDirectories": ["/Users/williamchang"]
   }
 }

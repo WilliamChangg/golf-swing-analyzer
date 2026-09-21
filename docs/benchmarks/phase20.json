@@ -1,0 +1,2565 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-09-21T02:11:24.233651+00:00",
+  "revision": "80e7f577d7b74163b6d5143c55d772805c2eeee6",
+  "working_tree_status": " M .github/workflows/ci.yml\n M .prettierignore\n M README.md\n M docs/architecture.md\n M docs/coordinate-systems.md\n M docs/testing.md\n M models/README.md\n M package.json\n M python/README.md\n?? docs/benchmarks.md\n?? docs/benchmarks/\n?? docs/biomechanics.md\n?? docs/computer-vision.md\n?? docs/modeling.md\n?? python/tests/test_document_benchmarks.py\n?? scripts/document_benchmarks.py\n",
+  "platform": "macOS-26.4.1-arm64-arm-64bit",
+  "machine": "arm64",
+  "python": "3.12.14",
+  "environment": {
+    "GSA_CACHE_DIR": "/private/tmp/gsa-phase20-cache"
+  },
+  "hardware": "Apple M1 Pro",
+  "source_sha256": {
+    "models/manifest.json": "6a4a15ea8620a33b3a51cbd85cfd5f2213f555d46c39e8a408caba0bb654cc77",
+    "python/analyzer/__init__.py": "1730babc54dea25ead540ebf33b93936ad2d9a5eb660122eda4c9e48f6f4795c",
+    "python/analyzer/ball/__init__.py": "fa3010311706d500af1c3349f47555e931159c96aece8e1deb8c0a73a4148c39",
+    "python/analyzer/ball/blob.py": "0a6f122298bc60417706c4dd9d1453d4ffe719f15857900f1a0b2c7c0b263142",
+    "python/analyzer/ball/detector.py": "40687559ed8e6694a1277ea17149882e53742fba4d29acd99f9549a9b8ba5110",
+    "python/analyzer/ball/extract.py": "df60de0f2998570d5e531ed04392718433d6f573898e1969f68b4978a88e1d41",
+    "python/analyzer/ball/track.py": "263091481544bba1067d649083dad9b7cd79ad7b6f819698536b57d37af3bbc4",
+    "python/analyzer/biomechanics/__init__.py": "1e88d6c07e46f23e705c816118e3108c2799b3ccb2d1b0d3622f5b0cd2d2b035",
+    "python/analyzer/biomechanics/anchors.py": "6ea755a4e95a1211794804240995a8154186df37583a905b27d43827a58081c7",
+    "python/analyzer/biomechanics/arms.py": "73fa51a10ace7ac0ba2c5f0a6151533d2345035248c3b72c977a322c0758318f",
+    "python/analyzer/biomechanics/body.py": "566d0847e68bee4057fb74bac3cb382acb98a5674b1e99bd3b39929f27a477ee",
+    "python/analyzer/biomechanics/compute.py": "d979319e061408d38598978e24f81a2eb383f121bf4c80a60a3e0ffc5e73faed",
+    "python/analyzer/biomechanics/geometry.py": "be3fb23a9144002b2b5272fcf4522ea184300fc331a4c421a9811e2b72a7352d",
+    "python/analyzer/biomechanics/posture.py": "275168f1b5640f8fc940047753ddc9f1f427511c574118926d799622079b0ac1",
+    "python/analyzer/biomechanics/registry.py": "6d140e0452eb026934635d626a7aad53fff31c2f7c25afbac4b6201dbdb255f0",
+    "python/analyzer/biomechanics/rotation.py": "5a2eb021fd48d92968de88f9516b31a5190aba69590b5780d05538528f1761d7",
+    "python/analyzer/biomechanics/spatial.py": "819c8b0c36cacdf02256e83f8139bb67456d55674fa157df306845b1f9bcd5d2",
+    "python/analyzer/biomechanics/timing.py": "368c52b9ff5f0e61e33e70b342f619bfaef36e6204adf755e51c10fdab9603b0",
+    "python/analyzer/biomechanics/view.py": "bfbbf43298c4a41920e6c33967ddddc5030e35a1778be8566c99adcb1c767a22",
+    "python/analyzer/calibration/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "python/analyzer/calibration/apply.py": "fd8ec6632fc2b4184ad41636d9633a9c1b48d635d37ff7ee406fc13b11170abf",
+    "python/analyzer/calibration/board.py": "db4c04fb533c359debc7ebb7e153700d70886a365a9c15a7ca4dd85631471804",
+    "python/analyzer/calibration/detect.py": "64bf904ba3be64d8553c363e55f9b7919974048fe73b54aa12bf3ff456e3d042",
+    "python/analyzer/calibration/intrinsics.py": "19b3a3373b377e31af84a2530c44a82236516e31e4c6554eaddeb879c4dccb7c",
+    "python/analyzer/calibration/stereo.py": "42864dc524092252ecae72804665f8077e76460e548982827ad428279105de43",
+    "python/analyzer/cli.py": "2a8086281e30365418091b112bd92c50b4282d318a7bc822904b58bdd6a3b515",
+    "python/analyzer/club/__init__.py": "c638a78349c3b21a8149847f77d0462f26e58adbff80808401defb5e46e197e8",
+    "python/analyzer/club/detector.py": "ff192111144dce1fe9a5588415415195439dd0d40a900369c30504090dd2e21b",
+    "python/analyzer/club/extract.py": "e345268297a13e4d0ffb247293de8d36ae34332388b64b25b94cafd975af653d",
+    "python/analyzer/club/geometry.py": "82ae3726d96f8ed0448906ecc9fc115a45159639baa5a7cfb6c7d4f6381ac84e",
+    "python/analyzer/club/hough.py": "117a812103589ce2c47ca2bfe5f9ddd51504f45d734fbdf3259becd8347ca771",
+    "python/analyzer/club/track.py": "8d0a1bcf4705f8f2a7b0a591835ef9907928afc876ed94c17e914c3746204e85",
+    "python/analyzer/coaching/__init__.py": "fb677efe060a7b51ebc3a2d3763ed932eef07630c2e2a82ddb7c6e425af9e3ab",
+    "python/analyzer/coaching/bracket.py": "ea186bd5eeee6d7a05a0832144ec5e46ed0f93a9ef6635932c0b882c18c2b381",
+    "python/analyzer/coaching/engine.py": "06ab6d62ecd39c05ef4f748735463584b051a5280de93db2d1f2fe7b2497cda6",
+    "python/analyzer/coaching/evidence.py": "f9b9a641e59ebce203bcf1cf6281ed20f0f8b4ffc93a9663408af3e925acb2ae",
+    "python/analyzer/coaching/guard.py": "a066d866379e76bfc582bd05267fcd723d8840f79b258f5b5bd17667e625c610",
+    "python/analyzer/coaching/local.py": "b366d9f628495731758925246789ccf32be6a65131340d0c58985d2e17c18ea2",
+    "python/analyzer/coaching/phrasing.py": "f529dbf353d9866ee71c7793f7543a8d61b1c431c9fe2516f73acd273c27f366",
+    "python/analyzer/coaching/registry.py": "7cedc8efd4cdc72bcb654feda05a69c32e104d277162a44c05fac94ace95ec78",
+    "python/analyzer/comparison/__init__.py": "c51312addb2cf4cae1662eb585948b9b575c34395dbda578cf36120f90891071",
+    "python/analyzer/comparison/compare.py": "2f449410b27058feae245ebb3521b1f883e7ba18e57946aff59f7cbce11ae388",
+    "python/analyzer/comparison/diff.py": "1f5dfdcb95497eecb234e8416c448858cee66e2971a41448cc691f8461edfabb",
+    "python/analyzer/comparison/normalise.py": "829642794ebd77292c9ddecef62766aec18f2548cbdecffca29b3ffab034f98b",
+    "python/analyzer/contracts/__init__.py": "1bacd11404b411708c881cffac738d487e7643ac2f62c66ce294efec98996721",
+    "python/analyzer/contracts/ball.py": "0c96ebe6137e4c54429d0c8c55fa23c0a0b4205cb183e40b89ffcd810240b2cb",
+    "python/analyzer/contracts/cache.py": "5ee446305dc86ef5a0362386f8f6f02d74df7394bf56b71480ae337ce13bb023",
+    "python/analyzer/contracts/calibration.py": "d5be5e552a4e620f5d1ce7672855e31b4e4af656fdcc374e221d6c88f01f4cce",
+    "python/analyzer/contracts/camera.py": "cc0c11def2b109287105ab641afe7c40216284c7a2c8f46118e76b7721b977f8",
+    "python/analyzer/contracts/club.py": "facb361f94466408dcbd222ea9fc014d60fedcfe2f95b9c71b166b5ed81e1f98",
+    "python/analyzer/contracts/coaching.py": "11a8e150d664dfcaea3de93695eee08a1efe7c5c658b3fb6392d12b4412aee39",
+    "python/analyzer/contracts/comparison.py": "ea738477a1a755cb56bf75f149d11c3104bc76547ca533dfc93068db1ed4ad29",
+    "python/analyzer/contracts/filtering.py": "beadadf8cded28ae15647a11280758e616a5967860b111d655a95e6029febbbc",
+    "python/analyzer/contracts/health.py": "eea68aadecccc2432c8b92f434814ee645b5965e56db9f5db819e727dcd9679c",
+    "python/analyzer/contracts/impact.py": "2e3f79f4e6f0b444cd8eee656a5186e855dfeae14125b4e6b1a4fc6ab17d5866",
+    "python/analyzer/contracts/labels.py": "c53ca97c0bc9fc1662dedbfb9ba8aaab0ad5c69e2e07f470c4f51aef5f5d5612",
+    "python/analyzer/contracts/metrics.py": "d6b6bdcd40ca54987e15d2395c09cedf7650f0b38e56413b68a144c469506c61",
+    "python/analyzer/contracts/ml.py": "dab440ef18dc0287b0d9fb6a3cc737df310fa880a9dba4ee2fb9a7fcba9d5789",
+    "python/analyzer/contracts/models.py": "59ce5091c98f9a499735e57f7f9b57d286e2aeedf09a917d93c565b21a96a88d",
+    "python/analyzer/contracts/overlay.py": "cf59f9082496bc88224f1968636dabbdf6a199de459dbbddf4b7ccd67f4349a6",
+    "python/analyzer/contracts/phases.py": "db79b4ac7ec6a64e2ab0b6ae53478eb78406a68dd0dabdafe0550a5785d2963e",
+    "python/analyzer/contracts/pose.py": "becb728492c0352d435ac6fa3994f5410bf5e744764fc3f0e1127e15fdda169c",
+    "python/analyzer/contracts/progress.py": "1c959586adf536392a7ff93ebafd90f5db9f7f7cdc9ebda384a181872f4c3e3e",
+    "python/analyzer/contracts/projects.py": "6a10595d0d69df09dd4e5c1af7b85a80ea6e5fc40f06ff2a47ef0d615b127960",
+    "python/analyzer/contracts/reconstruction.py": "8ed11de400f38caa48d34263fc77e8287bbf66aeba0a6bd9c80ddbec05209dea",
+    "python/analyzer/contracts/rpc.py": "349f5babdf7cd4318403ad51c7cd0062c3393d3c4298f29fbfcf04d24b850fe7",
+    "python/analyzer/contracts/scene.py": "0017c41fc9b3c273cad98165b0610eb7ba45c0cfb64c5ba05359438b271bf17e",
+    "python/analyzer/contracts/sync.py": "29a2788dec87250774c44d2feee0a5927edf4e76de1e2cf3458b20827181e2a7",
+    "python/analyzer/contracts/video.py": "3a1486fb61fb06531e470f251c839e0e4019247dda7fb22dec8da7ac0427cb02",
+    "python/analyzer/coordinates.py": "014922713af40e37cc447abf5b2f3a45811388a0028bef5f677643a9c6905806",
+    "python/analyzer/dispatch.py": "491c85955a264efcac1086c64380e148a14134795f0dd63e891155b2b619ed93",
+    "python/analyzer/environment/__init__.py": "3b3e408d8b81087e439f1190755378849ddf60bb3e3327c02597181fe8b06504",
+    "python/analyzer/environment/doctor.py": "8177445796364242230aeaa38bcf98a34564401dbfa2fc3048036d9faddb80ed",
+    "python/analyzer/environment/ffmpeg.py": "48d1ae681324ec70ed11280c6c3e1f4a0f6086a56582445652b3fc0765a5bf8b",
+    "python/analyzer/environment/hardware.py": "2336caf20ad636cac8c73f0417a43fe3e34c5b3b5035f88eb4c81f11839a5016",
+    "python/analyzer/environment/model_manager.py": "548161ece21a53520000467000a8fc5b4a2e4582c147235ae31a322e53c2c39d",
+    "python/analyzer/environment/models.py": "2cfda2bfa2fc24be7d82f34aa2c127ee8c9018ac540cd9759392e005b25c7dbd",
+    "python/analyzer/environment/pose_runtime.py": "d07a8d1cf85cb2c375294e03cc19a3a9d174e78eaf7fe2f079abea0cadcddf92",
+    "python/analyzer/environment/pose_smoke.py": "c6035e04d6e018c04b54861f303218d506137c164eb68614d8478516329000f0",
+    "python/analyzer/filtering/__init__.py": "bcfad8d2a33d06b603b6851f3ea3b3d33facf2292500442b83f08cb3bef7c153",
+    "python/analyzer/filtering/gaps.py": "0e62f4e448de295397271ce20b2cd0b5c498002b3cb0f8bf19b739acc6c73d52",
+    "python/analyzer/filtering/gating.py": "9339125ff62d229eeb739b3801ace68627cc7be0ee53e4a55e7e0098b2a19fc5",
+    "python/analyzer/filtering/landmarks.py": "8845371533145686e124bec771d8af30d350efbeaf4193543c68037b741b1701",
+    "python/analyzer/filtering/localpoly.py": "7aa79854915acb86de7338f3406b7014cecfb54da0d2f981f1959d4bf505ae07",
+    "python/analyzer/filtering/pipeline.py": "249f1716a05010a7f626b6c520ef469aedc39ebcf97cd3265de167f948a6fe96",
+    "python/analyzer/filtering/signal.py": "540de35bae2e466167f0f220e54452d6724b01e17d5c796329a03d437acee2e6",
+    "python/analyzer/filtering/smoothing.py": "553ee0099a5a573b35e80e75a940e9921182d28070d44f81bfcb6351a11ef7ec",
+    "python/analyzer/hashing.py": "9fc05abb91b8374030a98c8ef96cd4f438634d3de84d9df6d5edc60a88ad24d3",
+    "python/analyzer/impact.py": "d25be2d2c630eb586e59ee23ff1b38c45fbb38473b88638b89fc76a0248fc20e",
+    "python/analyzer/ingestion/__init__.py": "f2950659da5d4d57ea8a4b0ee63ca28a2a121206bd7dd928f574dee0604d1f23",
+    "python/analyzer/ingestion/cache.py": "5aa721d29899d9b969bbaf58824e287a6981ec8130a88f8560a1175ebb30942a",
+    "python/analyzer/ingestion/probe.py": "388d107169f653e185b7864ce6018581e84c1d17f3ed0addc51c4654ef32fbd0",
+    "python/analyzer/ingestion/reader.py": "0899234a20a6097a4ff7ccb1770fea5aab1ebe63b37d2196a91776fe7aa9d816",
+    "python/analyzer/ml/__init__.py": "535bc034cedbc542e8c77131d24bea50b3a6cdc8e3abc0197989457d1de217fb",
+    "python/analyzer/ml/compare.py": "042119cccd77d9e838f5bb60a0410113d5f8bc4c8ba4a51cf0847b3c55f2159b",
+    "python/analyzer/ml/dataset.py": "051e388ec405fe859ebb27f5774d44d4739869a15aec4b932c3b207be2a031d0",
+    "python/analyzer/ml/evaluate.py": "7ac78ffbfa892076a9eb199f07d39ba2fb41b3a8d977d531978261ea32ae92d9",
+    "python/analyzer/ml/features.py": "365dbfe5e7979e5d7aa24f8eae64e8e3ded130a826ccd02d224c6158c914e488",
+    "python/analyzer/ml/labels.py": "0221c2357982a92bb7d284749f6a246347302d7174808eabfd6742b1c66fb5e0",
+    "python/analyzer/ml/labeltool.py": "c576e86648027c58cd1cc96be6ad5b92448eaf181b36a2da47182d32bdb1b7d4",
+    "python/analyzer/ml/provider.py": "14a8e8f25c8b908f8ce674bec203dc2c95e2e5fc1957c6d2de210870bdf803cd",
+    "python/analyzer/ml/registry.py": "f3249145dfd7a7256cff4390be986ec1169eb8e50d6b3fbae2f07977f94ecf32",
+    "python/analyzer/ml/splits.py": "174b9caf341722597cfd0591762173e3137cb83551f006786c66398c7946a5d5",
+    "python/analyzer/ml/tcn.py": "c883b648bb82fb7a5b47deda3957f5d80bf1b9dae83264d520b2792b23dd6df2",
+    "python/analyzer/ml/train.py": "2d398b16b9c3ac0027a80001c3e55e9b6ee43e57f9a69141f9d082b3d6f9e0ae",
+    "python/analyzer/overlay.py": "e8f23d3be698e3d4fa25b7a35b25719f4348ae7b8fa4fc1db447e29294e0babb",
+    "python/analyzer/paths.py": "fe0cfbb8542b096cb3e619062aff43b8046e4e87cbe55fd073c4e5f7d6665803",
+    "python/analyzer/performance/__init__.py": "d460a15ccbee170de02036015b9e9fa361e9a64000a1b58f1a331b786829a6e8",
+    "python/analyzer/performance/cache.py": "6202e60397654bfc2a4bf0fb6083eb366d83f50cfc3b57ebe0ab522a7ead3f55",
+    "python/analyzer/performance/telemetry.py": "d224540c25c6cc07c94d42666e3e4e3406324d5bc66525ef1a994760a9852717",
+    "python/analyzer/phases/__init__.py": "3daf8e36aff304285071d2758d79cf88a634391780ab42a186d94fe32aa356ec",
+    "python/analyzer/phases/detect.py": "be99b1ed5f8a9b11738cfc07a4b5a01c26bd3f2d37fb77bf5bc01e7fad593295",
+    "python/analyzer/phases/signals.py": "c91d4f3a51bf4d6ea0cfc2ffa7df11a3019f122f4b6858829229deb27870cc62",
+    "python/analyzer/pose/__init__.py": "d4ebf102834863ec92fa76ee3fc0884b33bd6ca1d39ed1514daa3ee38ee40627",
+    "python/analyzer/pose/estimator.py": "9a68efb8fe1fb94618e8a3a8974ba08605695a1c78456ba361ca0da2bdfa0c84",
+    "python/analyzer/pose/extract.py": "12b57c1dce0bdaf4373834c5e863033f3589c3cdfb69345e3cc2686c311bd84d",
+    "python/analyzer/pose/mediapipe_estimator.py": "b1f994aefbcdcc3cf6fa6f838548685ab188ecd780c37f33cd7c435c5459779f",
+    "python/analyzer/pose/series.py": "089405d89099200233165a965077c192706f7494e2e33ad5becc3c17fc61cfd2",
+    "python/analyzer/pose/store.py": "ecc4d568283d6a17c08b99a743dcd2159ecc06cb7115472089c074e8856f83c2",
+    "python/analyzer/progress.py": "8a1b805f0785332ebd4cec3a4805a5155041e2e78efc12d199749f1c8a48d85d",
+    "python/analyzer/projects/__init__.py": "23612f400369e75652c983faf5cc95a9a87ef8d877cd9e2736f192ef1d2dda18",
+    "python/analyzer/projects/store.py": "f4010f9589ec28bc6a70ffdeaaaf496d180be66d424f2ed839ff3847139d7f70",
+    "python/analyzer/reconstruction/__init__.py": "9b1e6210d5857d368c7581122f15f82be8b7a02ac90d314717333fd4e371ba13",
+    "python/analyzer/reconstruction/pairing.py": "f770f022198ddbbfcfb90c4134abc6dc2d64cdcd665d110876590a469322172b",
+    "python/analyzer/reconstruction/reconstruct.py": "861a511664d09d10400ae0a89cbdae00fdf74dd6fd949ee63568a89b2fdbc615",
+    "python/analyzer/reconstruction/skeleton.py": "c216137fd3f84776d38c8674af7911a612b175f553d2384cc932f274ccb48bd8",
+    "python/analyzer/reconstruction/triangulate.py": "11674f76bb973fde82267c338f3814c9bc46b19d4f8435c994bd49e6cfe62bc5",
+    "python/analyzer/scene.py": "d916a7f442e11c96d8ce3101e4ad7256648df80817e1cdcf4b7bf600239e4d62",
+    "python/analyzer/sync/__init__.py": "3c78fb74364b16e95c34b8d6a1b2f5e40664401e94ea113fe3665e559ea0a2af",
+    "python/analyzer/sync/align.py": "85a3ab302279149991b93419c9c6033a1488fe1edc9061e28f75ee1730fa02fd",
+    "python/analyzer/sync/anchors.py": "bb07b8c7c4507198f495aff5f7245cd7de626d050b29a21fa0f9469e68f9982d",
+    "python/analyzer/sync/correlate.py": "5a830d829ae2ac5e43e4ad5703f155bba177fefd4a930b84983b25dac7dbdb60",
+    "python/analyzer/sync/timemap.py": "3855c5db5b624ac01193f9850d88eb7b3642cdd8690b76769e73914ab981585f",
+    "python/analyzer/worker.py": "fa660189f15ee7fe083ffea0f0b8a24539341e93ee5d8f40c4d42872b3124ae3",
+    "python/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "python/tests/conftest.py": "274501ac96df4e29c7d570021f14b752b84c36bea8c54d494b76e28aa3926545",
+    "python/tests/synthetic.py": "61a059e476e96970fb6f1fe06d7c4a4e9706d71ddf651d06d0feb791fe50b52c",
+    "python/tests/synthetic_ball.py": "5426777708cbedef36091d44ff9159c36e921b47901666944ae4aa2d8b1f93ee",
+    "python/tests/synthetic_board.py": "8064e385a65d578b5d0690dd54e738469c81b0bd3c76e0b4c55cda33d4eb8e3b",
+    "python/tests/synthetic_body3d.py": "a525f0b2f5b9397aaf259484d51e9b3adae6abc541b22ad5657c27c622314020",
+    "python/tests/synthetic_club.py": "5653fcfcc03cc5000a4fb9244f535b8e2810390621a7401a336aa3912d6ce497",
+    "python/tests/synthetic_coaching.py": "ef39070dd7da3c60196e7a33762b8bad51ab8edc2529c5133beac2f42d695c93",
+    "python/tests/synthetic_labels.py": "c76b7508439a1e618f692ee3965ba744b4d50a1c58935e0130cf246bf37683f7",
+    "python/tests/synthetic_signals.py": "cf3fe50fe02a21d70c397fc55a7c5bf5ba9f4f6a18896349db23a71f920c7540",
+    "python/tests/test_ball_detector.py": "0e1a40182e09811d2ea5137d1c33fcbf6c50945aac3d142fdaf05392351a0596",
+    "python/tests/test_ball_pipeline.py": "a155efe87b87ad7c790608772404cf1129ee01edbbfe0b3bc0472016f77fb556",
+    "python/tests/test_ball_track.py": "7a0326eaaa7d2e869e7df67921f55e852ff59ffd27685667647529964f8b5eac",
+    "python/tests/test_biomechanics_geometry.py": "fc31ef4f19c86cdb1df9f27420cf90b4a0942a15c2243eacb44c214a87e22b8f",
+    "python/tests/test_biomechanics_metrics.py": "ae5b4ad411fe583408d737533c9ba2ec60153b52dbd753c03ffc6c8119151006",
+    "python/tests/test_calibration.py": "7d2ebfb24468f13c39184161aef613e93dc2f67c7abc5fb77bcf3e4379f8a0ec",
+    "python/tests/test_club_detector.py": "9dcbd69e249681e019ba5d1c375c0e26695bf3a2c3a819d1b486f2636a840729",
+    "python/tests/test_club_extract.py": "977f94d16529e26471e83243e3dbacc44c5ef8a9f9141e9948f3543df4bb3040",
+    "python/tests/test_club_geometry.py": "6560efdb1682b5eec6084824be945e65139adac2ef8d20f20160b10335abdfb7",
+    "python/tests/test_club_track.py": "f479c89c72aaca2d03dfabd9e2d7b016444fbe3722a03c05fe3a85d1461569cc",
+    "python/tests/test_coaching_engine.py": "cebb8a7f4c53f950a50910dc485bc698e91cccb7b1a36e099d85112b3814ed61",
+    "python/tests/test_coaching_guard.py": "a8679f0a252158cac10f7afe01c19c8ac47daa468ff3c77d773d3a641b2c811a",
+    "python/tests/test_coaching_phrasing.py": "49b929a3061bdf0938e37e4dd8ee4b46a06e77d2391144e1562f9a6b83a77c9d",
+    "python/tests/test_coaching_registry.py": "63710bf84f3d26fbcacccbc847aeeb599917d29253752810d250e8d90200c81c",
+    "python/tests/test_comparison_compare.py": "e68a5f4434c858a9a7982d14b18067b6f0a24156dc5fb8fc3bc6fcb5121c05b8",
+    "python/tests/test_comparison_diff.py": "06649cd01b8efe10b75d9e78dd18e590a0a9ad0ef9678904ff8ec06e6b84428a",
+    "python/tests/test_comparison_normalise.py": "22816bd7b8bf4f8b2df683780ec4a1994e781d653d9a18562d1b5bafaaa064d2",
+    "python/tests/test_contracts.py": "fbe635a0464316da33996ecada3b8cd4419e07204df22810c1079b430ae4609a",
+    "python/tests/test_coordinates.py": "81c99f6e9e6a47bd8efabf2084c40cb3285c3a278d6993d0efad62a464d308b0",
+    "python/tests/test_dispatch.py": "212c13d3d35734072fd7a9f170a867d4be111e5a754866c4aa4148ae1a42327a",
+    "python/tests/test_document_benchmarks.py": "1c927c52f24b6b16cdf8e65f61a1701717682f13f7cee37c3fa890518741b4e8",
+    "python/tests/test_filtering_landmarks.py": "a55d480505741ff611cff388cfeb1124aa4e42afad5fafd2ea94a33b9e09dc9b",
+    "python/tests/test_filtering_pipeline.py": "c8f8e7945b57fea784ef3d650b3cffb6744e134e4f959d16fae6fab0c6beb84c",
+    "python/tests/test_filtering_signal.py": "adbe2febe44ecd9ba6dc15086549338b98bcc5461cf8c69f6d95653cd9e66cad",
+    "python/tests/test_filtering_stages.py": "b71b1588e46250270ab75ffd620874b05f3181c803a03c355a801624ef708897",
+    "python/tests/test_hashing.py": "cb26b2beed6f03672ccd318f15ef7a0f43e8085a6646d15d547c1c3a56b5e283",
+    "python/tests/test_impact.py": "7efc9420c4bbe79247ed909c5365781f5e244d9482062604c614ab103bc9e06e",
+    "python/tests/test_ingestion_cache.py": "8a4fac41212279e26c12c9e3496185516170cb064ec65855a19e3e8f5457d741",
+    "python/tests/test_labels.py": "b88b7cb7518b22d169fcf85baeeaacf70da690b411f066ba66b60efed3983269",
+    "python/tests/test_labeltool.py": "ca141620cdc623ec81ae9fe77c2883abc3af50a5f4321da9bfcaf8fdf15de83c",
+    "python/tests/test_localpoly.py": "56eafa7069f9938a59f79be6d0a1313c98a1632a2db8fe822f60404f485231ed",
+    "python/tests/test_ml_dataset.py": "97b8119f89dc09185e6980b2be87233d18cb2a5ffd4f7b3731ea169a7c0c2e3c",
+    "python/tests/test_ml_evaluate.py": "c0db12e296ce679cbd9127c310d5ff9efbeaf4be4125dd6a61af4987a809ddd2",
+    "python/tests/test_ml_features.py": "593cfeea02f3489b34c664c94db7a9aeb52feabb7faab2a95a332ca2a7b44bca",
+    "python/tests/test_ml_provider.py": "7186acf1a8862eaae788da0736a746f5013c044c7487892ab2ab02d1f53a8eee",
+    "python/tests/test_ml_registry.py": "e58d020404fff358d819646f1fc3e930056a16dbd6686f5cfd7dea090366b424",
+    "python/tests/test_ml_splits.py": "791917a2bfe385d2049e3d5f65e9f902786b7a9c50ca2d5b41115e7aaa4e0ebd",
+    "python/tests/test_ml_train.py": "0c31dd2d7d50dd37d39e83c2ae9b3c33a43bf81f085d3e81abf6b851adefb63b",
+    "python/tests/test_model_manager.py": "935dc566bc98823ca97314852d2ec47c63ac14e71f30e0b8a6501f31f7bda531",
+    "python/tests/test_models.py": "cc0240843371f4ac8adb6d18528ded6928912d21161214b308e5b14ad5b337e7",
+    "python/tests/test_numerical_invariants.py": "54a0f09852c0c21278e51eb2162b4118b9285879887581817f5fa6cec5596987",
+    "python/tests/test_overlay.py": "78cee74909d6b4dcd27173cc182a8410dab2ca6b6ebab43ab0c444f7bf402585",
+    "python/tests/test_performance.py": "1ff02811d2afdb8e26e8bf8a557841ed176ab1829735ffcf000ddbafc32eceb5",
+    "python/tests/test_phases.py": "0a6eb891bf26bda88b77834c615bc2eabc4c476b83a1488199d8f0da215148f2",
+    "python/tests/test_pipeline_hardening.py": "cc9d313fe0b04e0f2db9bba0afb227473298037d48179c593f2ea707541b9848",
+    "python/tests/test_pose_estimator.py": "99aa40577bc80acd04ea8ed15bf378ac6a18e231f720c4aa0b1508139bf6744b",
+    "python/tests/test_pose_extract.py": "3dff77f919e9bb45e4214447de7d586ddd05154fdfd8f69e0b87a5eebdc69c4f",
+    "python/tests/test_pose_runtime.py": "0849e065866d408dcdc5169dfe24a2fb07f2d9619946bc044efeb3d61272ebbf",
+    "python/tests/test_pose_series.py": "7cf659be64578dceed4b14c28457a07f81acf40f4018f67d0e70511aba89d4da",
+    "python/tests/test_pose_store.py": "477b54898f27baee18996851db6b742f0b4803433171bb803e4d562218945cb4",
+    "python/tests/test_probe.py": "25b9a915a98e5684a087fda8d9807f175a51497d80527c0911377785901ac41f",
+    "python/tests/test_progress.py": "2e98d1f5b0cf0611902d872e8af9c5eb21beb30b9f1efe356d5f5752acab205f",
+    "python/tests/test_projects.py": "f4d35debd0f742a68f893bcaf0a632b4dbcc884ece32a677c0de8471717141ed",
+    "python/tests/test_reader.py": "c83e62bf9cd2e994af7ea20c249290a9be29d69b5a073c6564b69aafe4bcb4f2",
+    "python/tests/test_reconstruction.py": "4c48622845503a606c20da51ebe72219469984fc3f6f5720b284218e090f2147",
+    "python/tests/test_scene.py": "6876297387853d035e8a6e18ca3961fb997e4dd8e61d956d3e4bdbe66d710200",
+    "python/tests/test_seek_index.py": "eb85f4aa3b96461c548b3610b68d9ffe555267eb63a790a04d8d98410946247f",
+    "python/tests/test_sync.py": "f3af8eaf785ad3b953ba6e832e16661678dcbea30c7b55d60cc0eda3c1c214b8",
+    "python/tests/test_worker.py": "a26a921a3bbf4226ae2ac20b88671c74ec61aebad34e20c8b95e6631b464f1ef",
+    "scripts/benchmark.py": "fa3c194d67fa21d4a9c0f3ac4e7ac17c49f085c2ea9fd4d61b71cd9f54b0d1ac",
+    "scripts/benchmark_ball.py": "35728cba358bde87013553133d9191bb8cc9baf0c6295a0b1be6b390a3a1b1d3",
+    "scripts/benchmark_calibration.py": "a385d0e6cdf17d3222797b4a74bdfff82baeb3f9fe9a9940a5d326c649f4c8fe",
+    "scripts/benchmark_club.py": "5792823363f9fa6edcfe75551f2c0af9d317d4770670773a4b4d70136a699560",
+    "scripts/benchmark_coaching.py": "3f3ac2baab5a548cd4eaa79507cc19e34a2f25e580b2788e1a587140d04def6a",
+    "scripts/benchmark_compare.py": "a8b2570fa6db1ee485cde96ce172de391a3da9d3dd54db324afa0830d3ffb4f2",
+    "scripts/benchmark_decode.py": "e1abbf640bc19276282544176ff8c4245828c22faf584e1e521d7a4bd55b1dc9",
+    "scripts/benchmark_filter.py": "f6f2c30f65b6bcb68af3a0d72b069cc5a956f04703a396c0a548ce63b4fd807a",
+    "scripts/benchmark_metrics.py": "82c4c5ffa21b9db6c7c5aabd570a99176d7a6b6e22561d3af9c3a3452e8d6749",
+    "scripts/benchmark_ml.py": "3e9475f8c69a3e65aa29958ac3b1bc1b005580ea0609971166ab7d56042d8de1",
+    "scripts/benchmark_models.py": "0b2735f5e803b054aeaba9366abc8dd1414fd01c2dc984014e8f6d1afb5c7505",
+    "scripts/benchmark_pose.py": "3dff951b8afc445f4b113a0dc15cc51a9618306ed7c479f617e0363feb59c18f",
+    "scripts/benchmark_reconstruct.py": "66336ba58edb7c283b22ef945c0867958d8f553c9f6db6537f128feeff8030b3",
+    "scripts/benchmark_seek.py": "8549ef2371b5cd088caa72e5d1a42d2d26b37b9675be3b617cdc3d243e449ddf",
+    "scripts/benchmark_sync.py": "91b71dd86ed10ba2f252f4a5e3dbc26a3ebf2c130509e6c43ab6fb188ae25349",
+    "scripts/benchmark_viewport.py": "1c693967961fa99a1039458e7947a34f5dbcd1f7db12fe200460fb9b5e228a9f",
+    "scripts/document_benchmarks.py": "a62385e8e1a78a6966bc1ca9e55dbc12daff976cf2e016e3f462862bfdf35a89",
+    "scripts/download_models.py": "acea9021e7ef669f56ee29c6362150cd0506097fcf157c7751591cfa181dedbc",
+    "scripts/gen_types.py": "30086ca8ad85d4bcc68424b03bc7f3de08e02229ceaeeb028a6c12aa65c52090",
+    "scripts/make_video_fixtures.py": "0a4611b08ebf1fa50ca88f8af41df79792d3a99278cba4126a6a73e33b61cd97",
+    "scripts/overlay_club.py": "bee922b6475dfd848fead751885fe805255b8a37c2f1988fb6d70bcc68f66939",
+    "scripts/overlay_metrics.py": "33a38459221f0fef45356250c2778e4344aa83fa202cb2eccdb03b18283be37a",
+    "scripts/plot_phases.py": "1ce963efbec05ca9f7efefb8bac10069a23cc280a1903b2a8a3a3813f52250aa"
+  },
+  "runs": {
+    "workflow": {
+      "executed_command": [
+        "/Users/williamchang/Documents/golf-swing-analyzer/python/.venv/bin/python",
+        "scripts/benchmark.py",
+        "/Users/williamchang/Documents/golf-swing-analyzer/data/amateur/face-on/PW_face-on.mp4",
+        "--repeats",
+        "5",
+        "--json"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "python",
+        "python",
+        "scripts/benchmark.py",
+        "/Users/williamchang/Documents/golf-swing-analyzer/data/amateur/face-on/PW_face-on.mp4",
+        "--repeats",
+        "5",
+        "--json"
+      ],
+      "output": {
+        "schema_version": 1,
+        "revision": "80e7f577d7b74163b6d5143c55d772805c2eeee6",
+        "platform": "macOS-26.4.1-arm64-arm-64bit",
+        "python": "3.12.14 (main, Sep  1 2026, 14:09:38) [Clang 22.1.3 ]",
+        "input": {
+          "path": "/Users/williamchang/Documents/golf-swing-analyzer/data/amateur/face-on/PW_face-on.mp4",
+          "content_key": {
+            "algorithm": "sha256-sampled-v1",
+            "digest": "7bb81c9b05e8e40e42a448f8dd54dd27a9142104022a3e807845a39a6ed6b17a",
+            "size_bytes": 1019876
+          },
+          "frames": 68,
+          "duration_s": 2.2666666666666666
+        },
+        "config": {
+          "schema_version": 2,
+          "gate": {
+            "min_visibility": 0.5,
+            "min_presence": 0.5
+          },
+          "gaps": {
+            "max_gap_s": 0.05,
+            "filled_weight": 0.0
+          },
+          "smoothing": {
+            "window_s": 0.1,
+            "polyorder": 4,
+            "min_observations": null,
+            "auto_widen": true
+          }
+        },
+        "repeats": 5,
+        "baseline": {
+          "runs": [
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:24.775813+00:00",
+                "elapsed_s": 3.561784915626049,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.0016652918420732021,
+                    "rss_before_bytes": 140542738432,
+                    "rss_after_bytes": 140542738432,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "load_pose_model",
+                    "elapsed_s": 0.39974833372980356,
+                    "rss_before_bytes": 140542738432,
+                    "rss_after_bytes": 249678528512,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 109135790080
+                  },
+                  {
+                    "name": "decode_and_estimate_poses",
+                    "elapsed_s": 2.3969579162076116,
+                    "rss_before_bytes": 249678528512,
+                    "rss_after_bytes": 329722626048,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 80044097536
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 3.5617220420390368,
+                    "rss_before_bytes": 82275467264,
+                    "rss_after_bytes": 329722626048,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 247447158784
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:28.337914+00:00",
+                "elapsed_s": 1.220369374845177,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.022592124994844198,
+                    "rss_before_bytes": 409867386880,
+                    "rss_after_bytes": 410387480576,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 520093696
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0010947496630251408,
+                    "rss_before_bytes": 410387480576,
+                    "rss_after_bytes": 410437812224,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 50331648
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 1.2203167909756303,
+                    "rss_before_bytes": 329722626048,
+                    "rss_after_bytes": 410437812224,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 80715186176
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:29.558304+00:00",
+                "elapsed_s": 0.08322345837950706,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.03744854126125574,
+                    "rss_before_bytes": 410454589440,
+                    "rss_after_bytes": 411041792000,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 587202560
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 1.3084150850772858e-05,
+                    "rss_before_bytes": 411058569216,
+                    "rss_after_bytes": 411058569216,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 1.295795664191246e-05,
+                    "rss_before_bytes": 411545108480,
+                    "rss_after_bytes": 411545108480,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020555874798446894,
+                    "rss_before_bytes": 411545108480,
+                    "rss_after_bytes": 411729657856,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 184549376
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 0.006321459077298641,
+                    "rss_before_bytes": 411729657856,
+                    "rss_after_bytes": 412149088256,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 419430400
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.000652665738016367,
+                    "rss_before_bytes": 412149088256,
+                    "rss_after_bytes": 412165865472,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 16777216
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0030272919684648514,
+                    "rss_before_bytes": 412165865472,
+                    "rss_after_bytes": 412266528768,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 100663296
+                  },
+                  {
+                    "name": "metrics_cache_store",
+                    "elapsed_s": 1.2833159416913986e-05,
+                    "rss_before_bytes": 412266528768,
+                    "rss_after_bytes": 412266528768,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.08316870871931314,
+                    "rss_before_bytes": 410437812224,
+                    "rss_after_bytes": 412266528768,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 1828716544
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:29.641560+00:00",
+                "elapsed_s": 0.04369450034573674,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.013110625091940165,
+                    "rss_before_bytes": 412316860416,
+                    "rss_after_bytes": 413675814912,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 1358954496
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 1.0291114449501038e-05,
+                    "rss_before_bytes": 413675814912,
+                    "rss_after_bytes": 413675814912,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 8.375383913516998e-06,
+                    "rss_before_bytes": 413675814912,
+                    "rss_after_bytes": 413675814912,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020948499906808138,
+                    "rss_before_bytes": 413675814912,
+                    "rss_after_bytes": 413675814912,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 1.7957761883735657e-05,
+                    "rss_before_bytes": 413675814912,
+                    "rss_after_bytes": 413675814912,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0006974167190492153,
+                    "rss_before_bytes": 413675814912,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 16777216
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.003191959112882614,
+                    "rss_before_bytes": 413692592128,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "evaluate_coaching_rules",
+                    "elapsed_s": 0.0001226658932864666,
+                    "rss_before_bytes": 413692592128,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "phrase_findings",
+                    "elapsed_s": 1.404155045747757e-05,
+                    "rss_before_bytes": 413692592128,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_store",
+                    "elapsed_s": 1.1667143553495407e-05,
+                    "rss_before_bytes": 413692592128,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.04366225004196167,
+                    "rss_before_bytes": 412266528768,
+                    "rss_after_bytes": 413692592128,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 1426063360
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:29.685284+00:00",
+                "elapsed_s": 0.04830141691491008,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.04802275029942393,
+                    "rss_before_bytes": 413692592128,
+                    "rss_after_bytes": 415907184640,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 2214592512
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:29.733645+00:00",
+                "elapsed_s": 2.3701472501270473,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.0012844172306358814,
+                    "rss_before_bytes": 415907184640,
+                    "rss_after_bytes": 416343392256,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 436207616
+                  },
+                  {
+                    "name": "load_pose_model",
+                    "elapsed_s": 0.08556075021624565,
+                    "rss_before_bytes": 416343392256,
+                    "rss_after_bytes": 438002778112,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 21659385856
+                  },
+                  {
+                    "name": "decode_and_estimate_poses",
+                    "elapsed_s": 2.055331749841571,
+                    "rss_before_bytes": 438002778112,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 61522051072
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 2.3701009578071535,
+                    "rss_before_bytes": 415907184640,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 83617644544
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:32.103832+00:00",
+                "elapsed_s": 0.034217499662190676,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020266208332031965,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0007579578086733818,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.034180084243416786,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:32.138067+00:00",
+                "elapsed_s": 0.0367202078923583,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012431125156581402,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 9.54093411564827e-06,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 1.4749821275472641e-05,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.019923666957765818,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 3.8207974284887314e-05,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.000516749918460846,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.002620500046759844,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_store",
+                    "elapsed_s": 1.1415686458349228e-05,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.03667612513527274,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:32.174814+00:00",
+                "elapsed_s": 0.06146491691470146,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.037468917202204466,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 9.417068213224411e-06,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 8.292030543088913e-06,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.019882625434547663,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 1.4540739357471466e-05,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0004930407740175724,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0023302920162677765,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "evaluate_coaching_rules",
+                    "elapsed_s": 0.0001127920113503933,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "phrase_findings",
+                    "elapsed_s": 9.750016033649445e-06,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_store",
+                    "elapsed_s": 9.583774954080582e-06,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.06143879098817706,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:32.236309+00:00",
+                "elapsed_s": 0.04473754204809666,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.04448733292520046,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:32.281111+00:00",
+                "elapsed_s": 2.2467164592817426,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.0017727920785546303,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499524829184,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "load_pose_model",
+                    "elapsed_s": 0.07427716627717018,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 499726155776,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 201326592
+                  },
+                  {
+                    "name": "decode_and_estimate_poses",
+                    "elapsed_s": 2.060571708716452,
+                    "rss_before_bytes": 499726155776,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 8589934592
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 2.2466688752174377,
+                    "rss_before_bytes": 499524829184,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 8791261184
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:34.527872+00:00",
+                "elapsed_s": 0.03568116622045636,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.02144954213872552,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0007277908734977245,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.03564545838162303,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:34.563576+00:00",
+                "elapsed_s": 0.036038334015756845,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.01220375020056963,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 8.457805961370468e-06,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 1.3624783605337143e-05,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.019513666164129972,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 3.4708064049482346e-05,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0005069999024271965,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.002524374984204769,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_store",
+                    "elapsed_s": 1.091696321964264e-05,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.03599645895883441,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:34.599645+00:00",
+                "elapsed_s": 0.0370040419511497,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.01190233277156949,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 9.583774954080582e-06,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 8.999835699796677e-06,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.02062116703018546,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 1.6042031347751617e-05,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0005211671814322472,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0025127497501671314,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "evaluate_coaching_rules",
+                    "elapsed_s": 0.00013558287173509598,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "phrase_findings",
+                    "elapsed_s": 9.499955922365189e-06,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_store",
+                    "elapsed_s": 9.70764085650444e-06,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.03698116587474942,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:34.636681+00:00",
+                "elapsed_s": 0.07011716719716787,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.06987674999982119,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:34.706863+00:00",
+                "elapsed_s": 2.262937542051077,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.0012738332152366638,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "load_pose_model",
+                    "elapsed_s": 0.07467037485912442,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 508316090368,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "decode_and_estimate_poses",
+                    "elapsed_s": 2.07183570927009,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 5351931904
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 2.262892915867269,
+                    "rss_before_bytes": 508316090368,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 5351931904
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:36.969845+00:00",
+                "elapsed_s": 0.035856875125318766,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.021547500044107437,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0006332080811262131,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.035816042218357325,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:37.005718+00:00",
+                "elapsed_s": 0.03696670802310109,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012382792308926582,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 9.375158697366714e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 1.7208047211170197e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020378416869789362,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 2.5250017642974854e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0004836246371269226,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.002526042051613331,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_store",
+                    "elapsed_s": 9.583774954080582e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.036928166169673204,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:37.042710+00:00",
+                "elapsed_s": 0.03744987491518259,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012755959294736385,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 1.020822674036026e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 9.125098586082458e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020507375244051218,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 1.8458347767591476e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.000498499721288681,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0023989593610167503,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "evaluate_coaching_rules",
+                    "elapsed_s": 0.00012754090130329132,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "phrase_findings",
+                    "elapsed_s": 8.875038474798203e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_store",
+                    "elapsed_s": 9.582843631505966e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.03742675017565489,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:37.080191+00:00",
+                "elapsed_s": 0.07478700019419193,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.07451254082843661,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:37.155043+00:00",
+                "elapsed_s": 2.3462427919730544,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.0012130001559853554,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "load_pose_model",
+                    "elapsed_s": 0.07581766694784164,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "decode_and_estimate_poses",
+                    "elapsed_s": 2.1223593330942094,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 2.3461873750202358,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:39.501358+00:00",
+                "elapsed_s": 0.036358790937811136,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.021429707761853933,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.001288415864109993,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.03631270816549659,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:39.537737+00:00",
+                "elapsed_s": 0.038581584114581347,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012652999721467495,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 8.542090654373169e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 1.7249956727027893e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020850208587944508,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 0.00013441592454910278,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0005484581924974918,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0027578328736126423,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_store",
+                    "elapsed_s": 1.1624768376350403e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.038530957885086536,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:39.576345+00:00",
+                "elapsed_s": 0.03712370805442333,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.011962749995291233,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 8.95792618393898e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "resolve_calibration",
+                    "elapsed_s": 8.500181138515472e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.02050175005570054,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "reconstruct_for_metrics",
+                    "elapsed_s": 1.8666032701730728e-05,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.00060645816847682,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "compute_metrics",
+                    "elapsed_s": 0.0026783752255141735,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "evaluate_coaching_rules",
+                    "elapsed_s": 0.00015412503853440285,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "phrase_findings",
+                    "elapsed_s": 9.66666266322136e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_store",
+                    "elapsed_s": 9.54093411564827e-06,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.0370946666225791,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:39.613495+00:00",
+                "elapsed_s": 0.04586008284240961,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.045572999864816666,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ]
+          ],
+          "median": [
+            {
+              "operation": "extract_poses",
+              "median_elapsed_s": 2.3462427919730544,
+              "stage_median_s": {
+                "pose_cache_lookup": 0.0012844172306358814,
+                "load_pose_model": 0.07581766694784164,
+                "decode_and_estimate_poses": 2.07183570927009,
+                "rpc:extract_poses": 2.3461873750202358
+              }
+            },
+            {
+              "operation": "detect_phases",
+              "median_elapsed_s": 0.035856875125318766,
+              "stage_median_s": {
+                "filter_landmarks": 0.02144954213872552,
+                "detect_phases": 0.0007579578086733818,
+                "rpc:detect_phases": 0.035816042218357325
+              }
+            },
+            {
+              "operation": "compute_metrics",
+              "median_elapsed_s": 0.03696670802310109,
+              "stage_median_s": {
+                "read_pose_parquet": 0.012431125156581402,
+                "metrics_cache_lookup": 9.375158697366714e-06,
+                "resolve_calibration": 1.4749821275472641e-05,
+                "filter_landmarks": 0.020378416869789362,
+                "reconstruct_for_metrics": 3.8207974284887314e-05,
+                "detect_phases": 0.000516749918460846,
+                "compute_metrics": 0.002620500046759844,
+                "metrics_cache_store": 1.1415686458349228e-05,
+                "rpc:compute_metrics": 0.036928166169673204
+              }
+            },
+            {
+              "operation": "coach_swing",
+              "median_elapsed_s": 0.03744987491518259,
+              "stage_median_s": {
+                "read_pose_parquet": 0.012755959294736385,
+                "coaching_cache_lookup": 9.583774954080582e-06,
+                "resolve_calibration": 8.500181138515472e-06,
+                "filter_landmarks": 0.020507375244051218,
+                "reconstruct_for_metrics": 1.7957761883735657e-05,
+                "detect_phases": 0.0005211671814322472,
+                "compute_metrics": 0.0025127497501671314,
+                "evaluate_coaching_rules": 0.00012754090130329132,
+                "phrase_findings": 9.66666266322136e-06,
+                "coaching_cache_store": 9.583774954080582e-06,
+                "rpc:coach_swing": 0.03742675017565489
+              }
+            },
+            {
+              "operation": "pose_overlay",
+              "median_elapsed_s": 0.04830141691491008,
+              "stage_median_s": {
+                "rpc:pose_overlay": 0.04802275029942393
+              }
+            }
+          ]
+        },
+        "warm": {
+          "runs": [
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:39.822480+00:00",
+                "elapsed_s": 0.019136916380375624,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.018265957944095135,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 0.01908837491646409,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:39.841635+00:00",
+                "elapsed_s": 0.03569883294403553,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.020856709219515324,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0005332920700311661,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.03566362522542477,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:39.877354+00:00",
+                "elapsed_s": 0.039512124843895435,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.036724708043038845,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 0.0005803341045975685,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.03947358392179012,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:39.916885+00:00",
+                "elapsed_s": 0.014499958138912916,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012021124828606844,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 0.0003266669809818268,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.014467624947428703,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:39.931410+00:00",
+                "elapsed_s": 0.04663829179480672,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.04634133307263255,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:39.978079+00:00",
+                "elapsed_s": 0.018502083141356707,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.017695124726742506,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 0.018468415830284357,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:39.996599+00:00",
+                "elapsed_s": 0.03566370904445648,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.02064433367922902,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0005096658132970333,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.035631584003567696,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:40.032280+00:00",
+                "elapsed_s": 0.014711124822497368,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012017583008855581,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 0.0005608745850622654,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.014675833284854889,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:40.047015+00:00",
+                "elapsed_s": 0.0389701658859849,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.036712625063955784,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 0.0002870000898838043,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.03894112491980195,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:40.086003+00:00",
+                "elapsed_s": 0.046145041938871145,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.04585391702130437,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:40.132180+00:00",
+                "elapsed_s": 0.019503500312566757,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.018671707715839148,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 0.019468042068183422,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:40.151702+00:00",
+                "elapsed_s": 0.03672420792281628,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.021859792061150074,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.000541208777576685,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.03668870870023966,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:40.188446+00:00",
+                "elapsed_s": 0.014259709045290947,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.01174933323636651,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 0.0004880828782916069,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.014222791884094477,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:40.202722+00:00",
+                "elapsed_s": 0.013874874915927649,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.011807958129793406,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 0.00027558300644159317,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.013850499875843525,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:40.216614+00:00",
+                "elapsed_s": 0.07051754090934992,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.07024254091084003,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:40.287166+00:00",
+                "elapsed_s": 0.018523999955505133,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.01769350003451109,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 0.018485916778445244,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:40.305709+00:00",
+                "elapsed_s": 0.0353465829975903,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.021268167067319155,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.00048058293759822845,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.03531137481331825,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:40.341072+00:00",
+                "elapsed_s": 0.014700416941195726,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.011931291781365871,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 0.0005640001036226749,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.014665374998003244,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:40.355793+00:00",
+                "elapsed_s": 0.014466958586126566,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012109083123505116,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 0.0003016251139342785,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.014438833110034466,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:40.370283+00:00",
+                "elapsed_s": 0.04634391609579325,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.0460915407165885,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ],
+            [
+              {
+                "schema_version": 1,
+                "operation": "extract_poses",
+                "started_at": "2026-09-21T02:11:40.416661+00:00",
+                "elapsed_s": 0.043577791191637516,
+                "stages": [
+                  {
+                    "name": "pose_cache_lookup",
+                    "elapsed_s": 0.04254900012165308,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:extract_poses",
+                    "elapsed_s": 0.043535666074603796,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "detect_phases",
+                "started_at": "2026-09-21T02:11:40.460258+00:00",
+                "elapsed_s": 0.035622209310531616,
+                "stages": [
+                  {
+                    "name": "filter_landmarks",
+                    "elapsed_s": 0.021091749891638756,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "detect_phases",
+                    "elapsed_s": 0.0004836251027882099,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:detect_phases",
+                    "elapsed_s": 0.035593584179878235,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "compute_metrics",
+                "started_at": "2026-09-21T02:11:40.495898+00:00",
+                "elapsed_s": 0.014434833079576492,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.011889582965523005,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "metrics_cache_lookup",
+                    "elapsed_s": 0.0005151247605681419,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:compute_metrics",
+                    "elapsed_s": 0.014394083060324192,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "coach_swing",
+                "started_at": "2026-09-21T02:11:40.510353+00:00",
+                "elapsed_s": 0.014478084165602922,
+                "stages": [
+                  {
+                    "name": "read_pose_parquet",
+                    "elapsed_s": 0.012062749825417995,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "coaching_cache_lookup",
+                    "elapsed_s": 0.00031562522053718567,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  },
+                  {
+                    "name": "rpc:coach_swing",
+                    "elapsed_s": 0.01444120891392231,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              },
+              {
+                "schema_version": 1,
+                "operation": "pose_overlay",
+                "started_at": "2026-09-21T02:11:40.524848+00:00",
+                "elapsed_s": 0.046643042005598545,
+                "stages": [
+                  {
+                    "name": "rpc:pose_overlay",
+                    "elapsed_s": 0.04638466564938426,
+                    "rss_before_bytes": 513668022272,
+                    "rss_after_bytes": 513668022272,
+                    "rss_source": "peak_rss",
+                    "rss_delta_bytes": 0
+                  }
+                ]
+              }
+            ]
+          ],
+          "median": [
+            {
+              "operation": "extract_poses",
+              "median_elapsed_s": 0.019136916380375624,
+              "stage_median_s": {
+                "pose_cache_lookup": 0.018265957944095135,
+                "rpc:extract_poses": 0.01908837491646409
+              }
+            },
+            {
+              "operation": "detect_phases",
+              "median_elapsed_s": 0.03566370904445648,
+              "stage_median_s": {
+                "filter_landmarks": 0.021091749891638756,
+                "detect_phases": 0.0005096658132970333,
+                "rpc:detect_phases": 0.035631584003567696
+              }
+            },
+            {
+              "operation": "compute_metrics",
+              "median_elapsed_s": 0.014700416941195726,
+              "stage_median_s": {
+                "read_pose_parquet": 0.011931291781365871,
+                "metrics_cache_lookup": 0.0005608745850622654,
+                "rpc:compute_metrics": 0.014665374998003244
+              }
+            },
+            {
+              "operation": "coach_swing",
+              "median_elapsed_s": 0.014478084165602922,
+              "stage_median_s": {
+                "read_pose_parquet": 0.012062749825417995,
+                "coaching_cache_lookup": 0.0003016251139342785,
+                "rpc:coach_swing": 0.01444120891392231
+              }
+            },
+            {
+              "operation": "pose_overlay",
+              "median_elapsed_s": 0.04663829179480672,
+              "stage_median_s": {
+                "rpc:pose_overlay": 0.04634133307263255
+              }
+            }
+          ]
+        }
+      }
+    },
+    "models": {
+      "executed_command": [
+        "/Users/williamchang/Documents/golf-swing-analyzer/python/.venv/bin/python",
+        "scripts/benchmark_models.py",
+        "/Users/williamchang/Documents/golf-swing-analyzer/data/amateur/face-on/PW_face-on.mp4"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "python",
+        "python",
+        "scripts/benchmark_models.py",
+        "/Users/williamchang/Documents/golf-swing-analyzer/data/amateur/face-on/PW_face-on.mp4"
+      ],
+      "output": {
+        "platform": "macOS-26.4.1-arm64-arm-64bit",
+        "processor": "arm",
+        "python": "3.12.14",
+        "inventory_verify_ms": 30.163374729454517,
+        "models": {
+          "default_pose_model": "pose_landmarker_full",
+          "models": [
+            {
+              "name": "pose_landmarker_lite",
+              "version": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+              "backend": "mediapipe_tasks",
+              "device": "cpu",
+              "input_requirements": [
+                "One person per frame",
+                "RGB image (BGR video frames converted by the adapter)",
+                "Video frames in increasing timestamp order"
+              ],
+              "size_bytes": 5777746,
+              "required": false,
+              "state": "verified",
+              "installed_sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+              "detail": "Size and SHA-256 match the pinned version. Inference is checked separately by Re-check."
+            },
+            {
+              "name": "pose_landmarker_full",
+              "version": "4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad",
+              "backend": "mediapipe_tasks",
+              "device": "cpu",
+              "input_requirements": [
+                "One person per frame",
+                "RGB image (BGR video frames converted by the adapter)",
+                "Video frames in increasing timestamp order"
+              ],
+              "size_bytes": 9398198,
+              "required": true,
+              "state": "verified",
+              "installed_sha256": "4eaa5eb7a98365221087693fcc286334cf0858e2eb6e15b506aa4a7ecdcec4ad",
+              "detail": "Size and SHA-256 match the pinned version. Inference is checked separately by Re-check."
+            },
+            {
+              "name": "pose_landmarker_heavy",
+              "version": "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b",
+              "backend": "mediapipe_tasks",
+              "device": "cpu",
+              "input_requirements": [
+                "One person per frame",
+                "RGB image (BGR video frames converted by the adapter)",
+                "Video frames in increasing timestamp order"
+              ],
+              "size_bytes": 30664242,
+              "required": false,
+              "state": "verified",
+              "installed_sha256": "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b",
+              "detail": "Size and SHA-256 match the pinned version. Inference is checked separately by Re-check."
+            }
+          ]
+        },
+        "forced_cpu": true,
+        "temporal_device": "cpu",
+        "temporal_output_finite": true,
+        "selection_reason": "CPU forced by GSA_FORCE_CPU.",
+        "pose_delegate": "cpu",
+        "pose_stats": {
+          "frames_processed": 68,
+          "frames_detected": 68,
+          "detection_rate": 1.0,
+          "elapsed_s": 1.3204060830175877,
+          "ms_per_frame": 19.417736514964524,
+          "mean_visibility": 0.9277855568895791
+        }
+      }
+    },
+    "reconstruction_noise": {
+      "executed_command": [
+        "/Users/williamchang/Documents/golf-swing-analyzer/python/.venv/bin/python",
+        "scripts/benchmark_reconstruct.py",
+        "--sweep",
+        "noise",
+        "--repeats",
+        "5"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "python",
+        "python",
+        "scripts/benchmark_reconstruct.py",
+        "--sweep",
+        "noise",
+        "--repeats",
+        "5"
+      ],
+      "output": "Synthetic rig: face_on at fx=1400 and down_the_line at fx=1500, 4.81 m apart, 90 deg between the axes\nClocks: 120 fps and 60 fps, +357 ms apart\nNot a real capture: the body is an input and there is no pose estimator, so there is no blur, no occlusion and no mis-tracked wrist. A floor, not an estimate.\n\nReconstruction error against isotropic landmark noise\n sigma px |  median |    p95  |  hands  | reproj px | unc mm | bone var\n-----------------------------------------------------------------------\n      0.0 |    0.0  |    0.0  |    0.0  |      0.00 |    0.0 |    2.6%\n      0.5 |    1.0  |    2.0  |    1.9  |      0.16 |    1.0 |    2.6%\n      1.0 |    2.0  |    4.0  |    3.9  |      0.32 |    2.0 |    5.1%\n      2.7 |    5.5  |   10.7  |   10.5  |      0.85 |    5.4 |   13.8%\n      5.0 |   10.1  |   19.9  |   19.5  |      1.56 |   10.1 |   24.7%\n     10.0 |   20.4  |   39.4  |   38.3  |      2.45 |   20.2 |   48.2%\n  millimetres, over the eight landmarks that move; hands is their 95th percentile\n  2.7 px is the scatter Phase 3 measured on real footage, at 1920 px wide\n"
+    },
+    "spatial_metrics": {
+      "executed_command": [
+        "/Users/williamchang/Documents/golf-swing-analyzer/python/.venv/bin/python",
+        "scripts/benchmark_reconstruct.py",
+        "--sweep",
+        "metrics",
+        "--repeats",
+        "5"
+      ],
+      "command": [
+        "uv",
+        "run",
+        "--project",
+        "python",
+        "python",
+        "scripts/benchmark_reconstruct.py",
+        "--sweep",
+        "metrics",
+        "--repeats",
+        "5"
+      ],
+      "output": "Synthetic rig: face_on at fx=1400 and down_the_line at fx=1500, 4.81 m apart, 90 deg between the axes\nClocks: 120 fps and 60 fps, +357 ms apart\nNot a real capture: the body is an input and there is no pose estimator, so there is no blur, no occlusion and no mis-tracked wrist. A floor, not an estimate.\n\n3D rotations against the angles the fixture was built with\n sigma px | shoulder | pelvis | X-factor | reported +/- | worst err\n-------------------------------------------------------------------\n      0.0 |     92.0 |   45.0 |     47.0 |         0.0 |      0.0\n      1.0 |     92.0 |   44.7 |     47.3 |         1.1 |      0.9\n      2.7 |     91.6 |   44.3 |     47.2 |         3.0 |      0.9\n      5.0 |     91.4 |   44.5 |     46.9 |         5.5 |      1.4\n  truth: shoulder 92, pelvis 45, X-factor 47 degrees\n  'reported +/-' is the X-factor's own propagated uncertainty, for comparison\n"
+    }
+  }
+}

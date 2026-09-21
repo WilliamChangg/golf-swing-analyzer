@@ -57,7 +57,8 @@ def probe_video(
     if not refresh:
         cached = store.load(key)
         if cached is not None:
-            return cached
+            # The bytes are reusable after a move; the old location is not.
+            return cached.model_copy(update={"path": str(path.resolve())})
 
     metadata = probe(path).metadata
     store.store(metadata)

@@ -14,6 +14,7 @@ export default tseslint.config(
       // Generated from the Pydantic contracts; style is the generator's concern.
       "packages/types/src/generated/**",
       "**/.venv/**",
+      "**/coverage/**",
     ],
   },
 

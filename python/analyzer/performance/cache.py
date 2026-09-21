@@ -59,6 +59,8 @@ class AnalysisCache:
         path = self._path(content, namespace, config)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return None
             if (
                 raw.get("cache_version") != _CACHE_VERSION
                 or raw.get("content_key") != content.model_dump(mode="json")
