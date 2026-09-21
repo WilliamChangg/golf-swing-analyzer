@@ -14,3 +14,6 @@ apps/desktop/src-tauri/icons/
 # Generated from the Pydantic contracts; json-schema-to-typescript formats its
 # own output. Letting Prettier rewrite these fights the codegen drift check.
 packages/types/src/generated/
+
+# Retained benchmark output is formatted by its evidence capture script.
+docs/benchmarks/*.json

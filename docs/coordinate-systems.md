@@ -9,15 +9,20 @@ claim.
 The code is `python/analyzer/coordinates.py`; the enum is
 `LandmarkSpace` in `python/analyzer/contracts/pose.py`.
 
+Algebraic examples below illustrate the implemented transforms; they are not
+accuracy measurements. The reference-clip figures in Camera views are historical
+Phase 6 observations recorded in [the roadmap](ROADMAP.md). Current retained
+benchmark evidence lives in [the generated appendix](benchmarks.md).
+
 ## The frames
 
-| Frame          | Units              | y      | Origin         | Isotropic | Metric  | Status           |
-| -------------- | ------------------ | ------ | -------------- | --------- | ------- | ---------------- |
-| `IMAGE`        | x/W, y/H           | down   | top-left       | **no**    | no      | stored           |
-| `FRAME_WIDTHS` | x/W, (H−y_px)/W    | **up** | bottom-left    | yes       | no      | derived on read  |
-| `HIP_LOCAL`    | approximate metres | up     | hip midpoint   | yes       | approx  | stored           |
-| `CAMERA`       | metres             | down   | camera centre  | yes       | **yes** | **triangulated** |
-| `WORLD`        | metres             | —      | fixed to scene | yes       | yes     | **absent**       |
+| Frame          | Units              | y            | Origin         | Isotropic | Metric  | Status           |
+| -------------- | ------------------ | ------------ | -------------- | --------- | ------- | ---------------- |
+| `IMAGE`        | x/W, y/H           | down         | top-left       | **no**    | no      | stored           |
+| `FRAME_WIDTHS` | x/W, (H−y_px)/W    | **up**       | bottom-left    | yes       | no      | derived on read  |
+| `HIP_LOCAL`    | approximate metres | model-native | hip midpoint   | yes       | approx  | stored           |
+| `CAMERA`       | metres             | down         | camera centre  | yes       | **yes** | **triangulated** |
+| `WORLD`        | metres             | —            | fixed to scene | yes       | yes     | **absent**       |
 
 `W` and `H` are the **displayed** frame dimensions, after rotation. A phone clip
 stores frames sideways with a display matrix; the coded and displayed dimensions
@@ -27,8 +32,9 @@ correction rather than merely scale it.
 ## IMAGE
 
 What a pose estimator emits and what the Parquet store holds. x is divided by
-the frame width and y by the frame height, both landing in [0, 1], with y
-increasing towards the bottom of the frame.
+the frame width and y by the frame height, with y increasing towards the bottom
+of the frame. Visible in-frame points lie in [0, 1]; model estimates outside
+the raster are not made in-frame by normalization.
 
 It is the only frame a landmark can be drawn in without conversion, and it is a
 bad frame to measure in, for two reasons that both fail silently.
@@ -45,7 +51,8 @@ high or low. A missing flip inverts the top of the backswing into the bottom.
 ## FRAME_WIDTHS
 
 Both axes divided by the frame **width**, y increasing upward, origin at the
-bottom-left. This is the frame every measurement in the system is taken in.
+bottom-left. This is the frame used for planar pose-derived measurements. Calibrated
+spatial measurements use CAMERA instead.
 
 ```
 x' = x
@@ -80,7 +87,9 @@ width.
 ## HIP_LOCAL
 
 MediaPipe's "world landmarks": approximate metres, centred on the hip midpoint,
-oriented to the body. Stored alongside IMAGE.
+with model-defined axes, stored unchanged alongside IMAGE. The adapter does
+not apply the upward-y image conversion to these values, and no calibrated
+orientation or gravity direction is inferred.
 
 **They are not calibrated world coordinates.** They carry no information about
 where the camera was, how far away the subject stood, or which way the target
@@ -117,10 +126,10 @@ supply:
   already established that a down-the-line recording cannot even tell which _end_
   of the target line the camera stood at.
 
-Both fall out of a capture that lays the calibration board flat on the ground in
+Both could be established by an additional capture that lays the calibration board flat on the ground in
 the hitting area with one edge along the target line: the board's plane gives the
-ground, its normal gives up, and its own axes give the line. That is a change to
-`data/README.md` and a later phase, not a missing function — and until it
+ground, its normal gives up, and its own axes give the line. That needs an explicit capture and a board-to-world transform implementation
+beyond the completed build phases — and until it
 happens, naming the frame and refusing it beats rotating into axes that were
 assumed.
 
@@ -132,13 +141,14 @@ points: the 3D rotations are taken about the measured address spine axis, joint
 angles and lengths are invariant to the frame entirely, and speeds in metres per
 second are too.
 
-Both are in the enum deliberately. A later phase should add a capability, not a
+CAMERA and WORLD are in the enum deliberately. A later phase should add a capability, not a
 concept — and asking for either raises an error naming what supplies it rather
 than reporting an unsupported value.
 
 ## Conversions
 
-Implemented in `analyzer/coordinates.py`, all round-trip exactly:
+Implemented in `analyzer/coordinates.py`; inverse pairs round-trip within
+floating-point precision:
 
 ```
 image_to_frame_widths   ↔  frame_widths_to_image

@@ -4,7 +4,7 @@ Tracking checklist for the build. One phase at a time; at each boundary — run
 tests, run the app, verify, document, record measurements, commit. Do not
 advance past a broken phase.
 
-**Progress: Phases 0-19 complete (20 / 21).**
+**Progress: Phases 0-20 complete (21 / 21).**
 
 | #   | Phase                 | Status      | Exit criterion                                                 |
 | --- | --------------------- | ----------- | -------------------------------------------------------------- |
@@ -28,7 +28,7 @@ advance past a broken phase.
 | 17  | Performance           | ✅ **Done** | Before/after numbers recorded                                  |
 | 18  | Model management      | ✅ **Done** | Backends reported; CPU fallback proven                         |
 | 19  | Test hardening        | ✅ **Done** | Numerical + pipeline + UI suites green                         |
-| 20  | Documentation         | ⬜          | Docs match reality                                             |
+| 20  | Documentation         | ✅ **Done** | Docs match reality                                             |
 
 ---
 
@@ -2929,13 +2929,60 @@ decoder; there is no automated packaged-WebView integration suite. Coverage
 shows remaining CLI/runtime and frontend unit-test gaps rather than claiming
 that passing the floors exercises every path.
 
-## Phase 20 — Documentation ⬜
+## Phase 20 — Documentation ✅
 
-- [ ] 20.1 README: all 15 sections filled with real content
-- [ ] 20.2 `docs/biomechanics.md`, `docs/computer-vision.md`, `docs/modeling.md`
-- [ ] 20.3 Limitations stated explicitly
-- [ ] 20.4 Metric appendix generated from benchmark output, every figure traceable
-- [ ] 20.5 Commit
+- [x] 20.1 README: all 15 sections filled with real content
+- [x] 20.2 `docs/biomechanics.md`, `docs/computer-vision.md`, `docs/modeling.md`
+- [x] 20.3 Limitations stated explicitly
+- [x] 20.4 Metric appendix generated from benchmark output, every figure traceable
+- [x] 20.5 Commit
+
+Replaced the accumulated README with fifteen current sections covering setup,
+workflow, methods, verification and remaining limits. The three methodology guides
+cover the full implemented metric catalogue, the extraction/calibration/impact
+paths, and the separation between downloadable pose models and locally trained
+temporal models. Updated architecture, model operations, Python entry points and
+coordinate conventions to agree with the implementation.
+
+The audit corrected stale claims about smoothing-window refusal, mandatory prior
+CLI extraction, calibration persistence, model accuracy, the contents of
+`check:all`, and standalone packaging. The documentation distinguishes real
+execution from synthetic accuracy tests and explicitly retains the missing
+labelled golfer, real stereo, club-ground-truth and packaged-WebView evaluations.
+Historical roadmap and ADR measurements remain historical rather than being
+silently replaced with this run's numbers.
+
+[`scripts/document_benchmarks.py`](../scripts/document_benchmarks.py) captures the
+existing workflow, model-runtime and synthetic reconstruction/metric benchmarks.
+It retains commands, timestamp, hardware, Git revision, source fingerprints,
+configuration, model digests and raw samples in
+[`benchmarks/phase20.json`](benchmarks/phase20.json), then generates the
+[benchmark appendix](benchmarks.md). Timing tables are computed from the raw runs,
+not copied summaries. `npm run docs:check` checks drift offline and runs in CI.
+Failed capture leaves previous evidence intact; three new tests exercise those
+properties. Raw local footage remains uncommitted.
+
+**Verified** (2026-09-20 local date, Apple M1 Pro / macOS 26.4.1):
+
+| Command or check                                                      | Result                                                                                      |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `npm run check:all`                                                   | 1,471 existing pytest and 253 Vitest tests; lint/types and Rust fmt/clippy passed           |
+| `python/.venv/bin/pytest python/tests/test_document_benchmarks.py -q` | 3 additional documentation-evidence tests passed                                            |
+| `npm run test:e2e`                                                    | 72 browser tests passed                                                                     |
+| `npm run rs:test`                                                     | 12 Rust tests passed                                                                        |
+| `npm run gen:types:check`                                             | Generated contracts current                                                                 |
+| `npm run format:check`, `npm run docs:check`                          | Repository formatting and appendix drift passed                                             |
+| `npm run build:web -w @gsa/desktop`                                   | Production frontend built                                                                   |
+| Documentation audit                                                   | Local links/anchors, CLI commands/options and all metric identifiers checked against source |
+| Native startup                                                        | Existing native executable launched and stayed running through the startup smoke check      |
+
+The Python total is **1,474** across the existing suite and the new targeted run;
+**1,811 tests passed** across all four stacks. The root-level `py:test` invocation
+also emitted four existing unregistered-marker warnings; no tests failed or were
+skipped. Coverage percentages were not remeasured for this documentation phase;
+Phase 19's figures remain the coverage baseline. Startup is not an automated
+native end-to-end test, and completing this checklist does not close the research
+and deployment limitations documented in the README.
 
 ---
 

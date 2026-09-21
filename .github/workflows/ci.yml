@@ -90,6 +90,9 @@ jobs:
       - name: ESLint
         run: npm run lint
 
+      - name: Documentation evidence drift
+        run: npm run docs:check
+
       - name: Prettier
         run: npm run format:check
 

@@ -7,14 +7,19 @@ npm run check:all
 npm run rs:test
 npm run gen:types:check
 npm run format:check
+npm run docs:check
 npm run py:coverage
 npm run test:coverage
 npm run test:e2e
 ```
 
 `check:all` includes Python and frontend unit tests, linting, type checks and
-Rust formatting/clippy. Rust tests, contract drift, formatting, coverage and
+Rust formatting/clippy. Rust tests, contract drift, formatting, documentation drift, coverage and
 browser workflows have separate commands above. CI runs each of these checks.
+
+Install frontend dependencies with `npm ci` and the browser binary with
+`npx playwright install chromium` before the browser suite. Browser tests run
+the Vite server locally and require an available port from `playwright.config.ts`.
 
 Python tests require the locked environment (`uv sync --project python --locked`).
 The video integration tests need FFmpeg/ffprobe; real pose tests need the pinned
@@ -94,3 +99,10 @@ Playwright runs the Vite application with a stubbed Tauri bridge. Its video
 decoder is real; its native file picker, SQLite connection and Rust transport
 are not. Python tests cover SQLite and pipeline behavior, and Rust tests cover
 transport framing. There is no automated packaged-WebView integration suite.
+
+## Documentation evidence
+
+`npm run docs:check` regenerates the benchmark appendix in memory and compares it
+with the checked-in file. CI runs this without private footage or model inference.
+To refresh measured evidence, use the capture command in [the appendix](benchmarks.md);
+rendering alone preserves the original run rather than manufacturing new timings.

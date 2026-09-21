@@ -35,7 +35,9 @@
     "rs:fmt": "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check",
     "rs:lint": "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings",
     "rs:test": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
-    "check:all": "npm run lint && npm run typecheck && npm run test && npm run py:lint && npm run py:typecheck && npm run py:test && npm run rs:fmt && npm run rs:lint"
+    "check:all": "npm run lint && npm run typecheck && npm run test && npm run py:lint && npm run py:typecheck && npm run py:test && npm run rs:fmt && npm run rs:lint",
+    "docs:generate": "python3 scripts/document_benchmarks.py",
+    "docs:check": "python3 scripts/document_benchmarks.py --check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
